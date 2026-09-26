@@ -12,6 +12,13 @@ if (TOUCH) document.documentElement.classList.add('touch');
   if (!vp) { vp = document.createElement('meta'); vp.name = 'viewport'; document.head.appendChild(vp); }
   vp.content = 'width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover';
   for (const ev of ['gesturestart', 'gesturechange', 'gestureend']) document.addEventListener(ev, e => e.preventDefault(), { passive: false });
+  // «добавить на главный экран»: у каждого проекта свой manifest.json (пишет выгрузка), иконка общая
+  const add = (tag, attrs) => { const el = document.createElement(tag); for (const k in attrs) el.setAttribute(k, attrs[k]); document.head.appendChild(el); };
+  if (!document.querySelector('link[rel=manifest]')) add('link', { rel: 'manifest', href: 'manifest.json' });
+  add('link', { rel: 'apple-touch-icon', href: '../_app/icon-192.png' });
+  add('meta', { name: 'apple-mobile-web-app-capable', content: 'yes' });
+  add('meta', { name: 'mobile-web-app-capable', content: 'yes' });
+  add('meta', { name: 'theme-color', content: '#2b2f36' });
 })();
 
 // ---------------- разметка ----------------
@@ -32,9 +39,11 @@ document.body.insertAdjacentHTML('beforeend', `
 <div id="card"></div>
 <div id="rlabel"></div>
 <div id="stamp"></div>
+<canvas id="loupe" width="240" height="240"></canvas>
 <div id="hint"><b>Как смотреть</b>
   <p>☝ один палец — вращать</p><p>✌ два пальца — приблизить и сдвинуть</p>
   <p>👆 коснуться двери или ящика — открыть / закрыть</p><p>✋ подержать палец на детали — что это за деталь</p>
+  <p>📏 рулетка: ведите пальцем — в круге видно точку, отпустите — точка поставлена</p>
   <small>коснитесь, чтобы закрыть</small></div>
 <div id="bar">
   <button id="bTree">структура</button><span class="sep"></span>
@@ -44,8 +53,8 @@ document.body.insertAdjacentHTML('beforeend', `
   <button id="bFit" class="x">вписать</button><span class="sep x"></span>
   <button id="m1" class="on x">залито</button><button id="m2" class="x">полупрозрачно</button><button id="m3" class="x">рёбра</button>
   <span class="sep x"></span>
-  <button id="bF" class="on x">фурнитура</button><button id="bB" class="on x">профили</button><button id="bL" class="on x">линии</button><button id="bRuler" class="x">линейка</button>
-  <button id="bOpen">открыть всё</button><button id="bClose">закрыть всё</button>
+  <button id="bF" class="on x">фурнитура</button><button id="bB" class="on x">профили</button><button id="bL" class="on x">линии</button><button id="bRuler">рулетка</button>
+  <button id="bOpen" class="nt">открыть всё</button><button id="bClose" class="nt">закрыть всё</button>
   <button id="bMore" title="Ещё">⋯</button>
   <span id="st"></span>
 </div>`);
@@ -488,7 +497,7 @@ function snap(hit, cx, cy, px = 12) {
 }
 function drawRuler() {
   if (rline) { scene.remove(rline); rline = null; }
-  if (rp.length < 2) { $('st').textContent = 'линейка: укажи вторую точку'; updRuler(); need(); return; }
+  if (rp.length < 2) { $('st').textContent = 'рулетка: укажи вторую точку'; updRuler(); need(); return; }
   rline = new THREE.Line(new THREE.BufferGeometry().setFromPoints(rp),
     new THREE.LineBasicMaterial({ color: 0xd94f2b, depthTest: false }));
   rline.renderOrder = 10; scene.add(rline);
@@ -556,10 +565,45 @@ function spinLoop() {
   orbit(spin.vx, spin.vy); place();
   requestAnimationFrame(spinLoop);
 }
+// ---------------- рулетка под палец: лупа ----------------
+// Одним пальцем в режиме рулетки модель не вращается: ведём палец, над ним круг с увеличенной картинкой
+// и отметкой точки (с прилипанием к углу), отпустили — точка поставлена. Два пальца — как обычно.
+const loupe = $('loupe'), lctx = loupe.getContext('2d');
+let aim = null;
+function aimAt(x, y) {
+  const h = pick(x, y);
+  aim = { x, y, p: h ? snap(h, x, y, 24) : null };
+  rend.render(scene, cam);                                  // свежий кадр — сразу копируем из него кусок
+  // круг 120 точек экрана (внутри 240 — для чёткости), увеличение 2,5
+  const cw = rend.domElement.width / innerWidth, Z = 2.5, S = loupe.width, C = 120, k = S / C;
+  const src = C / Z * cw;
+  lctx.save(); lctx.clearRect(0, 0, S, S);
+  lctx.beginPath(); lctx.arc(S / 2, S / 2, S / 2 - 2, 0, Math.PI * 2); lctx.clip();
+  lctx.fillStyle = '#eef2f6'; lctx.fillRect(0, 0, S, S);
+  lctx.drawImage(rend.domElement, x * cw - src / 2, y * cw - src / 2, src, src, 0, 0, S, S);
+  // точка, к которой прилипло (или сам палец)
+  let mx = S / 2, my = S / 2;
+  if (aim.p) { const s = aim.p.clone().project(cam); mx = S / 2 + (((s.x + 1) / 2 * innerWidth) - x) * Z * k; my = S / 2 + (((1 - s.y) / 2 * innerHeight) - y) * Z * k; }
+  lctx.strokeStyle = '#d94f2b'; lctx.lineWidth = 2;
+  lctx.beginPath(); lctx.moveTo(mx - 14, my); lctx.lineTo(mx + 14, my); lctx.moveTo(mx, my - 14); lctx.lineTo(mx, my + 14); lctx.stroke();
+  lctx.restore();
+  lctx.strokeStyle = '#2b2f36'; lctx.lineWidth = 3; lctx.beginPath(); lctx.arc(S / 2, S / 2, S / 2 - 2, 0, Math.PI * 2); lctx.stroke();
+  loupe.style.display = 'block';
+  loupe.style.left = Math.min(innerWidth - 130, Math.max(10, x - 60)) + 'px';
+  loupe.style.top = Math.max(10, y - 150) + 'px';
+}
+function aimEnd(place) {
+  loupe.style.display = 'none';
+  if (place && aim && aim.p) { rp.push(aim.p); if (rp.length > 2) rp = [rp[rp.length - 1]]; drawRuler(); }
+  aim = null; need();
+}
+
 function touchDown(e) {
-  cv.setPointerCapture(e.pointerId);
+  try { cv.setPointerCapture(e.pointerId); } catch (err) {}
   touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
   spin = null; clearTimeout(pressTimer);
+  if (ruler && touches.size === 1) { tState = { aim: true }; aimAt(e.clientX, e.clientY); return; }
+  if (aim) aimEnd(false);                                  // второй палец — отмена прицела, дальше щипок
   if (touches.size === 1) {
     tState = { one: true, x0: e.clientX, y0: e.clientY, t0: performance.now(), moved: false, vx: 0, vy: 0, long: false };
     pressTimer = setTimeout(() => {                        // долгое нажатие — выделить
@@ -577,6 +621,7 @@ function touchMove(e) {
   const dx = e.clientX - p.x, dy = e.clientY - p.y;
   p.x = e.clientX; p.y = e.clientY;
   if (!tState) return;
+  if (tState.aim) { aimAt(e.clientX, e.clientY); return; }
   if (tState.one && touches.size === 1) {
     if (Math.hypot(e.clientX - tState.x0, e.clientY - tState.y0) > 8) tState.moved = true;   // мёртвая зона дрожания
     if (!tState.moved) return;
@@ -590,6 +635,7 @@ function touchMove(e) {
 }
 function touchUp(e) {
   touches.delete(e.pointerId); clearTimeout(pressTimer);
+  if (tState && tState.aim) { tState = null; aimEnd(e.type === 'pointerup'); return; }
   const s = tState;
   if (touches.size === 1) { const [q] = [...touches.values()]; tState = { one: true, x0: q.x, y0: q.y, t0: 0, moved: true, vx: 0, vy: 0 }; return; }
   tState = null;
@@ -605,7 +651,7 @@ function touchUp(e) {
 
 cv.addEventListener('pointerdown', e => {
   if (e.pointerType === 'touch') { touchDown(e); return; }
-  cv.setPointerCapture(e.pointerId);
+  try { cv.setPointerCapture(e.pointerId); } catch (err) {}
   drag = { b: e.button, x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY };
   if (e.button === 1) {
     e.preventDefault();
@@ -691,7 +737,7 @@ function wire() {
   $('bFit').onclick = fitVisible;
   $('m1').onclick = () => mode(1); $('m2').onclick = () => mode(2); $('m3').onclick = () => mode(3);
   $('bF').onclick = () => { showF = !showF; $('bF').className = showF ? 'on' : ''; applyVis(); renderTree(); };
-  $('bRuler').onclick = () => { if (ruler) { stopRuler(); return; } ruler = true; rp = []; $('bRuler').className = 'on'; $('st').textContent = 'линейка: укажи первую точку'; };
+  $('bRuler').onclick = () => { if (ruler) { stopRuler(); return; } ruler = true; rp = []; $('bRuler').className = 'on'; $('st').textContent = 'рулетка: укажи первую точку'; };
   $('bOpen').onclick = () => startAnim(allAnimIds(), 1);
   $('bClose').onclick = () => startAnim(allAnimIds(), 0);
   $('bB').onclick = () => { showB = !showB; $('bB').className = showB ? 'on' : ''; applyVis(); renderTree(); };
