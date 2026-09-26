@@ -37,7 +37,7 @@ document.body.insertAdjacentHTML('beforeend', `
   <div class="body" id="tbody"></div>
 </div>
 <div id="card"></div>
-<div id="rlabel"></div>
+<div id="rlabel"></div><div id="snapmk"></div>
 <div id="stamp"></div>
 <canvas id="loupe" width="240" height="240"></canvas>
 <div id="hint"><b>Как смотреть</b>
@@ -53,7 +53,7 @@ document.body.insertAdjacentHTML('beforeend', `
   <button id="bFit" class="x">вписать</button><span class="sep x"></span>
   <button id="m1" class="on x">залито</button><button id="m2" class="x">полупрозрачно</button><button id="m3" class="x">рёбра</button>
   <span class="sep x"></span>
-  <button id="bF" class="on x">фурнитура</button><button id="bB" class="on x">профили</button><button id="bL" class="on x">линии</button><button id="bRuler">рулетка</button>
+  <button id="bF" class="on x">фурнитура</button><button id="bB" class="on x">профили</button><button id="bL" class="on x">линии</button><button id="bRuler">рулетка</button><button id="bDimClr" class="x">стереть размеры</button>
   <button id="bOpen" class="nt">открыть всё</button><button id="bClose" class="nt">закрыть всё</button>
   <button id="bMore" title="Ещё">⋯</button>
   <span id="st"></span>
@@ -495,30 +495,137 @@ function snap(hit, cx, cy, px = 12) {
   }
   return best || hit.point.clone();
 }
-function drawRuler() {
-  if (rline) { scene.remove(rline); rline = null; }
-  if (rp.length < 2) { $('st').textContent = 'рулетка: укажи вторую точку'; updRuler(); need(); return; }
-  rline = new THREE.Line(new THREE.BufferGeometry().setFromPoints(rp),
-    new THREE.LineBasicMaterial({ color: 0xd94f2b, depthTest: false }));
-  rline.renderOrder = 10; scene.add(rline);
-  const d = rp[0].distanceTo(rp[1]), dv = rp[1].clone().sub(rp[0]);
-  const f = x => Math.round(Math.abs(x) * 10) / 10;
-  $('st').textContent = 'расстояние ' + f(d) + ' мм  (ширина ' + f(dv.x) + ', высота ' + f(dv.y) + ', глубина ' + f(dv.z) + ')';
-  updRuler(); need();
+// ---------------- размеры ----------------
+// Две точки вдоль ширины, высоты или глубины → размер с выносными «лапками», его можно оттащить:
+// точки на месте, линия с числом уезжает (вверх-вниз — читается спереди, к себе-от себя — сверху).
+// Точки наискосок (отличаются больше чем по одному направлению) → прямая линия с числом, без лапок.
+// Размеры остаются на модели; удалить — правой кнопкой по числу (на телефоне — подержать палец на числе).
+const DIMC = 0xd94f2b, AX = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) };
+const dims = [];
+const fmt = x => String(Math.round(Math.abs(x) * 10) / 10).replace('.', ',');
+function axisOf(a, b) {
+  const d = b.clone().sub(a), big = ['x', 'y', 'z'].filter(k => Math.abs(d[k]) > 0.5);
+  return big.length === 1 ? big[0] : null;
+}
+function lineMat() { return new THREE.LineBasicMaterial({ color: DIMC, depthTest: false }); }
+function buildDim(dm) {
+  if (dm.g) scene.remove(dm.g);
+  const g = new THREE.Group(); g.renderOrder = 10;
+  const seg = pts => { const l = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), lineMat()); l.renderOrder = 10; g.add(l); };
+  if (!dm.axis) { seg([dm.a, dm.b]); dm.mid = dm.a.clone().add(dm.b).multiplyScalar(0.5); }
+  else {
+    const a2 = dm.a.clone().add(dm.off), b2 = dm.b.clone().add(dm.off);
+    const pts = [a2, b2];
+    if (dm.off.lengthSq() > 1) { pts.push(dm.a, a2.clone().addScaledVector(dm.off.clone().normalize(), 8), dm.b, b2.clone().addScaledVector(dm.off.clone().normalize(), 8)); }
+    // засечки на концах — косые чёрточки, как на чертеже
+    const L = Math.max(8, Math.min(40, dm.a.distanceTo(dm.b) * 0.03));
+    const u = AX[dm.axis].clone(), w = dm.off.lengthSq() > 1 ? dm.off.clone().normalize() : new THREE.Vector3().crossVectors(u, cam.getWorldDirection(new THREE.Vector3())).normalize();
+    const t = u.clone().add(w).normalize().multiplyScalar(L);
+    for (const p of [a2, b2]) pts.push(p.clone().sub(t), p.clone().add(t));
+    seg(pts);
+    dm.mid = a2.clone().add(b2).multiplyScalar(0.5);
+  }
+  dm.g = g; scene.add(g);
+  dm.el.textContent = fmt(dm.a.distanceTo(dm.b));
+}
+function addDim(a, b) {
+  const dm = { a, b, axis: axisOf(a, b), off: new THREE.Vector3(), el: document.createElement('div') };
+  dm.el.className = 'dim';
+  document.body.appendChild(dm.el);
+  dims.push(dm); buildDim(dm); hookDim(dm); updRuler(); need();
+  const dv = b.clone().sub(a);
+  $('st').textContent = dm.axis ? 'размер ' + fmt(a.distanceTo(b)) + ' мм — потяните число, чтобы отодвинуть'
+    : 'по прямой ' + fmt(a.distanceTo(b)) + ' мм  (ширина ' + fmt(dv.x) + ', высота ' + fmt(dv.y) + ', глубина ' + fmt(dv.z) + ')';
+}
+function removeDim(dm) { scene.remove(dm.g); dm.el.remove(); dims.splice(dims.indexOf(dm), 1); need(); }
+// оттаскивание: смещение — по одной из двух осей поперёк размера, какая лучше совпадает с движением
+function dragDim(dm, cx, cy, sdx, sdy) {
+  if (!dm.axis) return;
+  const ndc = new THREE.Vector2((cx / innerWidth) * 2 - 1, -(cy / innerHeight) * 2 + 1);
+  const rc = new THREE.Raycaster(); rc.setFromCamera(ndc, cam);
+  const others = ['x', 'y', 'z'].filter(k => k !== dm.axis);
+  // экранное направление каждой оси-кандидата
+  const base = dm.mid.clone().project(cam);
+  let best = null, bestScore = -1;
+  for (const c of others) {
+    const q = dm.mid.clone().add(AX[c].clone().multiplyScalar(100)).project(cam);
+    const vx = (q.x - base.x) * innerWidth / 2, vy = -(q.y - base.y) * innerHeight / 2, vl = Math.hypot(vx, vy) || 1;
+    const score = Math.abs((vx * sdx + vy * sdy) / vl);
+    if (score > bestScore) { bestScore = score; best = c; }
+  }
+  const third = others.find(k => k !== best);
+  const pl = new THREE.Plane().setFromNormalAndCoplanarPoint(AX[third], dm.a);
+  const P = rc.ray.intersectPlane(pl, new THREE.Vector3());
+  if (!P) return;
+  dm.off = AX[best].clone().multiplyScalar(P.clone().sub(dm.a).dot(AX[best]));
+  buildDim(dm); updRuler(); need();
+}
+function hookDim(dm) {
+  let st = null, lp = null;
+  dm.el.addEventListener('pointerdown', e => {
+    e.preventDefault(); e.stopPropagation();
+    try { dm.el.setPointerCapture(e.pointerId); } catch (err) {}
+    st = { x: e.clientX, y: e.clientY, moved: false };
+    if (e.button === 2) { removeDim(dm); st = null; return; }
+    if (e.pointerType === 'touch') lp = setTimeout(() => { if (st && !st.moved) { removeDim(dm); st = null; } }, 650);
+  });
+  dm.el.addEventListener('pointermove', e => {
+    if (!st) return;
+    const sdx = e.clientX - st.x, sdy = e.clientY - st.y;
+    if (!st.moved && Math.hypot(sdx, sdy) < 5) return;
+    st.moved = true; clearTimeout(lp);
+    dragDim(dm, e.clientX, e.clientY, sdx, sdy);
+  });
+  const end = () => { st = null; clearTimeout(lp); };
+  dm.el.addEventListener('pointerup', end); dm.el.addEventListener('pointercancel', end);
+  dm.el.addEventListener('contextmenu', e => e.preventDefault());
 }
 function updRuler() {
-  const el = $('rlabel');
-  if (rp.length < 2) { el.style.display = 'none'; return; }
-  const mid = rp[0].clone().add(rp[1]).multiplyScalar(0.5).project(cam);
-  el.style.display = 'block';
-  el.style.left = ((mid.x + 1) / 2 * innerWidth) + 'px';
-  el.style.top = ((1 - mid.y) / 2 * innerHeight) + 'px';
-  el.textContent = (Math.round(rp[0].distanceTo(rp[1]) * 10) / 10) + ' мм';
+  for (const dm of dims) {
+    const s = dm.mid.clone().project(cam);
+    const vis = s.z < 1;
+    dm.el.style.display = vis ? 'block' : 'none';
+    dm.el.style.left = ((s.x + 1) / 2 * innerWidth) + 'px';
+    dm.el.style.top = ((1 - s.y) / 2 * innerHeight) + 'px';
+  }
 }
+// первая точка ждёт вторую; вторая — ставит размер
+function addPoint(p) {
+  if (!p) return;
+  if (!rp.length) { rp = [p]; $('st').textContent = 'рулетка: укажи вторую точку'; showPending(); return; }
+  const a = rp[0]; rp = []; showPending();
+  if (a.distanceTo(p) < 0.5) return;
+  addDim(a, p);
+}
+// первая точка и резиновая линия до курсора (на компьютере)
+let pend = null;
+function showPending(hover) {
+  if (pend) { scene.remove(pend); pend = null; }
+  if (!rp.length) { need(); return; }
+  const pts = [rp[0], hover || rp[0]];
+  const mk = new THREE.Group();
+  const l = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineDashedMaterial({ color: DIMC, depthTest: false, dashSize: 10, gapSize: 6 }));
+  l.computeLineDistances(); l.renderOrder = 10; mk.add(l);
+  pend = mk; scene.add(pend); need();
+}
+function clearDims() { while (dims.length) removeDim(dims[0]); rp = []; showPending(); }
 function stopRuler() {
-  ruler = false; rp = []; if (rline) { scene.remove(rline); rline = null; }
-  $('bRuler').className = ''; $('st').textContent = ''; updRuler(); need();
+  ruler = false; rp = []; showPending(); hideHover();
+  cv.style.cursor = '';
+  $('bRuler').className = ''; $('st').textContent = ''; need();
 }
+// перекрестие на компьютере: метка прыгает на угол ещё до щелчка
+function hover(cx, cy) {
+  const h = pick(cx, cy), mk = $('snapmk');
+  const p = h ? snap(h, cx, cy) : null;
+  if (!p) { mk.style.display = 'none'; showPending(); $('st').textContent = rp.length ? 'рулетка: укажи вторую точку' : 'рулетка: укажи первую точку'; return; }
+  const s = p.clone().project(cam);
+  mk.style.display = 'block';
+  mk.style.left = ((s.x + 1) / 2 * innerWidth) + 'px';
+  mk.style.top = ((1 - s.y) / 2 * innerHeight) + 'px';
+  if (rp.length) { showPending(p); $('st').textContent = 'рулетка: ' + fmt(rp[0].distanceTo(p)) + ' мм'; }
+}
+function hideHover() { const mk = $('snapmk'); if (mk) mk.style.display = 'none'; }
 
 // ---------------- мышь ----------------
 const ray = new THREE.Raycaster();
@@ -594,7 +701,7 @@ function aimAt(x, y) {
 }
 function aimEnd(place) {
   loupe.style.display = 'none';
-  if (place && aim && aim.p) { rp.push(aim.p); if (rp.length > 2) rp = [rp[rp.length - 1]]; drawRuler(); }
+  if (place && aim && aim.p) { addPoint(aim.p); }
   aim = null; need();
 }
 
@@ -644,7 +751,7 @@ function touchUp(e) {
   if (s.long || performance.now() - s.t0 > 500) return;
   // короткое касание
   const h = pick(e.clientX, e.clientY);
-  if (ruler) { if (h) { rp.push(snap(h, e.clientX, e.clientY, 24)); if (rp.length > 2) rp = [rp[rp.length - 1]]; drawRuler(); } return; }
+  if (ruler) { if (h) { addPoint(snap(h, e.clientX, e.clientY, 24)); } return; }
   if (h) { if (!toggleAt(h.object.userData.idx)) selectPart(h.object.userData.idx, -1); }
   else clearSel();
 }
@@ -662,7 +769,7 @@ cv.addEventListener('pointerdown', e => {
 cv.addEventListener('pointercancel', e => { if (e.pointerType === 'touch') touchUp(e); });
 cv.addEventListener('pointermove', e => {
   if (e.pointerType === 'touch') { touchMove(e); return; }
-  if (!drag) return;
+  if (!drag) { if (ruler && e.pointerType === 'mouse') hover(e.clientX, e.clientY); return; }
   const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY;
   if (drag.b === 0) {
     view.yaw -= dx * 0.006;
@@ -681,7 +788,7 @@ cv.addEventListener('pointerup', e => {
   const d = drag; drag = null;
   if (!d || d.b !== 0 || Math.abs(e.clientX - d.x0) > 4 || Math.abs(e.clientY - d.y0) > 4) return;
   const h = pick(e.clientX, e.clientY);
-  if (ruler) { if (h) { rp.push(snap(h, e.clientX, e.clientY)); if (rp.length > 2) rp = [rp[rp.length - 1]]; drawRuler(); } return; }
+  if (ruler) { if (h) { addPoint(snap(h, e.clientX, e.clientY)); } return; }
   if (h) { const i = h.object.userData.idx; selectPart(i, (e.ctrlKey || e.altKey) ? upLevel(i, -1) : -1); }
   else clearSel();
 });
@@ -737,7 +844,8 @@ function wire() {
   $('bFit').onclick = fitVisible;
   $('m1').onclick = () => mode(1); $('m2').onclick = () => mode(2); $('m3').onclick = () => mode(3);
   $('bF').onclick = () => { showF = !showF; $('bF').className = showF ? 'on' : ''; applyVis(); renderTree(); };
-  $('bRuler').onclick = () => { if (ruler) { stopRuler(); return; } ruler = true; rp = []; $('bRuler').className = 'on'; $('st').textContent = 'рулетка: укажи первую точку'; };
+  $('bRuler').onclick = () => { if (ruler) { stopRuler(); return; } ruler = true; rp = []; $('bRuler').className = 'on'; cv.style.cursor = 'crosshair'; $('st').textContent = 'рулетка: укажи первую точку'; };
+  $('bDimClr').onclick = clearDims;
   $('bOpen').onclick = () => startAnim(allAnimIds(), 1);
   $('bClose').onclick = () => startAnim(allAnimIds(), 0);
   $('bB').onclick = () => { showB = !showB; $('bB').className = showB ? 'on' : ''; applyVis(); renderTree(); };
@@ -755,7 +863,7 @@ function loop() {
 fetch('./model.json').then(r => { if (!r.ok) throw new Error('файл модели не найден (' + r.status + ')'); return r.json(); })
   .then(data => {
     M = data; build(); initLevels(); wire(); applyVis(); place(); fitVisible();
-    window.__viewer = { parts, animNode, M };   // для проверки из консоли
+    window.__viewer = { parts, animNode, M, dims, addDim, dragDim, THREE };   // для проверки из консоли
     $('load').remove(); loop();
   })
   .catch(err => { $('load').textContent = 'Не удалось открыть модель: ' + err.message; });
