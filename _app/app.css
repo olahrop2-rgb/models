@@ -3,13 +3,15 @@
   --accent: #2b6cb0; --accent-soft: #e3edf8; --hover: #eef3f8;
 }
 html, body { margin: 0; height: 100%; overflow: hidden; font: 13px system-ui, "Segoe UI", sans-serif; color: var(--text);
-  background: linear-gradient(180deg, #d6e6f3 0%, #edf2f7 50%, #f5f1e8 100%); }
+  background: linear-gradient(180deg, #d6e6f3 0%, #edf2f7 50%, #f5f1e8 100%);
+  overscroll-behavior: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 canvas { display: block; touch-action: none; }
 button { font: inherit; background: #fff; color: var(--text); border: 1px solid var(--line); border-radius: 7px;
   padding: 5px 10px; cursor: pointer; white-space: nowrap; }
 button:hover { background: var(--hover); }
 button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
 .sep { width: 10px; flex: none; }
+#bMore { display: none; }
 
 #bar { position: fixed; left: 0; right: 0; bottom: 0; padding: 7px 10px; background: var(--panel); z-index: 5;
   display: flex; gap: 6px; align-items: center; flex-wrap: wrap; box-shadow: 0 -1px 6px rgba(0,0,0,.08); }
@@ -20,8 +22,10 @@ button.on { background: var(--accent); color: #fff; border-color: var(--accent);
 #tree.hidden { display: none; }
 #tree .head { padding: 8px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
 #tree .head .row { display: flex; gap: 5px; flex-wrap: wrap; }
-#tree input[type=search] { font: inherit; padding: 5px 8px; border: 1px solid var(--line); border-radius: 7px; }
-#tree .body { overflow: auto; flex: 1; padding: 4px 0; }
+#tree .head .row.top { flex-wrap: nowrap; }
+#tree input[type=search] { font: inherit; padding: 5px 8px; border: 1px solid var(--line); border-radius: 7px; flex: 1; min-width: 0;
+  -webkit-user-select: text; user-select: text; }
+#tree .body { overflow: auto; flex: 1; padding: 4px 0; overscroll-behavior: contain; }
 .tr { display: flex; align-items: center; gap: 4px; padding: 2px 8px 2px 0; cursor: pointer; white-space: nowrap; }
 .tr:hover { background: var(--hover); }
 .tr.sel { background: var(--accent-soft); }
@@ -40,3 +44,30 @@ button.on { background: var(--accent); color: #fff; border-color: var(--accent);
   padding: 2px 6px; font-size: 12px; pointer-events: none; display: none; transform: translate(-50%, -130%); white-space: nowrap; }
 #load { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 15px; }
 #stamp { position: fixed; right: 12px; bottom: 52px; color: #9aa4ae; font-size: 11px; z-index: 4; pointer-events: none; }
+
+#hint { display: none; position: fixed; inset: 0; z-index: 20; background: rgba(20,28,38,.72); color: #fff;
+  flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 24px; text-align: center; font-size: 16px; }
+#hint.show { display: flex; }
+#hint b { font-size: 19px; margin-bottom: 6px; }
+#hint p { margin: 4px 0; }
+#hint small { margin-top: 14px; opacity: .75; }
+
+/* ---------- телефон / планшет ---------- */
+.touch body { font-size: 15px; }
+.touch button { padding: 9px 13px; border-radius: 9px; }
+.touch #bMore { display: inline-block; }
+.touch #bar { padding: 8px 8px calc(8px + env(safe-area-inset-bottom)); gap: 7px; }
+.touch #bar .x { display: none; }
+.touch #bar.more .x { display: inline-block; }
+.touch #bar .sep { display: none; }
+.touch #st { width: 100%; margin: 0; font-size: 13px; }
+.touch #st:empty { display: none; }
+.touch #stamp { display: none; }
+.touch #tree { top: auto; left: 0; right: 0; width: auto; bottom: 0; height: 58vh; border-right: 0; background: #fff;
+  border-radius: 14px 14px 0 0; box-shadow: 0 -4px 16px rgba(0,0,0,.18); z-index: 8; }
+.touch #tree .head button { padding: 8px 11px; }
+.touch #tClose { font-size: 18px; padding: 6px 14px; }
+.touch .tr { padding: 9px 10px 9px 0; font-size: 15px; }
+.touch .tr .cr { width: 26px; font-size: 13px; }
+.touch .tr input { width: 20px; height: 20px; }
+.touch #card { left: 10px; right: 10px; top: 10px; max-width: none; }

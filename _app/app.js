@@ -1,15 +1,25 @@
 // Проигрыватель модели Базиса: один на все проекты. Данные — ./model.json рядом со страницей проекта.
 import * as THREE from 'three';
 
-const APP_DATE = '2026-09-26';
+const APP_DATE = '2026-09-26 (тест телефона)';
 const $ = id => document.getElementById(id);
+// телефон/планшет: палец вместо мыши — свои жесты, компактные кнопки, структура снизу
+const TOUCH = matchMedia('(pointer: coarse)').matches;
+if (TOUCH) document.documentElement.classList.add('touch');
+// страница не масштабируется и не уезжает — все касания забирает модель
+(() => {
+  let vp = document.querySelector('meta[name=viewport]');
+  if (!vp) { vp = document.createElement('meta'); vp.name = 'viewport'; document.head.appendChild(vp); }
+  vp.content = 'width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover';
+  for (const ev of ['gesturestart', 'gesturechange', 'gestureend']) document.addEventListener(ev, e => e.preventDefault(), { passive: false });
+})();
 
 // ---------------- разметка ----------------
 document.body.insertAdjacentHTML('beforeend', `
 <div id="load">загрузка модели…</div>
 <div id="tree" class="hidden">
   <div class="head">
-    <input type="search" id="q" placeholder="поиск по названию или материалу">
+    <div class="row top"><input type="search" id="q" placeholder="поиск по названию"><button id="tClose" title="Закрыть">✕</button></div>
     <div class="row">
       <button id="tOnly" title="Скрыть всё, кроме выделенного">только это</button>
       <button id="tHide" title="Скрыть выделенное (Delete)">скрыть</button>
@@ -22,16 +32,21 @@ document.body.insertAdjacentHTML('beforeend', `
 <div id="card"></div>
 <div id="rlabel"></div>
 <div id="stamp"></div>
+<div id="hint"><b>Как смотреть</b>
+  <p>☝ один палец — вращать</p><p>✌ два пальца — приблизить и сдвинуть</p>
+  <p>👆 коснуться двери или ящика — открыть / закрыть</p><p>✋ подержать палец на детали — что это за деталь</p>
+  <small>коснитесь, чтобы закрыть</small></div>
 <div id="bar">
   <button id="bTree">структура</button><span class="sep"></span>
-  <button id="vF">спереди</button><button id="vB">сзади</button><button id="vL">слева</button>
-  <button id="vR">справа</button><button id="vT">сверху</button><button id="v3">объём</button>
-  <button id="bPersp" class="on" title="Перспектива. Выключена — строгий вид без искажений">перспектива</button>
-  <button id="bFit">вписать</button><span class="sep"></span>
-  <button id="m1" class="on">залито</button><button id="m2">полупрозрачно</button><button id="m3">рёбра</button>
-  <span class="sep"></span>
-  <button id="bF" class="on">фурнитура</button><button id="bB" class="on">профили</button><button id="bL" class="on">линии</button><button id="bRuler">линейка</button>
+  <button id="vF">спереди</button><button id="vB" class="x">сзади</button><button id="vL" class="x">слева</button>
+  <button id="vR" class="x">справа</button><button id="vT">сверху</button><button id="v3">объём</button>
+  <button id="bPersp" class="on x" title="Перспектива. Выключена — строгий вид без искажений">перспектива</button>
+  <button id="bFit" class="x">вписать</button><span class="sep x"></span>
+  <button id="m1" class="on x">залито</button><button id="m2" class="x">полупрозрачно</button><button id="m3" class="x">рёбра</button>
+  <span class="sep x"></span>
+  <button id="bF" class="on x">фурнитура</button><button id="bB" class="on x">профили</button><button id="bL" class="on x">линии</button><button id="bRuler" class="x">линейка</button>
   <button id="bOpen">открыть всё</button><button id="bClose">закрыть всё</button>
+  <button id="bMore" title="Ещё">⋯</button>
   <span id="st"></span>
 </div>`);
 $('stamp').textContent = 'проигрыватель от ' + APP_DATE;
@@ -255,8 +270,10 @@ function place() {
 }
 function freeRect() {
   const t = $('tree'), bar = $('bar');
-  const x0 = t && !t.classList.contains('hidden') ? t.offsetWidth : 0;
-  const y1 = innerHeight - (bar ? bar.offsetHeight : 0);
+  const open = t && !t.classList.contains('hidden');
+  let y1 = innerHeight - (bar ? bar.offsetHeight : 0), x0 = 0;
+  if (open && TOUCH) y1 = Math.min(y1, t.getBoundingClientRect().top);   // на телефоне структура выезжает снизу
+  else if (open) x0 = t.offsetWidth;
   return { x0, x1: innerWidth, y0: 0, y1 };
 }
 function setPersp(on) { view.persp = on; $('bPersp').className = on ? 'on' : ''; place(); }
@@ -456,10 +473,10 @@ function revealInTree() {
 
 // ---------------- линейка ----------------
 let ruler = false, rp = [], rline = null;
-function snap(hit, cx, cy) {
-  // ближайшая вершина детали в пределах 12 точек экрана
+function snap(hit, cx, cy, px = 12) {
+  // ближайшая вершина детали в пределах px точек экрана (под палец — крупнее)
   const pos = hit.object.geometry.attributes.position, mw = hit.object.matrixWorld;
-  let best = null, bd = 144; const v = new THREE.Vector3();
+  let best = null, bd = px * px; const v = new THREE.Vector3();
   for (let i = 0; i < pos.count; i++) {
     v.set(pos.getX(i), pos.getY(i), pos.getZ(i)).applyMatrix4(mw);
     const s = v.clone().project(cam);
@@ -505,7 +522,89 @@ function pick(cx, cy) {
 const cv = rend.domElement;
 let drag = null;
 cv.addEventListener('contextmenu', e => e.preventDefault());
+
+// ---------------- пальцы ----------------
+// один палец — вращение (с докруткой после отпускания), два — приближение щипком и сдвиг,
+// короткое касание — открыть/закрыть дверь или ящик, долгое — выделить деталь и показать карточку
+const touches = new Map();
+let tState = null, spin = null, pressTimer = null;
+function orbit(dx, dy) {
+  view.yaw -= dx * 0.006;
+  const lo = TOUCH ? 0 : -Math.PI / 2;                    // на телефоне снизу не заглянуть
+  view.pitch = Math.max(lo, Math.min(Math.PI / 2, view.pitch + dy * 0.006));
+}
+function panBy(dx, dy) {
+  const k = viewHeight() / innerHeight;
+  const right = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 0);
+  const up = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 1);
+  view.target.addScaledVector(right, -dx * k).addScaledVector(up, dy * k);
+}
+function zoomAt(k, cx, cy) {
+  const nd = Math.max(rad * 0.08, Math.min(rad * 5, view.dist * k));   // не пролететь сквозь и не улететь
+  k = nd / view.dist;
+  const p = onTargetPlane(cx, cy); if (p) view.target.lerp(p, 1 - k);
+  view.dist = nd;
+}
+function twoInfo() {
+  const [a, b] = [...touches.values()];
+  return { d: Math.hypot(a.x - b.x, a.y - b.y), x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+}
+function spinLoop() {
+  if (!spin || touches.size) { spin = null; return; }
+  spin.vx *= 0.92; spin.vy *= 0.92;
+  if (Math.abs(spin.vx) + Math.abs(spin.vy) < 0.3) { spin = null; return; }
+  orbit(spin.vx, spin.vy); place();
+  requestAnimationFrame(spinLoop);
+}
+function touchDown(e) {
+  cv.setPointerCapture(e.pointerId);
+  touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  spin = null; clearTimeout(pressTimer);
+  if (touches.size === 1) {
+    tState = { one: true, x0: e.clientX, y0: e.clientY, t0: performance.now(), moved: false, vx: 0, vy: 0, long: false };
+    pressTimer = setTimeout(() => {                        // долгое нажатие — выделить
+      if (!tState || tState.moved || touches.size !== 1) return;
+      tState.long = true;
+      const h = pick(tState.x0, tState.y0);
+      if (h) selectPart(h.object.userData.idx, -1); else clearSel();
+    }, 550);
+  } else if (touches.size === 2) {
+    tState = { one: false, ...twoInfo() };
+  }
+}
+function touchMove(e) {
+  const p = touches.get(e.pointerId); if (!p) return;
+  const dx = e.clientX - p.x, dy = e.clientY - p.y;
+  p.x = e.clientX; p.y = e.clientY;
+  if (!tState) return;
+  if (tState.one && touches.size === 1) {
+    if (Math.hypot(e.clientX - tState.x0, e.clientY - tState.y0) > 8) tState.moved = true;   // мёртвая зона дрожания
+    if (!tState.moved) return;
+    orbit(dx, dy); tState.vx = dx; tState.vy = dy; place();
+  } else if (!tState.one && touches.size === 2) {
+    const n = twoInfo();
+    if (n.d > 10 && tState.d > 10) zoomAt(tState.d / n.d, n.x, n.y);
+    panBy(n.x - tState.x, n.y - tState.y);
+    tState.d = n.d; tState.x = n.x; tState.y = n.y; place();
+  }
+}
+function touchUp(e) {
+  touches.delete(e.pointerId); clearTimeout(pressTimer);
+  const s = tState;
+  if (touches.size === 1) { const [q] = [...touches.values()]; tState = { one: true, x0: q.x, y0: q.y, t0: 0, moved: true, vx: 0, vy: 0 }; return; }
+  tState = null;
+  if (!s || !s.one) return;
+  if (s.moved) { spin = { vx: s.vx, vy: s.vy }; requestAnimationFrame(spinLoop); return; }
+  if (s.long || performance.now() - s.t0 > 500) return;
+  // короткое касание
+  const h = pick(e.clientX, e.clientY);
+  if (ruler) { if (h) { rp.push(snap(h, e.clientX, e.clientY, 24)); if (rp.length > 2) rp = [rp[rp.length - 1]]; drawRuler(); } return; }
+  if (h) { if (!toggleAt(h.object.userData.idx)) selectPart(h.object.userData.idx, -1); }
+  else clearSel();
+}
+
 cv.addEventListener('pointerdown', e => {
+  if (e.pointerType === 'touch') { touchDown(e); return; }
   cv.setPointerCapture(e.pointerId);
   drag = { b: e.button, x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY };
   if (e.button === 1) {
@@ -514,7 +613,9 @@ cv.addEventListener('pointerdown', e => {
     if (h && !toggleAt(h.object.userData.idx)) $('st').textContent = 'эта деталь неподвижна';
   }
 });
+cv.addEventListener('pointercancel', e => { if (e.pointerType === 'touch') touchUp(e); });
 cv.addEventListener('pointermove', e => {
+  if (e.pointerType === 'touch') { touchMove(e); return; }
   if (!drag) return;
   const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY;
   if (drag.b === 0) {
@@ -530,6 +631,7 @@ cv.addEventListener('pointermove', e => {
   }
 });
 cv.addEventListener('pointerup', e => {
+  if (e.pointerType === 'touch') { touchUp(e); return; }
   const d = drag; drag = null;
   if (!d || d.b !== 0 || Math.abs(e.clientX - d.x0) > 4 || Math.abs(e.clientY - d.y0) > 4) return;
   const h = pick(e.clientX, e.clientY);
@@ -569,6 +671,13 @@ function mode(m) {
 }
 function wire() {
   $('bTree').onclick = () => { $('tree').classList.toggle('hidden'); $('bTree').className = $('tree').classList.contains('hidden') ? '' : 'on'; renderTree(); place(); };
+  $('tClose').onclick = () => { $('tree').classList.add('hidden'); $('bTree').className = ''; place(); };
+  $('bMore').onclick = () => { $('bar').classList.toggle('more'); $('bMore').className = $('bar').classList.contains('more') ? 'on' : ''; place(); };
+  // подсказка по жестам — при первом открытии на телефоне
+  const hint = $('hint');
+  let seen = false; try { seen = localStorage.getItem('viewerHint') === '1'; } catch (e) {}
+  if (TOUCH && !seen) hint.classList.add('show');
+  hint.onclick = () => { hint.classList.remove('show'); try { localStorage.setItem('viewerHint', '1'); } catch (e) {} };
   $('q').oninput = renderTree;
   $('tOnly').onclick = isolateSel; $('tHide').onclick = hideSel; $('tAll').onclick = showAll;
   $('tFit').onclick = () => { if (selSet.length) fitBox(visibleBox(true)); };
