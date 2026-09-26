@@ -39,6 +39,7 @@ button.on { background: var(--accent); color: #fff; border-color: var(--accent);
   border-radius: 8px; padding: 8px 12px; z-index: 5; max-width: 340px; display: none; }
 #card b { display: block; margin-bottom: 3px; }
 #card small { color: var(--muted); }
+#card .cbtn { display: flex; gap: 6px; margin-top: 7px; }
 
 #rlabel { position: fixed; z-index: 4; background: #fff; border: 1px solid #d94f2b; color: #b23a1c; border-radius: 5px;
   padding: 2px 6px; font-size: 12px; pointer-events: none; display: none; transform: translate(-50%, -130%); white-space: nowrap; }
@@ -56,8 +57,15 @@ button.on { background: var(--accent); color: #fff; border-color: var(--accent);
   border: 1px solid #d94f2b; border-radius: 5px; padding: 1px 6px; font: 600 12px system-ui, sans-serif; white-space: nowrap;
   cursor: grab; touch-action: none; }
 .touch .dim { font-size: 14px; padding: 4px 9px; }
-#snapmk { position: fixed; z-index: 7; width: 12px; height: 12px; margin: -7px 0 0 -7px; border: 2px solid #d94f2b; border-radius: 50%;
-  pointer-events: none; display: none; background: rgba(217,79,43,.18); }
+/* крестик рулетки: всегда на месте курсора, у угла детали прыгает на угол */
+#snapmk { position: fixed; z-index: 7; width: 26px; height: 26px; margin: -13px 0 0 -13px; pointer-events: none; display: none; }
+#snapmk::before, #snapmk::after { content: ''; position: absolute; background: #e0301e; }
+#snapmk::before { left: 12px; top: 0; width: 2px; height: 26px; }
+#snapmk::after { top: 12px; left: 0; height: 2px; width: 26px; }
+#snapmk.snapped::before { width: 3px; left: 11.5px; }
+#snapmk.snapped::after { height: 3px; top: 11.5px; }
+#axmenu { position: fixed; z-index: 16; display: flex; flex-direction: column; gap: 4px; background: #fff;
+  border: 1px solid var(--line); border-radius: 8px; padding: 6px; box-shadow: 0 3px 12px rgba(0,0,0,.18); }
 #loupe { position: fixed; width: 120px; height: 120px; display: none; z-index: 15; pointer-events: none;
   border-radius: 50%; box-shadow: 0 3px 12px rgba(0,0,0,.35); }
 
