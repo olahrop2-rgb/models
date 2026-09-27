@@ -89,14 +89,23 @@ button.on { background: var(--accent); color: #fff; border-color: var(--accent);
 .touch #st { width: 100%; margin: 0; font-size: 13px; }
 .touch #st:empty { display: none; }
 .touch #stamp { display: none; }
-.touch #tree { top: 0; left: 0; bottom: 0; z-index: 8; padding-left: env(safe-area-inset-left); }
+.touch #tree { top: 0; left: 0; bottom: 0; z-index: 8; padding-left: env(safe-area-inset-left); padding-top: env(safe-area-inset-top); }
+/* значки включённого: нажал — выключил */
+#tools { display: none; }
+.touch #tools { display: flex; flex-direction: column; gap: 8px; position: fixed; z-index: 9; }
+.touch #tools button { width: 44px; height: 44px; padding: 0; font-size: 21px; border-radius: 50%;
+  background: rgba(43,108,176,.9); color: #fff; border: 0; box-shadow: 0 2px 8px rgba(0,0,0,.25); }
+/* короткое сообщение сверху по центру */
+#toast { position: fixed; left: 50%; top: 18%; transform: translateX(-50%); z-index: 20; max-width: 80vw; display: none;
+  background: rgba(43,47,54,.9); color: #fff; padding: 9px 14px; border-radius: 10px; font-size: 14px; text-align: center; pointer-events: none; }
+#toast.show { display: block; }
 .touch #tgrip { display: block; position: absolute; right: -18px; top: 50%; width: 18px; height: 70px; margin-top: -35px;
   background: rgba(43,47,54,.5); border-radius: 0 9px 9px 0; touch-action: none; }
 .touch #tgrip::after { content: ''; position: absolute; left: 7px; top: 20px; bottom: 20px; width: 4px;
   border-left: 1px solid #fff; border-right: 1px solid #fff; }
 /* язычок строки кнопок */
 #bgrip { display: none; }
-.touch #bgrip { display: flex; position: fixed; z-index: 7; width: 56px; height: 26px; align-items: center; justify-content: center;
+.touch #bgrip { display: flex; position: fixed; z-index: 9; width: 56px; height: 26px; align-items: center; justify-content: center;
   background: rgba(43,47,54,.55); color: #fff; font-size: 15px; border-radius: 10px 10px 0 0; touch-action: none; }
 .touch.land #bgrip { width: 26px; height: 56px; border-radius: 10px 0 0 10px; }
 .touch #bar.closed { display: none; }

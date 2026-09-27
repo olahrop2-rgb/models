@@ -38,6 +38,7 @@ document.body.insertAdjacentHTML('beforeend', `
   <div id="tgrip" title="Потяните, чтобы сделать шире или уже"></div>
 </div>
 <div id="bgrip">☰</div>
+<div id="tools"></div><div id="toast"></div>
 <div id="card"></div>
 <div id="rlabel"></div><div id="snapmk"></div>
 <div id="stamp"></div>
@@ -289,7 +290,9 @@ function freeRect() {
   return { x0, x1: innerWidth, y0: 0, y1 };
 }
 function setPersp(on) { view.persp = on; $('bPersp').className = on ? 'on' : ''; place(); }
-function strictView(yaw, pitch) { view.yaw = yaw; view.pitch = pitch; setPersp(false); fitVisible(); }
+// строгий вид (спереди, сверху, сбоку): на телефоне не поворачивается — один палец двигает, два приближают;
+// обратно к вращению — кнопка «объём»
+function strictView(yaw, pitch) { view.strict = true; view.yaw = yaw; view.pitch = pitch; setPersp(false); fitVisible(); }
 
 // точка под курсором на плоскости цели (для масштаба к курсору и сдвига)
 function onTargetPlane(cx, cy) {
@@ -345,7 +348,7 @@ function applyVis() {
   for (const p of parts) { p.g.visible = effVisible(p); if (p.hidden) any = true; }
   for (const k in nodes) if (nodes[k].hidden) any = true;
   const b = $('bShowAll'); if (b) b.style.display = any ? '' : 'none';   // «показать всё» — только когда что-то скрыто
-  need();
+  syncTools(); need();
 }
 function showAll() {
   for (const p of parts) p.hidden = false;
@@ -736,7 +739,7 @@ function addPoint(p, mouse) {
   if (!p) return;
   if (!rp.length) { rp = [p]; $('st').textContent = 'рулетка: укажи вторую точку'; showPending(); return; }
   const a = rp[0]; rp = []; showPending();
-  if (a.distanceTo(p) < 0.5) return;
+  if (a.distanceTo(p) < 0.5) { toast('размер не поставлен: вторая точка попала в тот же угол, что и первая'); return; }
   const dm = addDim(a, p);
   if (mouse && dm.axis) placing = { dm, base: a.clone().add(p).multiplyScalar(0.5) };
 }
@@ -755,7 +758,7 @@ function showPending(hover) {
 }
 function clearDims() { while (dims.length) removeDim(dims[0]); rp = []; showPending(); }
 function stopRuler() {
-  ruler = false; rp = []; placing = null; showPending(); hideHover(); armBarHide();
+  ruler = false; rp = []; placing = null; showPending(); hideHover(); armBarHide(); syncTools();
   cv.style.cursor = '';
   $('bRuler').className = ''; $('st').textContent = ''; need();
 }
@@ -856,19 +859,27 @@ function aimAt(x, y) {
   lctx.strokeStyle = '#2b2f36'; lctx.lineWidth = 3; lctx.beginPath(); lctx.arc(S / 2, S / 2, S / 2 - 2, 0, Math.PI * 2); lctx.stroke();
   // лупа всегда в верхнем левом углу; палец зашёл в этот угол — перескакивает в верхний правый
   // (над пальцем у верхнего края экрана она пряталась под палец — замечание 27.09)
-  const L = 120, G = 10, zone = L + 2 * G + 40;
-  const right = x < zone && y < zone;
+  const L = 120, G = 10, sf = safe(), zone = L + 2 * G + 40;
+  const right = x < zone + sf.l && y < zone + sf.t;
   loupe.style.display = 'block';
-  loupe.style.left = (right ? innerWidth - L - G - barSideW() : G) + 'px';
-  loupe.style.top = G + 'px';
+  loupe.style.left = (right ? innerWidth - L - G - sf.r - barSideW() : G + sf.l) + 'px';
+  loupe.style.top = (G + sf.t) + 'px';
 }
 // ширина строки кнопок, когда она стоит справа (телефон лёжа)
 function barSideW() { const b = $('bar'); return TOUCH && isLand() && !b.classList.contains('closed') ? b.offsetWidth : 0; }
 function isLand() { return innerWidth > innerHeight; }
-function aimEnd(place) {
+// отпустили палец: точка ставится; не поставилась — сказать почему (замечание 27.09: «ставятся не всегда»)
+function aimEnd(place, cancelled) {
   loupe.style.display = 'none';
-  if (place && aim && aim.p) { addPoint(aim.p); }
+  if (cancelled) toast('точка не поставлена: телефон прервал касание — попробуйте ещё раз, чуть дальше от края экрана');
+  else if (place && aim && !aim.p) toast('точка не поставлена: рядом с пальцем нет угла детали');
+  else if (place && aim) addPoint(aim.p);
   aim = null; need();
+}
+let toastT = null;
+function toast(text) {
+  const t = $('toast'); t.textContent = text; t.classList.add('show');
+  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 3500);
 }
 
 function touchDown(e) {
@@ -898,6 +909,7 @@ function touchMove(e) {
   if (tState.one && touches.size === 1) {
     if (Math.hypot(e.clientX - tState.x0, e.clientY - tState.y0) > 8) tState.moved = true;   // мёртвая зона дрожания
     if (!tState.moved) return;
+    if (view.strict) { panBy(dx, dy); place(); return; }
     orbit(dx, dy); tState.vx = dx; tState.vy = dy; place();
   } else if (!tState.one && touches.size === 2) {
     const n = twoInfo();
@@ -908,12 +920,12 @@ function touchMove(e) {
 }
 function touchUp(e) {
   touches.delete(e.pointerId); clearTimeout(pressTimer);
-  if (tState && tState.aim) { tState = null; aimEnd(e.type === 'pointerup'); return; }
+  if (tState && tState.aim) { tState = null; aimEnd(e.type === 'pointerup', e.type !== 'pointerup'); return; }
   const s = tState;
   if (touches.size === 1) { const [q] = [...touches.values()]; tState = { one: true, x0: q.x, y0: q.y, t0: 0, moved: true, vx: 0, vy: 0 }; return; }
   tState = null;
   if (!s || !s.one) return;
-  if (s.moved) { spin = { vx: s.vx, vy: s.vy }; requestAnimationFrame(spinLoop); return; }
+  if (s.moved) { if (!view.strict) { spin = { vx: s.vx, vy: s.vy }; requestAnimationFrame(spinLoop); } return; }
   if (s.long || performance.now() - s.t0 > 500) return;
   // короткое касание
   if (ruler) { addPoint(snapAt(e.clientX, e.clientY)); return; }
@@ -1003,8 +1015,8 @@ function mode(m) {
   need();
 }
 function wire() {
-  $('bTree').onclick = () => { $('tree').classList.toggle('hidden'); $('bTree').className = $('tree').classList.contains('hidden') ? '' : 'on'; renderTree(); place(); };
-  $('tClose').onclick = () => { $('tree').classList.add('hidden'); $('bTree').className = ''; place(); };
+  $('bTree').onclick = () => { $('tree').classList.toggle('hidden'); $('bTree').className = $('tree').classList.contains('hidden') ? '' : 'on'; renderTree(); place(); syncTools(); };
+  $('tClose').onclick = () => { $('tree').classList.add('hidden'); $('bTree').className = ''; place(); syncTools(); };
   $('bMore').onclick = () => setBar(barState() === 2 ? 1 : 2);
   $('bUndo').onclick = cancelPoint;
   // подсказка по жестам — при первом открытии на телефоне
@@ -1020,12 +1032,12 @@ function wire() {
   $('vL').onclick = () => strictView(-Math.PI / 2, 0);
   $('vR').onclick = () => strictView(Math.PI / 2, 0);
   $('vT').onclick = () => strictView(0, Math.PI / 2);
-  $('v3').onclick = () => { view.yaw = 0.7; view.pitch = 0.28; setPersp(true); fitVisible(); };
+  $('v3').onclick = () => { view.strict = false; view.yaw = 0.7; view.pitch = 0.28; setPersp(true); fitVisible(); };
   $('bPersp').onclick = () => setPersp(!view.persp);
   $('bFit').onclick = fitVisible;
   $('m1').onclick = () => mode(1); $('m2').onclick = () => mode(2); $('m3').onclick = () => mode(3);
   $('bF').onclick = () => { showF = !showF; $('bF').className = showF ? 'on' : ''; applyVis(); renderTree(); };
-  $('bRuler').onclick = () => { if (ruler) { stopRuler(); return; } ruler = true; rp = []; $('bRuler').className = 'on'; cv.style.cursor = 'none'; $('st').textContent = 'рулетка: укажи первую точку'; };
+  $('bRuler').onclick = () => { if (ruler) { stopRuler(); return; } ruler = true; rp = []; $('bRuler').className = 'on'; cv.style.cursor = 'none'; $('st').textContent = 'рулетка: укажи первую точку'; syncTools(); };
   { let t = null, long = false; const b = $('bDims');
     b.addEventListener('pointerdown', () => { long = false; t = setTimeout(() => { long = true; clearDims(); }, 650); });
     b.addEventListener('pointerup', () => { clearTimeout(t); if (!long) setDimsShown(!dimsShown); });
@@ -1060,19 +1072,53 @@ function layout() {
   if (!TOUCH) { place(); return; }
   const b = $('bar'), g = $('bgrip'), t = $('tree'), land = isLand(), shut = barState() === 0;
   document.documentElement.classList.toggle('land', land);
-  const r = b.getBoundingClientRect();
+  const r = b.getBoundingClientRect(), s = safe();
+  // спрятанная строка: язычок у края экрана, но не в вырезе камеры (у открытой строки отступ уже внутри неё)
   if (land) {
-    const w = shut ? 0 : r.width;
+    const w = shut ? s.r : r.width;
     g.style.left = ''; g.style.bottom = ''; g.style.right = w + 'px'; g.style.top = (innerHeight / 2 - 28) + 'px';
     t.style.bottom = '0px';
   } else {
-    const h = shut ? 0 : r.height;
+    const h = shut ? s.b : r.height;
     g.style.top = ''; g.style.right = ''; g.style.left = (innerWidth / 2 - 28) + 'px'; g.style.bottom = h + 'px';
     t.style.bottom = h + 'px';
   }
+  const c = $('card'); c.style.top = (10 + s.t) + 'px'; c.style.left = (10 + s.l) + 'px'; c.style.right = (60 + s.r + barSideW()) + 'px';
+  placeTools();
   let tw = 0; try { tw = +localStorage.getItem('viewerTreeW' + (land ? 'L' : 'P')) || 0; } catch (e) {}
   t.style.width = Math.round((tw || (land ? 0.4 : 0.62)) * innerWidth) + 'px';
   place();
+}
+// Значки включённого на экране (справа вверху): включил инструмент кнопкой — появился значок, нажал на значок —
+// выключил, в строку кнопок лезть не надо (замечание 27.09).
+function syncTools() {
+  if (!TOUCH) return;
+  const box = $('tools'); box.replaceChildren();
+  const chip = (icon, title, on) => {
+    const b = document.createElement('button'); b.textContent = icon; b.title = title;
+    b.onclick = e => { e.stopPropagation(); on(); syncTools(); };
+    box.appendChild(b);
+  };
+  if (!$('tree').classList.contains('hidden')) chip('☷', 'закрыть структуру', () => $('tClose').onclick());
+  if (ruler) chip('📏', 'выключить рулетку', stopRuler);
+  if ($('bShowAll').style.display !== 'none') chip('👁', 'показать всё скрытое', showAll);
+  placeTools();
+}
+function placeTools() {
+  const box = $('tools'), s = safe();
+  box.style.top = (10 + s.t) + 'px';
+  box.style.right = (10 + s.r + barSideW()) + 'px';
+}
+// отступы под вырез камеры и полоску «домой» (у айфона — env(safe-area-inset-*), у остальных нули)
+function safe() {
+  let p = $('safeprobe');
+  if (!p) {
+    p = document.createElement('div'); p.id = 'safeprobe';
+    p.style.cssText = 'position:fixed;visibility:hidden;pointer-events:none;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)';
+    document.body.appendChild(p);
+  }
+  const c = getComputedStyle(p);
+  return { t: parseFloat(c.paddingTop) || 0, r: parseFloat(c.paddingRight) || 0, b: parseFloat(c.paddingBottom) || 0, l: parseFloat(c.paddingLeft) || 0 };
 }
 function wireTouch() {
   if (!TOUCH) return;
@@ -1088,6 +1134,8 @@ function wireTouch() {
   });
   g.addEventListener('pointercancel', () => { st = null; });
   $('bar').addEventListener('pointerdown', armBarHide);
+  // строка кнопок меняет высоту (подсказка рулетки, «показать всё») — язычок и структура следуют за ней
+  if (window.ResizeObserver) new ResizeObserver(() => layout()).observe($('bar'));
   // ширина структуры
   const tg = $('tgrip'), t = $('tree');
   let tw = null;
@@ -1103,8 +1151,17 @@ function wireTouch() {
 }
 
 // ---------------- запуск ----------------
+// айфон при повороте сообщает новый размер экрана с опозданием (модель рисовалась растянутой, замечание 27.09) —
+// размер сверяем каждый кадр и подстраиваемся, как только он поменялся
+let lastW = innerWidth, lastH = innerHeight;
 function loop() {
   requestAnimationFrame(loop);
+  if (innerWidth !== lastW || innerHeight !== lastH) {
+    const flip = (innerWidth > innerHeight) !== (lastW > lastH);
+    lastW = innerWidth; lastH = innerHeight;
+    rend.setSize(innerWidth, innerHeight); layout();
+    if (flip && TOUCH) fitVisible();                       // повернули телефон — вписать модель заново
+  }
   tick();
   if (!dirty) return;
   dirty = false;
