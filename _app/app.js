@@ -47,6 +47,8 @@ const ICON = {
   close: sv('<rect x="5" y="3" width="14" height="18" rx="1"/><path d="M15 12h1"/>'),
   eye: sv('<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'),
   faces: sv('<path d="M5 4v16M19 4v16M8 12h8M10.5 9.5L8 12l2.5 2.5M13.5 9.5L16 12l-2.5 2.5"/>'),
+  edges: sv('<path d="M4 15L15 4M9 20L20 9"/><path d="M8.5 11.5l4 4" stroke-dasharray="1.5 1.5"/>'),
+  trash: sv('<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/>'),
   points: sv('<circle cx="5" cy="12" r="2.2" fill="currentColor"/><circle cx="19" cy="12" r="2.2" fill="currentColor"/><path d="M8 12h8" stroke-dasharray="2 2"/>'),
 };
 // кнопка строки → значок и подпись
@@ -86,7 +88,7 @@ document.body.insertAdjacentHTML('beforeend', `
 <div id="hint"><b>Как смотреть</b>
   <p>☝ один палец — вращать</p><p>✌ два пальца — приблизить и сдвинуть</p>
   <p>👆 коснуться двери или ящика — открыть / закрыть</p><p>✋ подержать палец на детали — что это за деталь</p>
-  <p>📏 рулетка: ведите пальцем — в круге видно точку, отпустите — точка поставлена</p>
+  <p>📏 рулетка: коснитесь грани, потом параллельной ей — размер между ними; подержите палец — лупа</p>
   <small>коснитесь, чтобы закрыть</small></div>
 <div id="bar">
   <button id="bTree">структура</button><button id="bShowAll" style="display:none">показать всё</button><span class="sep"></span>
@@ -709,13 +711,15 @@ function faceClick(f, mouse) {
   const n1 = face1.n.clone(), d = f.p.clone().sub(face1.p).dot(n1);
   clearFace1(); $('st').textContent = 'рулетка: коснитесь грани детали';
   if (Math.abs(d) < 0.5) { toast('грани в одной плоскости — 0 мм'); return; }
+  dropPartDims();                          // нужен зазор между гранями — размеры первой детали убираем
   const b = f.p.clone(), a = b.clone().addScaledVector(n1, -d);
   const dm = addDim(a, b);
   if (mouse && dm.axis) placing = { dm, base: a.clone().add(b).multiplyScalar(0.5) };
 }
 // два больших размера детали (толщину не показываем) — на рёбрах, ближних к смотрящему
+function dropPartDims() { while (partDims.length) { const dm = partDims.pop(); if (dims.includes(dm)) removeDim(dm); } }
 function showPartDims(i) {
-  while (partDims.length) { const dm = partDims.pop(); if (dims.includes(dm)) removeDim(dm); }
+  dropPartDims();
   const pr = parts[i]; if (!pr || !pr.meshes.length) return;
   const box = new THREE.Box3();
   for (const m of pr.meshes) { const g = m.geometry; if (!g.boundingBox) g.computeBoundingBox(); box.union(g.boundingBox); }
@@ -737,11 +741,94 @@ function showPartDims(i) {
   }
   $('st').textContent = 'деталь ' + fmt(s[ks[0]]) + ' × ' + fmt(s[ks[1]]) + ' мм';
 }
+// ---------------- рулетка по рёбрам ----------------
+// Способ «рёбра» (замечание 27.09): в строгом виде грань видна линией — коснулся ребра, оно подсвечено;
+// коснулся второго, параллельного — размер поперёк между ними. В строгом виде (без перспективы) мерим
+// в плоскости экрана: сверху — только расстояние по плану, разница по высоте не подмешивается.
+let edge1 = null, edgeHov = null;
+function edgeAt(cx, cy) {
+  root.updateMatrixWorld(true);
+  const R = TOUCH ? 24 : 12, A = new THREE.Vector3(), B = new THREE.Vector3(), sa = new THREE.Vector3(), sb = new THREE.Vector3();
+  const toPx = s => [(s.x + 1) / 2 * innerWidth, (1 - s.y) / 2 * innerHeight];
+  const cand = [];
+  for (const pr of parts) {
+    if (!pr.g.visible || !pr.edges.length) continue;
+    for (const ln of pr.edges) {
+      const pos = ln.geometry.attributes.position, mw = ln.matrixWorld;
+      for (let i = 0; i + 1 < pos.count; i += 2) {
+        A.fromBufferAttribute(pos, i).applyMatrix4(mw); B.fromBufferAttribute(pos, i + 1).applyMatrix4(mw);
+        sa.copy(A).project(cam); sb.copy(B).project(cam);
+        if (sa.z > 1 || sb.z > 1) continue;
+        const [ax, ay] = toPx(sa), [bx, by] = toPx(sb), vx = bx - ax, vy = by - ay, L2 = vx * vx + vy * vy;
+        if (L2 < 4) continue;                                   // ребро смотрит на нас — точка, не линия
+        const t = Math.max(0, Math.min(1, ((cx - ax) * vx + (cy - ay) * vy) / L2));
+        const d = Math.hypot(ax + vx * t - cx, ay + vy * t - cy);
+        if (d <= R) cand.push({ d, a: A.clone(), b: B.clone(), t });
+      }
+    }
+  }
+  cand.sort((p, q) => p.d - q.d);
+  for (const k of cand.slice(0, 40)) {
+    const p = k.a.clone().lerp(k.b, k.t);
+    if (!pointVisible(p)) continue;
+    return { a: k.a, b: k.b, p, dir: k.b.clone().sub(k.a).normalize() };
+  }
+  return null;
+}
+function edgeHL(e, color) {
+  // толщина подсветки — около 3 точек экрана
+  const mid = e.a.clone().add(e.b).multiplyScalar(0.5);
+  const mmPx = cam.isPerspectiveCamera ? 2 * mid.distanceTo(cam.position) * Math.tan(THREE.MathUtils.degToRad(cam.fov / 2)) / innerHeight
+                                       : (cam.top - cam.bottom) / innerHeight;
+  const len = e.a.distanceTo(e.b), r = mmPx * 1.8;
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 6), new THREE.MeshBasicMaterial({ color, depthTest: false }));
+  m.position.copy(mid); m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), e.dir); m.renderOrder = 12;
+  scene.add(m); e.hl = m; need();
+}
+function dropEdge(e) { if (e && e.hl) { scene.remove(e.hl); e.hl.geometry.dispose(); e.hl = null; need(); } }
+const sameEdge = (e, f) => e.a.distanceTo(f.a) + e.b.distanceTo(f.b) < 0.5 || e.a.distanceTo(f.b) + e.b.distanceTo(f.a) < 0.5;
+function edgeHover(cx, cy) {
+  const e = edgeAt(cx, cy);
+  const ok = !!e && (!edge1 || (Math.abs(e.dir.dot(edge1.dir)) > PAR && !sameEdge(e, edge1)));
+  if (edgeHov && !(ok && sameEdge(edgeHov, e))) { dropEdge(edgeHov); edgeHov = null; }
+  if (ok && !edgeHov) { edgeHov = e; edgeHL(e, 0x2b6cb0); }
+  return e;
+}
+function edgeHoverEnd() { dropEdge(edgeHov); edgeHov = null; }
+function clearEdge1() { dropEdge(edge1); edge1 = null; showPending(); }
+function edgeClick(e, mouse) {
+  if (!e) { if (edge1) { clearEdge1(); $('st').textContent = 'рулетка: коснитесь ребра детали'; } return; }
+  if (!edge1) {
+    edge1 = e; edgeHL(e, DIMC); showPending();
+    $('st').textContent = 'рулетка: коснитесь второго ребра, параллельного первому (пустое место — сброс)'; return;
+  }
+  if (sameEdge(e, edge1)) return;
+  if (Math.abs(e.dir.dot(edge1.dir)) <= PAR) { toast('это ребро не параллельно первому — выберите подсвеченное параллельное'); return; }
+  // поперёк рёбер; в строгом виде без перспективы — ещё и без составляющей «к смотрящему»
+  const w = e.p.clone().sub(edge1.p), d = edge1.dir;
+  const perp = w.clone().addScaledVector(d, -w.dot(d));
+  if (!cam.isPerspectiveCamera) {
+    const v = cam.getWorldDirection(new THREE.Vector3()), vp = v.clone().addScaledVector(d, -v.dot(d));
+    if (vp.lengthSq() > 1e-6) { vp.normalize(); perp.addScaledVector(vp, -perp.dot(vp)); }
+  }
+  clearEdge1(); $('st').textContent = 'рулетка: коснитесь ребра детали';
+  if (perp.length() < 0.5) { toast('рёбра на одной линии — 0 мм'); return; }
+  const b = e.p.clone(), a = b.clone().sub(perp);
+  const dm = addDim(a, b);
+  if (mouse && dm.axis) placing = { dm, base: a.clone().add(b).multiplyScalar(0.5) };
+}
+const RHINT = { face: 'рулетка: коснитесь грани детали', edge: 'рулетка: коснитесь ребра детали', point: 'рулетка: укажи первую точку' };
 function setRMode(m) {
   rmode = m; try { localStorage.setItem('viewerRMode', m); } catch (e) {}
-  rp = []; clearFace1(); faceHoverEnd(); hideHover();
-  $('st').textContent = m === 'face' ? 'рулетка: коснитесь грани детали' : 'рулетка: укажи первую точку';
+  rp = []; clearFace1(); faceHoverEnd(); clearEdge1(); edgeHoverEnd(); hideHover();
+  $('st').textContent = RHINT[m];
   syncTools();
+}
+// выбор под пальцем/курсором по текущему способу
+function rulerPick(x, y, mouse) {
+  if (rmode === 'face') { faceHoverEnd(); faceClick(faceAt(x, y), mouse); }
+  else if (rmode === 'edge') { edgeHoverEnd(); edgeClick(edgeAt(x, y), mouse); }
+  else { const p = snapAt(x, y); if (!p) toast('точка не поставлена: рядом нет угла детали'); else addPoint(p, mouse); }
 }
 // ---------------- размеры ----------------
 // Две точки вдоль ширины, высоты или глубины → размер с выносными «лапками», его можно оттащить:
@@ -804,6 +891,7 @@ function syncDimBtn() {
   const b = $('bDims'); if (!b) return;
   b.style.display = dims.length ? '' : 'none';
   b.classList.toggle('on', dimsShown);
+  syncTools();                                             // значок «стереть все размеры»
 }
 function setDimsShown(on) {
   dimsShown = on;
@@ -863,13 +951,18 @@ function hookDim(dm) {
   dm.el.addEventListener('pointerup', end); dm.el.addEventListener('pointercancel', end);
   dm.el.addEventListener('contextmenu', e => e.preventDefault());
 }
+// число размера показываем, только когда середина размера на экране и перед глазом
+// (замечание 27.09: число «висело» у края и на строке кнопок, когда сам размер ушёл за экран)
 function updRuler() {
+  const fwd = cam.getWorldDirection(new THREE.Vector3());
   for (const dm of dims) {
     const s = dm.mid.clone().project(cam);
-    const vis = s.z < 1;
+    const x = (s.x + 1) / 2 * innerWidth, y = (1 - s.y) / 2 * innerHeight;
+    const front = !cam.isPerspectiveCamera || dm.mid.clone().sub(cam.position).dot(fwd) > 0;
+    const vis = front && s.z < 1 && x >= 0 && x <= innerWidth && y >= 0 && y <= innerHeight;
     dm.el.style.display = vis && dimsShown ? 'block' : 'none';
-    dm.el.style.left = ((s.x + 1) / 2 * innerWidth) + 'px';
-    dm.el.style.top = ((1 - s.y) / 2 * innerHeight) + 'px';
+    dm.el.style.left = x + 'px';
+    dm.el.style.top = y + 'px';
   }
 }
 // первая точка ждёт вторую; вторая — ставит размер
@@ -883,12 +976,9 @@ function addPoint(p, mouse) {
 }
 // первая точка и резиновая линия до курсора (на компьютере)
 let pend = null;
-function cancelPoint() {
-  rp = []; clearFace1();
-  $('st').textContent = rmode === 'face' ? 'рулетка: коснитесь грани детали' : 'рулетка: укажи первую точку';
-}
+function cancelPoint() { rp = []; clearFace1(); clearEdge1(); $('st').textContent = RHINT[rmode]; }
 function showPending(hover) {
-  $('bUndo').style.display = ruler && (rp.length || face1) ? '' : 'none';
+  $('bUndo').style.display = ruler && (rp.length || face1 || edge1) ? '' : 'none';
   if (pend) { scene.remove(pend); pend = null; }
   if (!rp.length) { need(); return; }
   const pts = [rp[0], hover || rp[0]];
@@ -903,7 +993,7 @@ function showPending(hover) {
 }
 function clearDims() { while (dims.length) removeDim(dims[0]); rp = []; showPending(); }
 function stopRuler() {
-  ruler = false; rp = []; placing = null; clearFace1(); faceHoverEnd(); showPending(); hideHover(); armBarHide(); syncTools();
+  ruler = false; rp = []; placing = null; clearFace1(); faceHoverEnd(); clearEdge1(); edgeHoverEnd(); showPending(); hideHover(); armBarHide(); syncTools();
   cv.style.cursor = '';
   setOn('bRuler', false); $('st').textContent = ''; need();
 }
@@ -921,9 +1011,10 @@ function hover(cx, cy) {
     $('st').textContent = 'размер ' + fmt(placing.dm.a.distanceTo(placing.dm.b)) + ' мм — отведите мышь, щелчок фиксирует (Esc — без отступа)';
     return;
   }
-  if (rmode === 'face') {                                  // грани: крестик на курсоре, грань под ним подсвечена
+  if (rmode !== 'point') {                                 // грани/рёбра: крестик на курсоре, под ним подсветка
     mk.classList.remove('snapped'); mk.style.left = cx + 'px'; mk.style.top = cy + 'px';
-    faceHover(cx, cy); return;
+    if (rmode === 'face') faceHover(cx, cy); else edgeHover(cx, cy);
+    return;
   }
   const p = snapAt(cx, cy);
   let x = cx, y = cy, snapped = false;
@@ -936,7 +1027,7 @@ function hover(cx, cy) {
   if (rp.length && p) { showPending(p); $('st').textContent = 'рулетка: ' + fmt(rp[0].distanceTo(p)) + ' мм'; }
   else if (!rp.length) $('st').textContent = 'рулетка: укажи первую точку';
 }
-function finishPlacing() { placing = null; $('st').textContent = rmode === 'face' ? 'рулетка: коснитесь грани детали' : 'рулетка: укажи первую точку'; }
+function finishPlacing() { placing = null; $('st').textContent = RHINT[rmode]; }
 function hideHover() { const mk = $('snapmk'); if (mk) mk.style.display = 'none'; }
 
 // ---------------- мышь ----------------
@@ -990,7 +1081,8 @@ function spinLoop() {
 const loupe = $('loupe'), lctx = loupe.getContext('2d');
 let aim = null;
 function aimAt(x, y) {
-  aim = rmode === 'face' ? { x, y, face: true, f: faceHover(x, y) } : { x, y, p: snapAt(x, y) };
+  aim = rmode === 'face' ? { x, y, kind: 'face', f: faceHover(x, y) }
+      : rmode === 'edge' ? { x, y, kind: 'edge', e: edgeHover(x, y) } : { x, y, p: snapAt(x, y) };
   rend.render(scene, cam);                                  // свежий кадр — сразу копируем из него кусок
   // круг 120 точек экрана (внутри 240 — для чёткости), увеличение 2,5
   const cw = rend.domElement.width / innerWidth, Z = 2.5, S = loupe.width, C = 120, k = S / C;
@@ -1020,9 +1112,10 @@ function isLand() { return innerWidth > innerHeight; }
 // отпустили палец: точка ставится; не поставилась — сказать почему (замечание 27.09: «ставятся не всегда»)
 function aimEnd(place, cancelled) {
   loupe.style.display = 'none';
-  const a = aim; aim = null; faceHoverEnd();
+  const a = aim; aim = null; faceHoverEnd(); edgeHoverEnd();
   if (cancelled) toast('не поставлено: телефон прервал касание — попробуйте ещё раз, чуть дальше от края экрана');
-  else if (place && a && a.face) faceClick(a.f);
+  else if (place && a && a.kind === 'face') faceClick(a.f);
+  else if (place && a && a.kind === 'edge') edgeClick(a.e);
   else if (place && a && !a.p) toast('точка не поставлена: рядом с пальцем нет угла детали');
   else if (place && a) addPoint(a.p);
   need();
@@ -1037,10 +1130,18 @@ function touchDown(e) {
   try { cv.setPointerCapture(e.pointerId); } catch (err) {}
   touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
   spin = null; clearTimeout(pressTimer);
-  if (ruler && touches.size === 1) { tState = { aim: true }; aimAt(e.clientX, e.clientY); return; }
   if (aim) aimEnd(false);                                  // второй палец — отмена прицела, дальше щипок
   if (touches.size === 1) {
     tState = { one: true, x0: e.clientX, y0: e.clientY, t0: performance.now(), moved: false, vx: 0, vy: 0, long: false };
+    // С рулеткой (замечание 27.09: «выбрал грань — не могу развернуть»): палец повёл — модель вращается,
+    // короткое касание — выбор грани/ребра/точки, подержал на месте — лупа для точного прицела.
+    if (ruler) {
+      pressTimer = setTimeout(() => {
+        if (!tState || tState.moved || touches.size !== 1) return;
+        tState = { aim: true }; aimAt(e.clientX, e.clientY);
+      }, 350);
+      return;
+    }
     pressTimer = setTimeout(() => {                        // долгое нажатие — выделить
       if (!tState || tState.moved || touches.size !== 1) return;
       tState.long = true;
@@ -1079,7 +1180,7 @@ function touchUp(e) {
   if (s.moved) { if (!view.strict) { spin = { vx: s.vx, vy: s.vy }; requestAnimationFrame(spinLoop); } return; }
   if (s.long || performance.now() - s.t0 > 500) return;
   // короткое касание
-  if (ruler) { addPoint(snapAt(e.clientX, e.clientY)); return; }
+  if (ruler) { rulerPick(e.clientX, e.clientY); return; }
   const h = pick(e.clientX, e.clientY);
   if (h) { if (!toggleAt(h.object.userData.idx)) selectPart(h.object.userData.idx, -1); }
   else clearSel();
@@ -1095,7 +1196,7 @@ cv.addEventListener('pointerdown', e => {
     if (h && !toggleAt(h.object.userData.idx)) $('st').textContent = 'эта деталь неподвижна';
   }
 });
-cv.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse') { hideHover(); faceHoverEnd(); } });
+cv.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse') { hideHover(); faceHoverEnd(); edgeHoverEnd(); } });
 cv.addEventListener('pointercancel', e => { if (e.pointerType === 'touch') touchUp(e); });
 cv.addEventListener('pointermove', e => {
   if (e.pointerType === 'touch') { touchMove(e); return; }
@@ -1123,12 +1224,11 @@ cv.addEventListener('pointerup', e => {
   if (e.pointerType === 'touch') { touchUp(e); return; }
   const d = drag; drag = null;
   if (!d || Math.abs(e.clientX - d.x0) > 4 || Math.abs(e.clientY - d.y0) > 4) return;
-  if (d.b === 2) { if (ruler && (rp.length || face1)) cancelPoint(); return; }   // правая кнопка без сдвига — убрать первую точку
+  if (d.b === 2) { if (ruler && (rp.length || face1 || edge1)) cancelPoint(); return; }   // правая кнопка без сдвига — убрать первую точку
   if (d.b !== 0) return;
   if (ruler) {
     if (placing) { finishPlacing(); return; }
-    if (rmode === 'face') { faceHoverEnd(); faceClick(faceAt(e.clientX, e.clientY), true); return; }
-    addPoint(snapAt(e.clientX, e.clientY), true); return;
+    rulerPick(e.clientX, e.clientY, true); return;
   }
   const h = pick(e.clientX, e.clientY);
   if (h) { const i = h.object.userData.idx; selectPart(i, (e.ctrlKey || e.altKey) ? upLevel(i, -1) : -1); }
@@ -1150,7 +1250,7 @@ addEventListener('keydown', e => {
   if (e.key === 'Delete') hideSel();
   if (e.key === 'Escape') {
     if (placing) { placing.dm.off.set(0, 0, 0); buildDim(placing.dm); updRuler(); finishPlacing(); need(); return; }
-    if (ruler && (rp.length || face1)) { cancelPoint(); return; }
+    if (ruler && (rp.length || face1 || edge1)) { cancelPoint(); return; }
     stopRuler(); clearSel();
   }
 });
@@ -1219,7 +1319,7 @@ function wire() {
   $('bFit').onclick = fitVisible;
   $('m1').onclick = () => mode(1); $('m2').onclick = () => mode(2); $('m3').onclick = () => mode(3);
   $('bF').onclick = () => { showF = !showF; setOn('bF', showF); applyVis(); renderTree(); };
-  $('bRuler').onclick = () => { if (ruler) { stopRuler(); return; } ruler = true; rp = []; setOn('bRuler', true); cv.style.cursor = 'none'; $('st').textContent = rmode === 'face' ? 'рулетка: коснитесь грани детали' : 'рулетка: укажи первую точку'; syncTools(); };
+  $('bRuler').onclick = () => { if (ruler) { stopRuler(); return; } ruler = true; rp = []; setOn('bRuler', true); cv.style.cursor = 'none'; $('st').textContent = RHINT[rmode]; syncTools(); };
   { let t = null, long = false; const b = $('bDims');
     b.addEventListener('pointerdown', () => { long = false; t = setTimeout(() => { long = true; clearDims(); }, 650); });
     b.addEventListener('pointerup', () => { clearTimeout(t); if (!long) setDimsShown(!dimsShown); });
@@ -1285,7 +1385,9 @@ function syncTools() {
     chip(ICON.ruler, 'выключить рулетку', stopRuler);
     // способ рулетки: грани (основной) или точки
     chip(ICON.faces, 'мерить от грани до грани', () => setRMode('face'), 'mini' + (rmode === 'face' ? ' on' : ''));
+    chip(ICON.edges, 'мерить от ребра до ребра', () => setRMode('edge'), 'mini' + (rmode === 'edge' ? ' on' : ''));
     chip(ICON.points, 'мерить от угла до угла', () => setRMode('point'), 'mini' + (rmode === 'point' ? ' on' : ''));
+    if (dims.length) chip(ICON.trash, 'стереть все размеры', () => { clearDims(); partDims.length = 0; }, 'mini');
   }
   if ($('bShowAll').style.display !== 'none') chip(ICON.eye, 'показать всё скрытое', showAll);
   placeTools();

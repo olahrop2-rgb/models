@@ -65,7 +65,7 @@ button.on { background: var(--accent); color: #fff; border-color: var(--accent);
 #hint p { margin: 4px 0; }
 #hint small { margin-top: 14px; opacity: .75; }
 
-.dim { position: fixed; z-index: 6; transform: translate(-50%, -115%); background: rgba(255,255,255,.92); color: #b23a1c;
+.dim { position: fixed; z-index: 4; transform: translate(-50%, -115%); background: rgba(255,255,255,.92); color: #b23a1c;
   border: 1px solid #d94f2b; border-radius: 5px; padding: 1px 6px; font: 600 12px system-ui, sans-serif; white-space: nowrap;
   cursor: grab; touch-action: none; }
 .touch .dim { font-size: 14px; padding: 4px 9px; }
