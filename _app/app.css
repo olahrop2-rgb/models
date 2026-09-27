@@ -17,8 +17,12 @@ button.on { background: var(--accent); color: #fff; border-color: var(--accent);
   display: flex; gap: 6px; align-items: center; flex-wrap: wrap; box-shadow: 0 -1px 6px rgba(0,0,0,.08); }
 #st { color: var(--muted); margin-left: 6px; }
 
-#tree { position: fixed; left: 0; top: 0; bottom: 46px; width: 330px; background: var(--panel); z-index: 6;
-  border-right: 1px solid var(--line); display: flex; flex-direction: column; box-shadow: 1px 0 6px rgba(0,0,0,.06); }
+/* структура — текстом на прозрачном фоне, модель под ней видна (замечание 27.09, как в веб-просмотре Базиса) */
+#tree { position: fixed; left: 0; top: 0; bottom: 46px; width: 330px; background: rgba(255,255,255,.22); z-index: 6;
+  border-right: 1px solid rgba(0,0,0,.08); display: flex; flex-direction: column; }
+#tree .body .tr { text-shadow: 0 0 2px #fff, 0 0 3px #fff, 0 0 6px #fff; }
+#tree .head { background: rgba(255,255,255,.6); }
+#tgrip { display: none; }
 #tree.hidden { display: none; }
 #tree .head { padding: 8px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
 #tree .head .row { display: flex; gap: 5px; flex-wrap: wrap; }
@@ -27,8 +31,8 @@ button.on { background: var(--accent); color: #fff; border-color: var(--accent);
   -webkit-user-select: text; user-select: text; }
 #tree .body { overflow: auto; flex: 1; padding: 4px 0; overscroll-behavior: contain; }
 .tr { display: flex; align-items: center; gap: 4px; padding: 2px 8px 2px 0; cursor: pointer; white-space: nowrap; }
-.tr:hover { background: var(--hover); }
-.tr.sel { background: var(--accent-soft); }
+.tr:hover { background: rgba(238,243,248,.55); }
+.tr.sel { background: rgba(43,108,176,.22); }
 .tr.off .nm { color: #a3acb6; }
 .tr .cr { width: 16px; text-align: center; color: var(--muted); flex: none; font-size: 10px; }
 .tr input { margin: 0; flex: none; }
@@ -40,6 +44,10 @@ button.on { background: var(--accent); color: #fff; border-color: var(--accent);
 #card b { display: block; margin-bottom: 3px; }
 #card small { color: var(--muted); }
 #card .cbtn { display: flex; gap: 6px; margin-top: 7px; }
+/* цепочка владельцев: каждое звено нажимается */
+#card .chain { margin-top: 5px; color: var(--muted); line-height: 1.7; }
+#card .lnk { color: var(--accent); cursor: pointer; border-bottom: 1px dotted var(--accent); }
+#card .lnk.cur { color: #fff; background: var(--accent); border-radius: 4px; padding: 1px 5px; border: 0; }
 
 #rlabel { position: fixed; z-index: 4; background: #fff; border: 1px solid #d94f2b; color: #b23a1c; border-radius: 5px;
   padding: 2px 6px; font-size: 12px; pointer-events: none; display: none; transform: translate(-50%, -130%); white-space: nowrap; }
@@ -81,9 +89,26 @@ button.on { background: var(--accent); color: #fff; border-color: var(--accent);
 .touch #st { width: 100%; margin: 0; font-size: 13px; }
 .touch #st:empty { display: none; }
 .touch #stamp { display: none; }
-.touch #tree { top: auto; left: 0; right: 0; width: auto; bottom: 0; height: 58vh; border-right: 0; background: #fff;
-  border-radius: 14px 14px 0 0; box-shadow: 0 -4px 16px rgba(0,0,0,.18); z-index: 8; }
-.touch #tree .head button { padding: 8px 11px; }
+.touch #tree { top: 0; left: 0; bottom: 0; z-index: 8; padding-left: env(safe-area-inset-left); }
+.touch #tgrip { display: block; position: absolute; right: -18px; top: 50%; width: 18px; height: 70px; margin-top: -35px;
+  background: rgba(43,47,54,.5); border-radius: 0 9px 9px 0; touch-action: none; }
+.touch #tgrip::after { content: ''; position: absolute; left: 7px; top: 20px; bottom: 20px; width: 4px;
+  border-left: 1px solid #fff; border-right: 1px solid #fff; }
+/* язычок строки кнопок */
+#bgrip { display: none; }
+.touch #bgrip { display: flex; position: fixed; z-index: 7; width: 56px; height: 26px; align-items: center; justify-content: center;
+  background: rgba(43,47,54,.55); color: #fff; font-size: 15px; border-radius: 10px 10px 0 0; touch-action: none; }
+.touch.land #bgrip { width: 26px; height: 56px; border-radius: 10px 0 0 10px; }
+.touch #bar.closed { display: none; }
+/* лёжа — кнопки столбиком справа, ширину экрана не отнимаем */
+.touch.land #bar { left: auto; top: 0; right: 0; bottom: 0; flex-direction: column; flex-wrap: nowrap; align-items: stretch;
+  overflow-y: auto; padding: 8px calc(8px + env(safe-area-inset-right)) 8px 8px; gap: 6px; box-shadow: -1px 0 6px rgba(0,0,0,.08); }
+.touch.land #bar button { padding: 7px 10px; }
+.touch.land #st { width: 130px; white-space: normal; }
+.touch #tree .head { padding: 6px; gap: 5px; }
+.touch #tree .head .row { gap: 4px; }
+.touch #tree .head button { padding: 5px 8px; font-size: 13px; }
+.touch #tree input[type=search] { padding: 6px 8px; font-size: 14px; }
 .touch #tClose { font-size: 18px; padding: 6px 14px; }
 .touch .tr { padding: 9px 10px 9px 0; font-size: 15px; }
 .touch .tr .cr { width: 26px; font-size: 13px; }

@@ -1,7 +1,7 @@
 // Проигрыватель модели Базиса: один на все проекты. Данные — ./model.json рядом со страницей проекта.
 import * as THREE from 'three';
 
-const APP_DATE = '2026-09-26 (тест телефона)';
+const APP_DATE = '2026-09-27';
 const $ = id => document.getElementById(id);
 // телефон/планшет: палец вместо мыши — свои жесты, компактные кнопки, структура снизу
 const TOUCH = matchMedia('(pointer: coarse)').matches;
@@ -35,7 +35,9 @@ document.body.insertAdjacentHTML('beforeend', `
     </div>
   </div>
   <div class="body" id="tbody"></div>
+  <div id="tgrip" title="Потяните, чтобы сделать шире или уже"></div>
 </div>
+<div id="bgrip">☰</div>
 <div id="card"></div>
 <div id="rlabel"></div><div id="snapmk"></div>
 <div id="stamp"></div>
@@ -53,7 +55,7 @@ document.body.insertAdjacentHTML('beforeend', `
   <button id="bFit" class="x">вписать</button><span class="sep x"></span>
   <button id="m1" class="on x">залито</button><button id="m2" class="x">полупрозрачно</button><button id="m3" class="x">рёбра</button>
   <span class="sep x"></span>
-  <button id="bF" class="on x">фурнитура</button><button id="bB" class="on x">профили</button><button id="bL" class="on x">линии</button><button id="bRuler">рулетка</button><button id="bDims" style="display:none" title="Коротко — спрятать/показать, долго — удалить все">размеры</button>
+  <button id="bF" class="on x">фурнитура</button><button id="bB" class="on x">профили</button><button id="bL" class="on x">линии</button><button id="bRuler">рулетка</button><button id="bUndo" style="display:none" title="Убрать поставленную первую точку (Esc, правая кнопка)">отменить точку</button><button id="bDims" style="display:none" title="Коротко — спрятать/показать, долго — удалить все">размеры</button>
   <button id="bOpen" class="nt">открыть всё</button><button id="bClose" class="nt">закрыть всё</button>
   <button id="bMore" title="Ещё">⋯</button>
   <span id="st"></span>
@@ -280,9 +282,10 @@ function place() {
 function freeRect() {
   const t = $('tree'), bar = $('bar');
   const open = t && !t.classList.contains('hidden');
-  let y1 = innerHeight - (bar ? bar.offsetHeight : 0), x0 = 0;
-  if (open && TOUCH) y1 = Math.min(y1, t.getBoundingClientRect().top);   // на телефоне структура выезжает снизу
-  else if (open) x0 = t.offsetWidth;
+  // на телефоне строка кнопок лежит поверх модели и прячется сама — модель под неё не сдвигаем
+  const y1 = innerHeight - (bar && !TOUCH ? bar.offsetHeight : 0);
+  // структура слева; на телефоне она прозрачная и модель под ней не двигаем (иначе модель уезжает за край)
+  const x0 = open && !TOUCH ? t.offsetWidth : 0;
   return { x0, x1: innerWidth, y0: 0, y1 };
 }
 function setPersp(on) { view.persp = on; $('bPersp').className = on ? 'on' : ''; place(); }
@@ -379,14 +382,24 @@ function downLevel(i, from) {
   return -1;
 }
 function partsUnder(id) { const out = []; parts.forEach((p, i) => { if (p.h.includes(id)) out.push(i); }); return out; }
+// деталь, от которой построена цепочка в карточке: щелчки по звеньям цепочки её не меняют
+let chainPart = -1;
 function selectPart(i, level) {
-  selIdx = i; selLevel = level;
+  selIdx = i; selLevel = level; chainPart = i;
   if (level < 0) { selNode = null; selSet = [i]; }
   else { selNode = parts[i].h[Math.min(level, parts[i].h.length - 1)]; selSet = partsUnder(selNode); }
   paint(); revealInTree();
 }
-function selectNode(id) { selNode = id; selIdx = -1; selSet = partsUnder(id); paint(); renderTree(); }
-function clearSel() { selIdx = -1; selSet = []; selNode = null; paint(); renderTree(); }
+function selectNode(id) { selNode = id; selIdx = -1; chainPart = -1; selSet = partsUnder(id); paint(); renderTree(); }
+// звено цепочки карточки: узел (блок, ящик, модуль…) или сама деталь
+function selectChain(id) {
+  const i = chainPart;
+  if (id === null) { selectPart(i, -1); return; }
+  const k = parts[i].h.indexOf(id);
+  selIdx = i; selLevel = k; selNode = id; selSet = partsUnder(id);
+  paint(); revealInTree();
+}
+function clearSel() { selIdx = -1; selSet = []; selNode = null; chainPart = -1; paint(); renderTree(); }
 function paint() {
   const on = new Set(selSet);
   parts.forEach((p, i) => {
@@ -398,22 +411,36 @@ function paint() {
   const d = $('card');
   if (!selSet.length) { d.style.display = 'none'; need(); return; }
   d.style.display = 'block';
-  let title, sub, chainOf;
+  let title, sub;
   if (selNode === null) {
     const p = parts[selSet[0]];
-    title = p.n; sub = KIND[p.kind] || ''; chainOf = p.h;
+    title = p.n; sub = KIND[p.kind] || '';
   } else {
     title = nodes[selNode].name; sub = selSet.length + ' объектов';
-    const any = parts[selSet[0]]; chainOf = any.h.slice(any.h.indexOf(selNode));
   }
-  const path = chainOf.slice().reverse().map(id => M.names[id]).join(' ▸ ');
-  d.innerHTML = '<b></b><small></small><br><small></small><div class="cbtn"><button>скрыть</button><button>только это</button></div>';
+  d.innerHTML = '<b></b><small></small><div class="chain"></div><div class="cbtn"><button>скрыть</button><button>только это</button></div>';
   d.children[0].textContent = title || '(без имени)';
   d.children[1].textContent = sub || '';
-  d.children[3].textContent = path;
+  // цепочка «изделие ▸ модуль ▸ ящик ▸ фасад»: щелчок по звену выделяет весь этот узел,
+  // «скрыть» / «только это» работают для выделенного звена; цепочка остаётся, можно ходить вверх-вниз
+  const ch = d.children[2];
+  const add = (text, on, cur) => {
+    if (ch.childNodes.length) ch.appendChild(document.createTextNode(' ▸ '));
+    const a = document.createElement('span'); a.className = 'lnk' + (cur ? ' cur' : ''); a.textContent = text || '(без имени)';
+    a.onclick = e => { e.stopPropagation(); on(); };
+    ch.appendChild(a);
+  };
+  if (chainPart >= 0 && selSet.includes(chainPart)) {
+    const p = parts[chainPart];
+    for (const id of p.h.slice().reverse()) add(M.names[id], () => selectChain(id), selNode === id);
+    add(p.n, () => selectChain(null), selNode === null);
+  } else {
+    const any = parts[selSet[0]], chainOf = selNode === null ? any.h : any.h.slice(any.h.indexOf(selNode));
+    for (const id of chainOf.slice().reverse()) add(M.names[id], () => selectNode(id), selNode === id);
+  }
   const bs = d.querySelectorAll('.cbtn button');
   bs[0].onclick = () => hideSel();
-  bs[1].onclick = () => { isolateSel(); clearSel(); };
+  bs[1].onclick = () => { isolateSel(); clearSel(); fitVisible(); };
   need();
 }
 
@@ -491,27 +518,90 @@ function revealInTree() {
 
 // ---------------- линейка ----------------
 let ruler = false, rp = [], rline = null;
-// Точка рулетки — всегда угол (вершина) детали, ближайший к курсору на экране. Углы берутся у ВСЕЙ детали
-// (все её грани, кромки, торцы), а не у одного кусочка; в произвольное место поверхности точка не ставится
-// (замечание 26.09: «у бруска 8 вершин — цеплять за них, не за другие»).
-function snap(hit) {
-  const pr = parts[hit.object.userData.idx];
-  const meshes = pr ? pr.meshes : [hit.object];
-  const cx = snap.cx, cy = snap.cy;
-  let best = null, bd = Infinity; const v = new THREE.Vector3(), s = new THREE.Vector3();
-  for (const m of meshes) {
-    const pos = m.geometry.attributes.position, mw = m.matrixWorld;
-    for (let i = 0; i < pos.count; i++) {
-      v.set(pos.getX(i), pos.getY(i), pos.getZ(i)).applyMatrix4(mw);
-      s.copy(v).project(cam);
-      if (s.z > 1) continue;
-      const d2 = (((s.x + 1) / 2 * innerWidth) - cx) ** 2 + (((1 - s.y) / 2 * innerHeight) - cy) ** 2;
-      if (d2 < bd) { bd = d2; best = v.clone(); }
-    }
+// Точка рулетки — всегда угол (вершина) детали; в произвольное место поверхности точка не ставится.
+// Углы берутся у ВСЕХ деталей рядом с курсором, а не только у той, что под ним (замечание 26.09: у раздвижки
+// под курсором неподвижная часть — к двери было не прицепиться). Угол, закрытый от глаза другой поверхностью,
+// не берётся (цепляло задний угол вместо переднего). Из видимых — ближайший к курсору; если несколько почти
+// в одной точке экрана — тот, что ближе к смотрящему.
+const SNAP_R = [40, 150];          // сначала ищем в круге 40 точек экрана, не нашли — в 150
+let curMode = 1;
+function uniqVerts(m) {            // у каждого угла несколько треугольников — считаем угол один раз
+  if (m.userData.uv) return m.userData.uv;
+  const pos = m.geometry.attributes.position, seen = new Set(), out = [];
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+    const k = Math.round(x * 10) + ',' + Math.round(y * 10) + ',' + Math.round(z * 10);
+    if (seen.has(k)) continue; seen.add(k); out.push(x, y, z);
   }
-  return best || hit.point.clone();
+  return (m.userData.uv = new Float32Array(out));
 }
-function snapAt(cx, cy) { const h = pick(cx, cy); if (!h) return null; snap.cx = cx; snap.cy = cy; return snap(h); }
+function shown(o) { for (; o; o = o.parent) if (!o.visible) return false; return true; }
+const occRay = new THREE.Raycaster();
+// угол виден, если между глазом и ним нет непрозрачной поверхности (в режимах «полупрозрачно» и «рёбра» видно всё)
+function pointVisible(p) {
+  if (curMode !== 1) return true;
+  const dir = cam.getWorldDirection(new THREE.Vector3());
+  let from, dist;
+  if (cam.isPerspectiveCamera) { from = cam.position.clone(); dist = p.distanceTo(from); dir.copy(p).sub(from).normalize(); }
+  else { dist = rad * 30; from = p.clone().addScaledVector(dir, -dist); }
+  occRay.set(from, dir); occRay.near = 0; occRay.far = dist - (1 + dist * 0.0005);
+  for (const h of occRay.intersectObjects(picks, false)) {
+    const mt = h.object.material;
+    if (!mt.visible || mt.transparent) continue;
+    if (shown(h.object)) return false;
+  }
+  return true;
+}
+function snapAt(cx, cy) {
+  root.updateMatrixWorld(true);
+  const persp = cam.isPerspectiveCamera, fwd = cam.getWorldDirection(new THREE.Vector3());
+  const pxPerMm = d => persp ? innerHeight / 2 / (d * Math.tan(THREE.MathUtils.degToRad(cam.fov / 2)))
+                             : innerHeight / (cam.top - cam.bottom);
+  const toPx = s => [(s.x + 1) / 2 * innerWidth, (1 - s.y) / 2 * innerHeight];
+  const c = new THREE.Vector3(), v = new THREE.Vector3(), s = new THREE.Vector3();
+  for (const R of SNAP_R) {
+    // в одной точке экрана (сетка 2×2) держим только ближний к глазу угол: дальние за ним всё равно не видны,
+    // а у мелкой фурнитуры сотни углов — без этого проверка видимости тонула в них
+    const cell = new Map();
+    for (const pr of parts) {
+      if (pr.isL || !pr.g.visible) continue;
+      for (const m of pr.meshes) {
+        if (!shown(m)) continue;
+        // сначала грубо: шар вокруг куска на экране далеко от курсора — пропускаем весь кусок
+        const g = m.geometry; if (!g.boundingSphere) g.computeBoundingSphere();
+        c.copy(g.boundingSphere.center).applyMatrix4(m.matrixWorld);
+        const depth = c.clone().sub(cam.position).dot(fwd), r = g.boundingSphere.radius;
+        if (persp && depth <= r) { /* кусок у самого глаза — проверяем целиком */ }
+        else {
+          const [sx, sy] = toPx(s.copy(c).project(cam));
+          if (Math.hypot(sx - cx, sy - cy) > r * pxPerMm(persp ? depth - r : 1) + R) continue;
+        }
+        const uv = uniqVerts(m), mw = m.matrixWorld;
+        for (let i = 0; i < uv.length; i += 3) {
+          v.set(uv[i], uv[i + 1], uv[i + 2]).applyMatrix4(mw);
+          s.copy(v).project(cam);
+          if (s.z > 1 || s.z < -1) continue;
+          const [px, py] = toPx(s), d = Math.hypot(px - cx, py - cy);
+          if (d > R) continue;
+          const key = Math.round(px / 2) + ',' + Math.round(py / 2), z = v.clone().sub(cam.position).dot(fwd), o = cell.get(key);
+          if (!o || z < o.z) cell.set(key, { p: v.clone(), d, z });
+        }
+      }
+    }
+    const cand = [...cell.values()];
+    if (!cand.length) continue;
+    cand.sort((a, b) => a.d - b.d);
+    let best = null, d0 = 0, tested = 0;
+    for (const k of cand) {
+      if (best && k.d > d0 + 4) break;
+      if (++tested > 250) break;
+      if (!pointVisible(k.p)) continue;
+      if (!best) { best = k; d0 = k.d; } else if (k.z < best.z - 0.5) best = k;
+    }
+    if (best) return best.p;
+  }
+  return null;
+}
 // ---------------- размеры ----------------
 // Две точки вдоль ширины, высоты или глубины → размер с выносными «лапками», его можно оттащить:
 // точки на месте, линия с числом уезжает (вверх-вниз — читается спереди, к себе-от себя — сверху).
@@ -652,7 +742,9 @@ function addPoint(p, mouse) {
 }
 // первая точка и резиновая линия до курсора (на компьютере)
 let pend = null;
+function cancelPoint() { rp = []; showPending(); $('st').textContent = 'рулетка: укажи первую точку'; }
 function showPending(hover) {
+  $('bUndo').style.display = ruler && rp.length ? '' : 'none';
   if (pend) { scene.remove(pend); pend = null; }
   if (!rp.length) { need(); return; }
   const pts = [rp[0], hover || rp[0]];
@@ -663,7 +755,7 @@ function showPending(hover) {
 }
 function clearDims() { while (dims.length) removeDim(dims[0]); rp = []; showPending(); }
 function stopRuler() {
-  ruler = false; rp = []; placing = null; showPending(); hideHover();
+  ruler = false; rp = []; placing = null; showPending(); hideHover(); armBarHide();
   cv.style.cursor = '';
   $('bRuler').className = ''; $('st').textContent = ''; need();
 }
@@ -704,7 +796,7 @@ function pick(cx, cy) {
   return null;
 }
 const cv = rend.domElement;
-let drag = null;
+let drag = null, hoverAt = null;
 cv.addEventListener('contextmenu', e => e.preventDefault());
 
 // ---------------- пальцы ----------------
@@ -746,8 +838,7 @@ function spinLoop() {
 const loupe = $('loupe'), lctx = loupe.getContext('2d');
 let aim = null;
 function aimAt(x, y) {
-  const h = pick(x, y);
-  aim = { x, y, p: h ? snapAt(x, y) : null };
+  aim = { x, y, p: snapAt(x, y) };
   rend.render(scene, cam);                                  // свежий кадр — сразу копируем из него кусок
   // круг 120 точек экрана (внутри 240 — для чёткости), увеличение 2,5
   const cw = rend.domElement.width / innerWidth, Z = 2.5, S = loupe.width, C = 120, k = S / C;
@@ -763,10 +854,17 @@ function aimAt(x, y) {
   lctx.beginPath(); lctx.moveTo(mx - 14, my); lctx.lineTo(mx + 14, my); lctx.moveTo(mx, my - 14); lctx.lineTo(mx, my + 14); lctx.stroke();
   lctx.restore();
   lctx.strokeStyle = '#2b2f36'; lctx.lineWidth = 3; lctx.beginPath(); lctx.arc(S / 2, S / 2, S / 2 - 2, 0, Math.PI * 2); lctx.stroke();
+  // лупа всегда в верхнем левом углу; палец зашёл в этот угол — перескакивает в верхний правый
+  // (над пальцем у верхнего края экрана она пряталась под палец — замечание 27.09)
+  const L = 120, G = 10, zone = L + 2 * G + 40;
+  const right = x < zone && y < zone;
   loupe.style.display = 'block';
-  loupe.style.left = Math.min(innerWidth - 130, Math.max(10, x - 60)) + 'px';
-  loupe.style.top = Math.max(10, y - 150) + 'px';
+  loupe.style.left = (right ? innerWidth - L - G - barSideW() : G) + 'px';
+  loupe.style.top = G + 'px';
 }
+// ширина строки кнопок, когда она стоит справа (телефон лёжа)
+function barSideW() { const b = $('bar'); return TOUCH && isLand() && !b.classList.contains('closed') ? b.offsetWidth : 0; }
+function isLand() { return innerWidth > innerHeight; }
 function aimEnd(place) {
   loupe.style.display = 'none';
   if (place && aim && aim.p) { addPoint(aim.p); }
@@ -818,8 +916,8 @@ function touchUp(e) {
   if (s.moved) { spin = { vx: s.vx, vy: s.vy }; requestAnimationFrame(spinLoop); return; }
   if (s.long || performance.now() - s.t0 > 500) return;
   // короткое касание
+  if (ruler) { addPoint(snapAt(e.clientX, e.clientY)); return; }
   const h = pick(e.clientX, e.clientY);
-  if (ruler) { if (h) { addPoint(snapAt(e.clientX, e.clientY)); } return; }
   if (h) { if (!toggleAt(h.object.userData.idx)) selectPart(h.object.userData.idx, -1); }
   else clearSel();
 }
@@ -838,7 +936,13 @@ cv.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse') hideHo
 cv.addEventListener('pointercancel', e => { if (e.pointerType === 'touch') touchUp(e); });
 cv.addEventListener('pointermove', e => {
   if (e.pointerType === 'touch') { touchMove(e); return; }
-  if (!drag) { if (ruler && e.pointerType === 'mouse') hover(e.clientX, e.clientY); return; }
+  if (!drag) {
+    if (ruler && e.pointerType === 'mouse') {         // поиск угла — не чаще одного раза за кадр
+      const first = !hoverAt; hoverAt = [e.clientX, e.clientY];
+      if (first) requestAnimationFrame(() => { const [x, y] = hoverAt; hoverAt = null; if (ruler) hover(x, y); });
+    }
+    return;
+  }
   const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY;
   if (drag.b === 0) {
     view.yaw -= dx * 0.006;
@@ -855,9 +959,11 @@ cv.addEventListener('pointermove', e => {
 cv.addEventListener('pointerup', e => {
   if (e.pointerType === 'touch') { touchUp(e); return; }
   const d = drag; drag = null;
-  if (!d || d.b !== 0 || Math.abs(e.clientX - d.x0) > 4 || Math.abs(e.clientY - d.y0) > 4) return;
+  if (!d || Math.abs(e.clientX - d.x0) > 4 || Math.abs(e.clientY - d.y0) > 4) return;
+  if (d.b === 2) { if (ruler && rp.length) cancelPoint(); return; }   // правая кнопка без сдвига — убрать первую точку
+  if (d.b !== 0) return;
+  if (ruler) { if (placing) { finishPlacing(); return; } addPoint(snapAt(e.clientX, e.clientY), true); return; }
   const h = pick(e.clientX, e.clientY);
-  if (ruler) { if (placing) { finishPlacing(); return; } if (h) addPoint(snapAt(e.clientX, e.clientY), true); return; }
   if (h) { const i = h.object.userData.idx; selectPart(i, (e.ctrlKey || e.altKey) ? upLevel(i, -1) : -1); }
   else clearSel();
 });
@@ -875,12 +981,17 @@ addEventListener('keydown', e => {
     selectPart(selIdx, e.shiftKey ? downLevel(selIdx, selLevel) : upLevel(selIdx, selLevel));
   }
   if (e.key === 'Delete') hideSel();
-  if (e.key === 'Escape') { if (placing) { placing.dm.off.set(0, 0, 0); buildDim(placing.dm); updRuler(); finishPlacing(); need(); return; } stopRuler(); clearSel(); }
+  if (e.key === 'Escape') {
+    if (placing) { placing.dm.off.set(0, 0, 0); buildDim(placing.dm); updRuler(); finishPlacing(); need(); return; }
+    if (ruler && rp.length) { cancelPoint(); return; }
+    stopRuler(); clearSel();
+  }
 });
-addEventListener('resize', () => { rend.setSize(innerWidth, innerHeight); place(); });
+addEventListener('resize', () => { rend.setSize(innerWidth, innerHeight); layout(); });
 
 // ---------------- кнопки ----------------
 function mode(m) {
+  curMode = m;
   for (const p of parts) for (const x of p.meshes) {
     const mt = x.material, b = mt.userData.base || mt;   // стекло остаётся прозрачным и в обычном режиме
     mt.visible = m !== 3;
@@ -894,7 +1005,8 @@ function mode(m) {
 function wire() {
   $('bTree').onclick = () => { $('tree').classList.toggle('hidden'); $('bTree').className = $('tree').classList.contains('hidden') ? '' : 'on'; renderTree(); place(); };
   $('tClose').onclick = () => { $('tree').classList.add('hidden'); $('bTree').className = ''; place(); };
-  $('bMore').onclick = () => { $('bar').classList.toggle('more'); $('bMore').className = $('bar').classList.contains('more') ? 'on' : ''; place(); };
+  $('bMore').onclick = () => setBar(barState() === 2 ? 1 : 2);
+  $('bUndo').onclick = cancelPoint;
   // подсказка по жестам — при первом открытии на телефоне
   const hint = $('hint');
   let seen = false; try { seen = localStorage.getItem('viewerHint') === '1'; } catch (e) {}
@@ -926,6 +1038,70 @@ function wire() {
   $('bL').onclick = () => { showL = !showL; $('bL').className = showL ? 'on' : ''; applyVis(); renderTree(); };
 }
 
+// ---------------- телефон: шторки ----------------
+// Строка кнопок: стоя — внизу, лёжа — столбиком справа. Три положения: спрятана (виден только язычок ☰),
+// основные кнопки, все кнопки. Язычок: коснуться — спрятать/показать, потянуть к середине экрана — больше
+// кнопок, к краю — меньше. Сама прячется через 6 с без касаний (в рулетке — нет: там подсказки внизу).
+// Структура — слева, текстом на прозрачном фоне; ширину тянуть за полоску на её правом краю.
+let barHideT = null;
+function barState() { const b = $('bar'); return b.classList.contains('closed') ? 0 : b.classList.contains('more') ? 2 : 1; }
+function setBar(n) {
+  const b = $('bar');
+  b.classList.toggle('closed', n === 0); b.classList.toggle('more', n === 2);
+  $('bMore').className = n === 2 ? 'on' : '';
+  layout(); armBarHide();
+}
+function armBarHide() {
+  clearTimeout(barHideT);
+  if (!TOUCH) return;
+  barHideT = setTimeout(() => { if (!ruler && barState() !== 0) setBar(0); }, 6000);
+}
+function layout() {
+  if (!TOUCH) { place(); return; }
+  const b = $('bar'), g = $('bgrip'), t = $('tree'), land = isLand(), shut = barState() === 0;
+  document.documentElement.classList.toggle('land', land);
+  const r = b.getBoundingClientRect();
+  if (land) {
+    const w = shut ? 0 : r.width;
+    g.style.left = ''; g.style.bottom = ''; g.style.right = w + 'px'; g.style.top = (innerHeight / 2 - 28) + 'px';
+    t.style.bottom = '0px';
+  } else {
+    const h = shut ? 0 : r.height;
+    g.style.top = ''; g.style.right = ''; g.style.left = (innerWidth / 2 - 28) + 'px'; g.style.bottom = h + 'px';
+    t.style.bottom = h + 'px';
+  }
+  let tw = 0; try { tw = +localStorage.getItem('viewerTreeW' + (land ? 'L' : 'P')) || 0; } catch (e) {}
+  t.style.width = Math.round((tw || (land ? 0.4 : 0.62)) * innerWidth) + 'px';
+  place();
+}
+function wireTouch() {
+  if (!TOUCH) return;
+  const g = $('bgrip');
+  let st = null;
+  g.addEventListener('pointerdown', e => { e.preventDefault(); try { g.setPointerCapture(e.pointerId); } catch (er) {} st = { x: e.clientX, y: e.clientY }; });
+  g.addEventListener('pointerup', e => {
+    if (!st) return;
+    const d = isLand() ? st.x - e.clientX : st.y - e.clientY; st = null;   // к середине экрана — плюс
+    const n = barState();
+    if (Math.abs(d) < 12) setBar(n === 0 ? 1 : 0);
+    else setBar(Math.max(0, Math.min(2, n + (d > 0 ? 1 : -1) * (Math.abs(d) > 110 ? 2 : 1))));
+  });
+  g.addEventListener('pointercancel', () => { st = null; });
+  $('bar').addEventListener('pointerdown', armBarHide);
+  // ширина структуры
+  const tg = $('tgrip'), t = $('tree');
+  let tw = null;
+  tg.addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); try { tg.setPointerCapture(e.pointerId); } catch (er) {} tw = true; });
+  tg.addEventListener('pointermove', e => {
+    if (!tw) return;
+    const w = Math.max(0.3, Math.min(1, e.clientX / innerWidth));
+    t.style.width = Math.round(w * innerWidth) + 'px'; tw = w;
+  });
+  const end = () => { if (tw && tw !== true) { try { localStorage.setItem('viewerTreeW' + (isLand() ? 'L' : 'P'), String(tw)); } catch (e) {} place(); } tw = null; };
+  tg.addEventListener('pointerup', end); tg.addEventListener('pointercancel', end);
+  armBarHide();
+}
+
 // ---------------- запуск ----------------
 function loop() {
   requestAnimationFrame(loop);
@@ -936,8 +1112,8 @@ function loop() {
 }
 fetch('./model.json').then(r => { if (!r.ok) throw new Error('файл модели не найден (' + r.status + ')'); return r.json(); })
   .then(data => {
-    M = data; build(); initLevels(); wire(); applyVis(); place(); fitVisible();
-    window.__viewer = { parts, animNode, M, dims, addDim, dragDim, THREE, get cam() { return cam; }, get placing() { return placing; }, get rp() { return rp; } };   // для проверки из консоли
+    M = data; build(); initLevels(); wire(); wireTouch(); applyVis(); layout(); fitVisible();
+    window.__viewer = { parts, animNode, M, dims, addDim, dragDim, THREE, snapAt, pointVisible, picks, get cam() { return cam; }, get placing() { return placing; }, get rp() { return rp; } };   // для проверки из консоли
     $('load').remove(); loop();
   })
   .catch(err => { $('load').textContent = 'Не удалось открыть модель: ' + err.message; });
