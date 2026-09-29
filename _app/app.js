@@ -52,6 +52,7 @@ const ICON = {
   faces: sv('<path d="M5 4v16M19 4v16M8 12h8M10.5 9.5L8 12l2.5 2.5M13.5 9.5L16 12l-2.5 2.5"/>'),
   edges: sv('<path d="M4 15L15 4M9 20L20 9"/><path d="M8.5 11.5l4 4" stroke-dasharray="1.5 1.5"/>'),
   trash: sv('<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/>'),
+  gab: sv('<path d="M4 8l8-4 8 4v8l-8 4-8-4zM4 8l8 4 8-4M12 12v8"/>'),
   easy: sv('<rect x="3" y="3" width="18" height="18" rx="1.5"/><path d="M7 12h10M7 12l2-2M7 12l2 2M17 12l-2-2M17 12l-2 2"/>'),
   points: sv('<circle cx="5" cy="12" r="2.2" fill="currentColor"/><circle cx="19" cy="12" r="2.2" fill="currentColor"/><path d="M8 12h8" stroke-dasharray="2 2"/>'),
 };
@@ -642,7 +643,7 @@ function paint() {
     }
   });
   const d = $('card');
-  if (!selSet.length) { d.style.display = 'none'; need(); return; }
+  if (!selSet.length) { d.style.display = 'none'; need(); gabShow(); return; }
   d.style.display = 'block';
   let title, sub;
   const num = d => d ? ' · № ' + d : '';                 // обозначение из Базиса — номер как на этикетке
@@ -679,8 +680,9 @@ function paint() {
   const bs = d.querySelectorAll('.cbtn button');
   bs[0].onclick = () => hideSel();
   bs[1].onclick = () => { isolateSel(); clearSel(); fitVisible(); };
-  need();
+  need(); gabShow();
 }
+// любая смена выделения (щелчок, Tab, Ctrl, дерево, цепочка карточки) проходит через paint → габарит следует за ней
 
 // ---------------- дерево ----------------
 const tbody = $('tbody');
@@ -931,6 +933,94 @@ function showPartDims(i) {
     if (best && best[0].distanceTo(best[1]) > 0.5) partDims.push(addDim(best[0], best[1]));
   }
   $('st').textContent = 'деталь ' + fmt(s[ks[0]]) + ' × ' + fmt(s[ks[1]]) + ' мм';
+}
+// ---------------- габарит выделенного ----------------
+// Способ рулетки «габарит» (Алексей 29.09): щелчок выделяет, Tab/Shift+Tab — выше/ниже, Ctrl — добавить шкаф;
+// на экране ОДИН габарит (ширина, висота, глибина) — пересчитывается при каждой смене выделения.
+// Поворот — по габаритной рамке ближайшего фрагмента (выгрузка: M.nfax), числа — по самим видимым деталям в том
+// положении, что на экране. Нет рамки или шкафы набора стоят по-разному — по осям комнаты.
+const gabDims = [];
+function gabShow() {
+  // рулетка выключена, другой способ или выделение снято — прежний габарит остаётся как есть (стереть — корзина)
+  if (!ruler || rmode !== 'gab' || !selSet.length) return;
+  while (gabDims.length) { const dm = gabDims.pop(); if (dims.includes(dm)) removeDim(dm); }
+  const n0 = dims.length;
+  selGab();
+  for (let k = n0; k < dims.length; k++) gabDims.push(dims[k]);
+}
+function frameNodeFor(i, from) {
+  const h = parts[i].h;
+  for (let k = Math.max(0, from); k < h.length; k++) if (M.nfax && M.nfax[h[k]]) return h[k];
+  return -1;
+}
+function frameAxesNow(i, fid) {             // оси рамки с учётом открытых дверей/ящиков над ней (и её самой)
+  const h = parts[i].h, k = h.indexOf(fid), m = new THREE.Matrix4();
+  for (const id of parts[i].chainA) if (h.indexOf(id) >= k) m.multiply(screwMatrix(animNode[id]));
+  const q = new THREE.Quaternion(); m.decompose(new THREE.Vector3(), q, new THREE.Vector3());
+  return M.nfax[fid].map(a => new THREE.Vector3(a[0], a[1], a[2]).normalize().applyQuaternion(q));
+}
+function selGab() {
+  if (!selSet.length) return false;
+  const ref = [];
+  if (selMany.length) for (const n of selMany) { const i = partsUnder(n)[0]; if (i !== undefined) ref.push([i, parts[i].h.indexOf(n)]); }
+  else if (selNode !== null) ref.push([selSet[0], parts[selSet[0]].h.indexOf(selNode)]);
+  else ref.push([selSet[0], 0]);
+  let ax = null;
+  for (const [i, from] of ref) {
+    const f = frameNodeFor(i, from); if (f < 0) { ax = null; break; }
+    const a = frameAxesNow(i, f);
+    if (!ax) ax = a; else if (!a.every((v, q) => Math.abs(v.dot(ax[q])) > 0.999)) { ax = null; break; }
+  }
+  if (ax) {                                  // выровнять в строгий прямой угол
+    ax[1].addScaledVector(ax[0], -ax[1].dot(ax[0])).normalize();
+    ax[2] = new THREE.Vector3().crossVectors(ax[0], ax[1]).normalize();
+  } else ax = [new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 1)];
+  const mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity], v = new THREE.Vector3();
+  for (const i of selSet) {
+    const p = parts[i]; if (!effVisible(p)) continue;
+    for (const m of p.meshes) {
+      m.updateWorldMatrix(true, false);
+      const pos = m.geometry.attributes.position;
+      for (let t = 0; t < pos.count; t++) {
+        v.fromBufferAttribute(pos, t).applyMatrix4(m.matrixWorld);
+        for (let q = 0; q < 3; q++) { const d = v.dot(ax[q]); if (d < mn[q]) mn[q] = d; if (d > mx[q]) mx[q] = d; }
+      }
+    }
+  }
+  if (!isFinite(mn[0])) return false;
+  const P = c => ax[0].clone().multiplyScalar(c[0]).addScaledVector(ax[1], c[1]).addScaledVector(ax[2], c[2]);
+  const up = ax.map(a => Math.abs(a.y)), hi = up.indexOf(Math.max(...up)), rest = [0, 1, 2].filter(q => q !== hi);
+  const label = []; label[hi] = 'висота'; label[rest[0]] = 'ширина'; label[rest[1]] = 'глибина';
+  // Разводка как на чертеже (замечание 29.09: размеры сквозь шкаф, надписи друг на друге): ширина — по нижнему
+  // ребру ближней к смотрящему стороны, высота — по вертикальному ребру ближнего бока, глибина — по нижнему ребру
+  // этого бока; каждый отнесён наружу от габарита, надписи на трёх разных рёбрах.
+  const W = rest[0], D = rest[1], H = hi;
+  const eye = cam.position, fwd = cam.getWorldDirection(new THREE.Vector3());
+  const near = (k) => {                        // какой из двух краёв по оси k ближе к смотрящему
+    const c = [0, 1, 2].map(q => (mn[q] + mx[q]) / 2);
+    const a = c.slice(), b = c.slice(); a[k] = mn[k]; b[k] = mx[k];
+    const za = cam.isPerspectiveCamera ? P(a).distanceTo(eye) : P(a).dot(fwd), zb = cam.isPerspectiveCamera ? P(b).distanceTo(eye) : P(b).dot(fwd);
+    return za <= zb ? mn[k] : mx[k];
+  };
+  const low = ax[H].y >= 0 ? mn[H] : mx[H];     // низ габарита
+  const out = (k, at) => ax[k].clone().multiplyScalar(at === mn[k] ? -1 : 1);   // наружу от края at по оси k
+  const gap = Math.max(40, Math.min(150, 0.05 * Math.max(mx[W] - mn[W], mx[H] - mn[H], mx[D] - mn[D])));
+  const dF = near(D), wS = near(W);
+  const put = (k, fix, off) => {
+    if (mx[k] - mn[k] < 0.5) return;
+    const c1 = [0, 0, 0], c2 = [0, 0, 0]; c1[k] = mn[k]; c2[k] = mx[k];
+    for (const [q, v] of fix) { c1[q] = c2[q] = v; }
+    let a = P(c1), b = P(c2);
+    const dm = addDim(a, b, { label: label[k] });
+    if (dm.axis) { dm.off.copy(off); buildDim(dm); }         // по оси комнаты — выносные линии с отступом
+    else { dm.a.add(off); dm.b.add(off); buildDim(dm); }     // косой (развёрнутое изделие) — сам отодвинут
+  };
+  put(W, [[H, low], [D, dF]], out(H, low).multiplyScalar(gap));
+  put(H, [[W, wS], [D, dF]], out(W, wS).multiplyScalar(gap));
+  put(D, [[H, low], [W, wS]], out(H, low).multiplyScalar(gap).addScaledVector(out(W, wS), gap));
+  updRuler(); need();
+  $('st').textContent = 'габарит: ширина ' + fmt(mx[rest[0]] - mn[rest[0]]) + ', висота ' + fmt(mx[hi] - mn[hi]) + ', глибина ' + fmt(mx[rest[1]] - mn[rest[1]]) + ' мм';
+  return true;
 }
 // ---------------- рулетка по рёбрам ----------------
 // Способ «рёбра» (замечание 27.09): в строгом виде грань видна линией — коснулся ребра, оно подсвечено;
@@ -1286,15 +1376,19 @@ function easyPick(x, y) {
   easyStatic(h);
 }
 
-const RHINT = { easy: 'легкі розміри: торкніться полиці, стінки, дверцят або шухляди', face: 'рулетка: коснитесь грани детали', edge: 'рулетка: коснитесь ребра детали', point: 'рулетка: укажи первую точку' };
+const RHINT = { easy: 'легкі розміри: торкніться полиці, стінки, дверцят або шухляди', face: 'рулетка: коснитесь грани детали', edge: 'рулетка: коснитесь ребра детали', point: 'рулетка: укажи первую точку',
+  gab: 'габарит: виділіть деталь; Tab — вище, Shift+Tab — нижче, Ctrl — додати шафу' };
 function setRMode(m) {
   rmode = m; try { localStorage.setItem('viewerRMode2', m); } catch (e) {}
   rp = []; clearFace1(); faceHoverEnd(); clearEdge1(); edgeHoverEnd(); hideHover(); dropEasy();
   $('st').textContent = RHINT[m];
   syncTools();
+  if (ruler) cv.style.cursor = m === 'gab' ? '' : 'none';
+  if (m === 'gab') gabShow();
 }
 // выбор под пальцем/курсором по текущему способу
 function rulerPick(x, y, mouse) {
+  if (rmode === 'gab') { const h = pick(x, y); if (h) selectPart(h.object.userData.idx, -1); else clearSel(); return; }
   if (rmode === 'easy') { easyPick(x, y); return; }
   if (rmode === 'face') { faceHoverEnd(); faceClick(faceAt(x, y), mouse); }
   else if (rmode === 'edge') { edgeHoverEnd(); edgeClick(edgeAt(x, y), mouse); }
@@ -1364,7 +1458,7 @@ function closeAxisMenu() { const m = $('axmenu'); if (m) m.remove(); }
 let dimsShown = true;
 function syncDimBtn() {
   const b = $('bDims'); if (!b) return;
-  b.style.display = dims.length ? '' : 'none';
+  b.style.display = 'none';          // кнопка «размеры» внизу убрана (29.09): прячет/показывает рулетка, стереть — значок справа вверху
   b.classList.toggle('on', dimsShown);
   syncTools();                                             // значок «стереть все размеры»
 }
@@ -1486,11 +1580,13 @@ function stopRuler() {
   ruler = false; rp = []; placing = null; dropEasy(); clearFace1(); faceHoverEnd(); clearEdge1(); edgeHoverEnd(); showPending(); hideHover(); syncTools();
   cv.style.cursor = '';
   setOn('bRuler', false); $('st').textContent = ''; need();
+  if (dims.length) setDimsShown(false);     // рулетку погасили — размеры спрятаны до следующего включения (29.09)
 }
 // компьютер: крестик всегда на месте курсора; у угла детали прыгает на угол ещё до щелчка.
 // После второго щелчка размер «висит на мыши»: ведёшь — лапки отъезжают, третий щелчок фиксирует.
 let placing = null;
 function hover(cx, cy) {
+  if (rmode === 'gab' && !placing) { hideHover(); cv.style.cursor = ''; return; }   // габарит — обычный курсор, щелчок выделяет
   const mk = $('snapmk');
   mk.style.display = 'block';
   if (placing) {
@@ -1626,7 +1722,7 @@ function touchDown(e) {
     // С рулеткой (замечание 27.09: «выбрал грань — не могу развернуть»): палец повёл — модель вращается,
     // короткое касание — выбор грани/ребра/точки, подержал на месте — лупа для точного прицела.
     if (ruler) {
-      if (rmode === 'easy') return;                        // лёгким размерам лупа не нужна — касание и есть замер
+      if (rmode === 'easy' || rmode === 'gab') return;     // лёгким размерам и габариту лупа не нужна — касание и есть выбор
       pressTimer = setTimeout(() => {
         if (!tState || tState.moved || touches.size !== 1) return;
         tState = { aim: true }; aimAt(e.clientX, e.clientY);
@@ -1717,7 +1813,7 @@ cv.addEventListener('pointerup', e => {
   if (!d || Math.abs(e.clientX - d.x0) > 4 || Math.abs(e.clientY - d.y0) > 4) return;
   if (d.b === 2) { if (ruler && (rp.length || face1 || edge1)) cancelPoint(); return; }   // правая кнопка без сдвига — убрать первую точку
   if (d.b !== 0) return;
-  if (ruler) {
+  if (ruler && rmode !== 'gab') {                           // «габарит» — щелчок выделяет, как без рулетки (с Ctrl)
     if (placing) { finishPlacing(); return; }
     rulerPick(e.clientX, e.clientY, true); return;
   }
@@ -1904,7 +2000,13 @@ function wire() {
   $('q').oninput = renderTree;
   $('tOnly').onclick = isolateSel; $('tHide').onclick = hideSel; $('tAll').onclick = showAll;
   $('tFit').onclick = () => { if (selSet.length) fitBox(visibleBox(true)); };
-  $('bRuler').onclick = () => { if (ruler) { stopRuler(); return; } ruler = true; rp = []; setOn('bRuler', true); cv.style.cursor = 'none'; $('st').textContent = RHINT[rmode]; syncTools(); };
+  // Рулетка — только вкл/выкл (29.09): выключил — размеры спрятаны, включил — вернулись; габарит — её способ справа вверху
+  $('bRuler').onclick = () => {
+    if (ruler) { stopRuler(); return; }
+    ruler = true; rp = []; setOn('bRuler', true); cv.style.cursor = 'none'; $('st').textContent = RHINT[rmode]; syncTools();
+    if (dims.length) setDimsShown(true);
+    if (rmode === 'gab') gabShow();
+  };
   { let t = null, long = false; const b = $('bDims');
     b.addEventListener('pointerdown', () => { long = false; t = setTimeout(() => { long = true; clearDims(); }, 650); });
     b.addEventListener('pointerup', () => { clearTimeout(t); if (!long) setDimsShown(!dimsShown); });
@@ -1950,7 +2052,8 @@ function syncTools() {
     chip(ICON.faces, 'міряти від грані до грані', () => setRMode('face'), 'mini' + (rmode === 'face' ? ' on' : ''));
     chip(ICON.edges, 'міряти від ребра до ребра', () => setRMode('edge'), 'mini' + (rmode === 'edge' ? ' on' : ''));
     chip(ICON.points, 'міряти від кута до кута', () => setRMode('point'), 'mini' + (rmode === 'point' ? ' on' : ''));
-    if (dims.length) chip(ICON.trash, 'стерти всі розміри', () => { clearDims(); partDims.length = 0; easyDims.length = 0; }, 'mini');
+    chip(ICON.gab, 'габарит виділеного: ширина, висота, глибина', () => setRMode('gab'), 'mini' + (rmode === 'gab' ? ' on' : ''));
+    if (dims.length) chip(ICON.trash, 'стерти всі розміри', () => { clearDims(); partDims.length = 0; easyDims.length = 0; gabDims.length = 0; }, 'mini');
   }
   if ($('bShowAll').style.display !== 'none') chip(ICON.eye, 'показати все приховане', showAll);
   placeTools();
@@ -1999,7 +2102,7 @@ function loop() {
   : fetch('./model.json?v=' + Date.now(), { cache: 'no-store' }).then(r => { if (!r.ok) throw new Error('файл модели не найден (' + r.status + ')'); return r.json(); }))
   .then(data => {
     M = data; build(); wire(); wireLayout(); applyVis(); layout(); fitVisible();
-    window.__viewer = { parts, animNode, M, dims, addDim, drawerDims, easyPick, easyCell, tubeDims, openTarget, pick, blockersOf, poseAll, toggleAt, scopeIds, boxOf, isTube, toWorld, clearDims, root, partsUnder, dragDim, THREE, snapAt, pointVisible, picks, nodes, NCNT, REP, rootKids, selectPart, toggleMany, hideSel, showAll, upLevel, downLevel, asmOf, effVisible, get selSet() { return selSet; }, get selMany() { return selMany; }, get selNode() { return selNode; }, get cam() { return cam; }, get placing() { return placing; }, get rp() { return rp; } };   // для проверки из консоли
+    window.__viewer = { parts, animNode, M, dims, addDim, drawerDims, easyPick, easyCell, tubeDims, openTarget, pick, blockersOf, poseAll, toggleAt, scopeIds, boxOf, isTube, toWorld, clearDims, root, partsUnder, dragDim, THREE, snapAt, pointVisible, picks, nodes, NCNT, REP, rootKids, selectPart, toggleMany, hideSel, showAll, upLevel, downLevel, asmOf, effVisible, selGab, gabShow, gabDims, setRMode, frameNodeFor, get ruler() { return ruler; }, get selSet() { return selSet; }, get selMany() { return selMany; }, get selNode() { return selNode; }, get cam() { return cam; }, get placing() { return placing; }, get rp() { return rp; } };   // для проверки из консоли
     $('load').remove(); loop();
   })
   .catch(err => { $('load').textContent = 'Не удалось открыть модель: ' + err.message; });
