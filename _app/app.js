@@ -272,6 +272,14 @@ function poseAll() {
 const anims = [];   // {ids, from[], to, st}
 function startAnim(ids, to) {
   if (!ids.length) return;
+  // новое движение забирает эти узлы у прежних (иначе два движения тянут ящик в разные стороны)
+  const S = new Set(ids);
+  for (let k = anims.length - 1; k >= 0; k--) {
+    const a = anims[k], keep = a.ids.map((id, j) => S.has(id) ? -1 : j).filter(j => j >= 0);
+    if (keep.length === a.ids.length) continue;
+    if (!keep.length) { anims.splice(k, 1); continue; }
+    a.ids = keep.map(j => a.ids[j]); a.from = keep.map(j => a.from[j]);
+  }
   anims.push({ ids, from: ids.map(id => animNode[id].t), to, st: performance.now() });
   need();
 }
@@ -290,7 +298,7 @@ function tick() {
 // Если подвижное звено сидит в небольшой «системе» (ящик + его направляющие), открывается вся система:
 // направляющая у Базиса лежит рядом с ящиком, а не внутри него. Система = владелец звена, если в нём
 // деталей не больше чем в 2,5 раза больше, чем в самом звене (иначе это модуль — открываем только звено).
-function toggleAt(i) {
+function toggleAt(i, to) {
   const ch = parts[i].chainA;
   if (!ch.length) return false;
   const top = ch[0], ids = new Set(), h = parts[i].h;
@@ -307,8 +315,66 @@ function toggleAt(i) {
     const k = scope === top ? pr.chainA.indexOf(top) : 0;
     for (let q = Math.max(0, k); q < pr.chainA.length; q++) ids.add(pr.chainA[q]);
   }
-  startAnim([...ids], animNode[top].t > 0.5 ? 0 : 1);
+  const dir = to !== undefined ? to : (openTarget(top) ? 0 : 1);
+  lastOpenDelay = 0;
+  if (dir === 1) {
+    // открываемое заденет уже открытое (две двери на одной стойке)? — сначала закрыть мешающее, потом открыть (29.09)
+    const blk = blockersOf(ids);
+    if (blk.length) {
+      startAnim(blk, 0);
+      const list = [...ids];
+      for (const id of list) pendingOpen.add(id);
+      setTimeout(() => { for (const id of list) pendingOpen.delete(id); startAnim(list, 1); }, 900);
+      lastOpenDelay = 900;
+      return true;
+    }
+  }
+  startAnim([...ids], dir);
   return true;
+}
+let lastOpenDelay = 0;
+const pendingOpen = new Set();
+// положение детали при заданных долях открывания её звеньев (tOf(id) → 0…1)
+function poseOf(pr, tOf) {
+  const m = new THREE.Matrix4();
+  for (const id of pr.chainA) m.multiply(screwMatrix(Object.assign({}, animNode[id], { t: tOf(id) })));
+  return m;
+}
+function panelBox(pr, m) {
+  const b = new THREE.Box3();
+  for (const me of pr.meshes) { const g = me.geometry; if (!g.boundingBox) g.computeBoundingBox(); b.union(g.boundingBox.clone().applyMatrix4(m)); }
+  return b;
+}
+// какие открытые звенья окажутся на пути открываемых ids: путь проходим шагом 1/12, детали — панели
+function blockersOf(ids) {
+  const S = new Set(ids), mine = [], others = new Map();
+  for (const pr of moving) {
+    if (pr.kind !== 'p') continue;
+    if (pr.chainA.some(id => S.has(id))) { mine.push(pr); continue; }
+    const t0 = pr.chainA[0];
+    // открытое или ещё не доехавшее до закрытия (лёгкие размеры закрывают прежнюю дверь в тот же миг)
+    if (openTarget(t0) || animNode[t0].t > 0.05) { if (!others.has(t0)) others.set(t0, []); others.get(t0).push(panelBox(pr, pr.g.matrix).expandByScalar(-1)); }
+  }
+  if (!others.size || !mine.length) return [];
+  const hit = new Set();
+  for (let s = 1; s <= 12; s++) {
+    const f = s / 12;
+    for (const pr of mine) {
+      const b = panelBox(pr, poseOf(pr, id => S.has(id) ? f : animNode[id].t));
+      for (const [t0, boxes] of others) if (!hit.has(t0) && boxes.some(q => q.intersectsBox(b))) hit.add(t0);
+    }
+  }
+  // закрываем мешающее звено целиком, со всем, что внутри его системы
+  const out = new Set();
+  for (const t0 of hit) for (const pr of moving) if (pr.chainA[0] === t0) for (const id of pr.chainA) out.add(id);
+  return [...out];
+}
+// открыт ли узел — по тому, КУДА он сейчас едет, а не по тому, где он в эту долю секунды
+// (щелчок посреди выезда считал ящик закрытым: соседний не закрывался, размеры ложились на закрытый, 29.09)
+function openTarget(id) {
+  if (pendingOpen.has(id)) return true;
+  for (let k = anims.length - 1; k >= 0; k--) { const a = anims[k], j = a.ids.indexOf(id); if (j >= 0) return a.to === 1; }
+  return animNode[id].t > 0.5;
 }
 const allAnimIds = () => Object.keys(animNode);
 
@@ -1113,23 +1179,33 @@ function drawerDims(i) {
   if (isFinite(yTop)) out.push([P(wm, ub, y0), P(wm, ub, yTop - 6), 'корисна висота', String(Math.round(yTop - y0 - 6))]);
   return { g: parts[bot.j].g, out };
 }
+let easyTimer = null;
+// закрыть то, что открыли лёгкие размеры (кроме узла keep), и отменить отложенные размеры
+function closeEasyOpen(keep) {
+  clearTimeout(easyTimer);
+  if (easyOpenIdx >= 0 && parts[easyOpenIdx].chainA.length) {
+    const t = parts[easyOpenIdx].chainA[0];
+    if (t !== keep && openTarget(t)) toggleAt(easyOpenIdx, 0);
+  }
+  easyOpenIdx = -1;
+}
 function easyMoving(i, cx, cy) {
   const top = parts[i].chainA[0], nd = animNode[top];
-  if (nd.t > 0.5) { toggleAt(i); easyOpenIdx = -1; return; }                // повторное касание — закрыть
-  if (easyOpenIdx >= 0 && parts[easyOpenIdx].chainA.length && animNode[parts[easyOpenIdx].chainA[0]].t > 0.5) toggleAt(easyOpenIdx);
+  if (openTarget(top)) { closeEasyOpen(top); toggleAt(i, 0); return; }      // повторное касание — закрыть
+  closeEasyOpen(top);
   const isDrawer = Math.abs(nd.ang) < 1e-3 && Math.abs(nd.d) > 0;
   const dd = isDrawer ? drawerDims(i) : null;
-  toggleAt(i); easyOpenIdx = i;
+  toggleAt(i, 1); easyOpenIdx = i;
   const mark = easyOpenIdx;
-  setTimeout(() => {                                                        // после остановки
-    if (easyOpenIdx !== mark || !ruler || rmode !== 'easy') return;
+  easyTimer = setTimeout(() => {                                            // после остановки
+    if (easyOpenIdx !== mark || !openTarget(top) || !ruler || rmode !== 'easy') return;
     root.updateMatrixWorld(true);
     if (dd) { for (const [a, b, l, t] of dd.out) easyDim(a.applyMatrix4(dd.g.matrixWorld), b.applyMatrix4(dd.g.matrixWorld), l, t); return; }
     // дверь (в том числе раздвижная — она тоже едет прямо, но дна и боковин у неё нет): ячейка за ней
     const h = pick(cx, cy); if (!h || !h.face) return;
     const pr = parts[h.object.userData.idx]; if (pr.chainA.length) return;
     easyStatic(h);
-  }, 980);
+  }, 980 + lastOpenDelay);
 }
 function easyStatic(h) {
   const i = h.object.userData.idx, pr = parts[i];
@@ -1143,12 +1219,11 @@ function easyStatic(h) {
 function easyPick(x, y) {
   dropEasy();
   const h = pick(x, y);
-  if (!h || !h.face) { if (easyOpenIdx >= 0 && parts[easyOpenIdx].chainA.length && animNode[parts[easyOpenIdx].chainA[0]].t > 0.5) toggleAt(easyOpenIdx); easyOpenIdx = -1; return; }
-  const i = h.object.userData.idx; if (parts[i].isL) return;
+  if (!h || !h.face) { closeEasyOpen(); return; }
+  const i = h.object.userData.idx; if (parts[i].isL) { closeEasyOpen(); return; }
   if (parts[i].chainA.length) { easyMoving(i, x, y); return; }
   // щелчок мимо открытого ящика/двери — закрыть его (замечание 29.09), размеры считаем уже по тому, что щёлкнули
-  if (easyOpenIdx >= 0 && parts[easyOpenIdx].chainA.length && animNode[parts[easyOpenIdx].chainA[0]].t > 0.5) toggleAt(easyOpenIdx);
-  easyOpenIdx = -1;
+  closeEasyOpen();
   easyStatic(h);
 }
 
@@ -1861,7 +1936,7 @@ function loop() {
   : fetch('./model.json?v=' + Date.now(), { cache: 'no-store' }).then(r => { if (!r.ok) throw new Error('файл модели не найден (' + r.status + ')'); return r.json(); }))
   .then(data => {
     M = data; build(); initLevels(); wire(); wireLayout(); applyVis(); layout(); fitVisible();
-    window.__viewer = { parts, animNode, M, dims, addDim, drawerDims, easyPick, easyCell, tubeDims, boxOf, isTube, toWorld, clearDims, root, partsUnder, dragDim, THREE, snapAt, pointVisible, picks, get cam() { return cam; }, get placing() { return placing; }, get rp() { return rp; } };   // для проверки из консоли
+    window.__viewer = { parts, animNode, M, dims, addDim, drawerDims, easyPick, easyCell, tubeDims, openTarget, pick, blockersOf, poseAll, boxOf, isTube, toWorld, clearDims, root, partsUnder, dragDim, THREE, snapAt, pointVisible, picks, get cam() { return cam; }, get placing() { return placing; }, get rp() { return rp; } };   // для проверки из консоли
     $('load').remove(); loop();
   })
   .catch(err => { $('load').textContent = 'Не удалось открыть модель: ' + err.message; });
