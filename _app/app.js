@@ -14,8 +14,11 @@ if (TOUCH) document.documentElement.classList.add('touch');
   for (const ev of ['gesturestart', 'gesturechange', 'gestureend']) document.addEventListener(ev, e => e.preventDefault(), { passive: false });
   // «добавить на главный экран»: у каждого проекта свой manifest.json (пишет выгрузка), иконка общая
   const add = (tag, attrs) => { const el = document.createElement(tag); for (const k in attrs) el.setAttribute(k, attrs[k]); document.head.appendChild(el); };
-  if (!document.querySelector('link[rel=manifest]')) add('link', { rel: 'manifest', href: 'manifest.json' });
-  add('link', { rel: 'apple-touch-icon', href: '../_app/icon-192.png' });
+  // один файл-страница (window.__MODEL — модель внутри файла): соседних файлов нет, значок и manifest не нужны
+  if (!window.__MODEL) {
+    if (!document.querySelector('link[rel=manifest]')) add('link', { rel: 'manifest', href: 'manifest.json' });
+    add('link', { rel: 'apple-touch-icon', href: '../_app/icon-192.png' });
+  }
   add('meta', { name: 'apple-mobile-web-app-capable', content: 'yes' });
   add('meta', { name: 'mobile-web-app-capable', content: 'yes' });
   add('meta', { name: 'theme-color', content: '#2b2f36' });
@@ -158,7 +161,7 @@ const texCache = {};
 function texture(ti, mt) {
   const name = M.tex[ti];
   if (!texCache[name]) {
-    const tx = new THREE.TextureLoader().load('../_tex/' + name, need);
+    const tx = new THREE.TextureLoader().load((window.__TEX && window.__TEX[name]) || '../_tex/' + name, need);
     tx.colorSpace = THREE.SRGBColorSpace; tx.wrapS = tx.wrapT = THREE.RepeatWrapping;
     // uvs=1: выгрузка уже перевела координаты в доли картинки (с учётом шага и фурнитуры в долях)
     if (!M.uvs) tx.repeat.set(1 / (mt.sx || 1000), 1 / (mt.sy || 1000));
@@ -1693,7 +1696,8 @@ function loop() {
   dirty = false;
   rend.render(scene, cam);
 }
-fetch('./model.json?v=' + Date.now(), { cache: 'no-store' }).then(r => { if (!r.ok) throw new Error('файл модели не найден (' + r.status + ')'); return r.json(); })
+(window.__MODEL ? Promise.resolve(window.__MODEL)
+  : fetch('./model.json?v=' + Date.now(), { cache: 'no-store' }).then(r => { if (!r.ok) throw new Error('файл модели не найден (' + r.status + ')'); return r.json(); }))
   .then(data => {
     M = data; build(); initLevels(); wire(); wireLayout(); applyVis(); layout(); fitVisible();
     window.__viewer = { parts, animNode, M, dims, addDim, drawerDims, easyPick, partsUnder, dragDim, THREE, snapAt, pointVisible, picks, get cam() { return cam; }, get placing() { return placing; }, get rp() { return rp; } };   // для проверки из консоли
