@@ -47,6 +47,7 @@ const ICON = {
   dims: sv('<path d="M4 12h16M4 7v10M20 7v10M8 9.5L5 12l3 2.5M16 9.5l3 2.5-3 2.5"/>'),
   open: sv('<path d="M4 3h9v18H4zM13 3l6 3v15l-6-2"/>'),
   close: sv('<rect x="5" y="3" width="14" height="18" rx="1"/><path d="M15 12h1"/>'),
+  fac: sv('<rect x="5" y="3" width="14" height="18" rx="1"/><path d="M15 12h1"/><path d="M3 21L21 3" stroke-width="2"/>'),
   eye: sv('<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'),
   faces: sv('<path d="M5 4v16M19 4v16M8 12h8M10.5 9.5L8 12l2.5 2.5M13.5 9.5L16 12l-2.5 2.5"/>'),
   edges: sv('<path d="M4 15L15 4M9 20L20 9"/><path d="M8.5 11.5l4 4" stroke-dasharray="1.5 1.5"/>'),
@@ -63,6 +64,7 @@ const BTN_ICON = {
   bMode: ['solid', 'вигляд: суцільно / напівпрозоро / лінії'],
   bCam: ['persp', 'камера: перспектива / без перспективи / вписати'],
   bOC: ['open', 'відкрити все / закрити все'],
+  bFac: ['fac', 'сховати фасади / показати фасади'],
   bRuler: ['ruler', 'рулетка'], bUndo: ['undo', 'скасувати точку (Esc, права кнопка)'],
   bDims: ['dims', 'розміри: коротко — сховати/показати, довго — видалити всі'],
 };
@@ -100,7 +102,7 @@ document.body.insertAdjacentHTML('beforeend', `
   <small>коснитесь, чтобы закрыть</small></div>
 <div id="bar">
   <button id="bShowAll" style="display:none">показать всё</button>
-  <button id="bMode">показ</button><button id="bCam">камера</button><button id="bOC">открыть всё</button>
+  <button id="bMode">показ</button><button id="bCam">камера</button><button id="bOC">открыть всё</button><button id="bFac" style="display:none">фасады</button>
   <button id="bRuler">рулетка</button><button id="bUndo" style="display:none" title="Убрать поставленную первую точку (Esc, правая кнопка)">отменить точку</button><button id="bDims" style="display:none" title="Коротко — спрятать/показать, долго — удалить все">размеры</button>
   <span id="st"></span>
 </div>`);
@@ -444,8 +446,12 @@ function fitBox(b) {
 function fitVisible() { fitBox(visibleBox(false)); }
 
 // ---------------- видимость ----------------
+// «сховати фасади»: всё, что внутри блока с дверной меткой салона (выгрузка пишет их в M.door), — целиком,
+// с петлями, линиями и демпферами внутри; фальш-панели и внутренние ящики меток не имеют (Алексей 29.09)
+let hideFac = false;
 function effVisible(p) {
   if (p.hidden) return false;
+  if (hideFac && p.isDoor) return false;
   if (p.isF && !showF) return false;
   if (p.isB && !showB) return false;
   if (p.isL && !showL) return false;
@@ -913,25 +919,30 @@ function geomBox(i) {
   for (const m of parts[i].meshes) { const g = m.geometry; if (!g.boundingBox) g.computeBoundingBox(); b.union(g.boundingBox); }
   return b;
 }
-// ячейка в свету от точки p на грани с нормалью n (n смотрит в ячейку)
-function easyCell(p, n) {
+// ячейка в свету от точки p на грани с нормалью n (n смотрит в ячейку); i — щёлкнутая деталь
+// Ширина — горизонталь поперёк взгляда, глубина — горизонталь вдоль взгляда (замечание 29.09: нужна и глубина).
+// Спереди у глубины часто пусто (фасады спрятаны, ячейка открытая) — тогда до переднего края щёлкнутой детали.
+function easyCell(p, n, i) {
   const k = mainAxis(n), o = p.clone().addScaledVector(AX[k], Math.sign(n[k]));
-  const pair = (ax, label) => {
-    const a = rayHit(o, AX[ax].clone().negate()), b = rayHit(o, AX[ax]);
+  const d = cam.getWorldDirection(new THREE.Vector3());
+  const dAx = Math.abs(d.x) >= Math.abs(d.z) ? 'x' : 'z', wAx = dAx === 'x' ? 'z' : 'x';
+  const pb = i >= 0 ? geomBox(i).applyMatrix4(parts[i].g.matrixWorld) : null;
+  const edgeOf = (ax, s) => { if (!pb) return null; const q = o.clone(); q[ax] = s > 0 ? pb.max[ax] : pb.min[ax]; return q; };
+  const pair = (ax, label, fill) => {
+    let a = rayHit(o, AX[ax].clone().negate()), b = rayHit(o, AX[ax]);
+    if (fill) { if (!a && b) a = edgeOf(ax, -1); else if (a && !b) b = edgeOf(ax, 1); }
     if (a && b) easyDim(a, b, label);
     return !!(a && b);
   };
+  const one = (ax, label) => {   // от щёлкнутой грани до следующей детали
+    const b = rayHit(o, AX[ax].clone().multiplyScalar(Math.sign(n[ax])));
+    if (b) easyDim(p.clone(), b, label);
+    return !!b;
+  };
   let any = false;
-  if (k !== 'y') {
-    any = pair('y', 'висота') | any;
-    any = pair(k === 'x' ? 'z' : 'x', 'ширина') | any;
-  } else {
-    // полка сверху/снизу: высота до следующей детали, ширина — по той горизонтали, что поперёк экрана
-    const up = AX.y.clone().multiplyScalar(Math.sign(n.y)), b = rayHit(o, up);
-    if (b) { easyDim(p.clone(), b, 'висота'); any = true; }
-    const r = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 0);
-    any = pair(Math.abs(r.x) >= Math.abs(r.z) ? 'x' : 'z', 'ширина') | any;
-  }
+  any = (k === 'y' ? one('y', 'висота') : pair('y', 'висота')) | any;
+  any = (k === wAx ? one(wAx, 'ширина') : pair(wAx, 'ширина')) | any;
+  any = (k === dAx ? one(dAx, 'глибина') : pair(dAx, 'глибина', true)) | any;
   if (!any) toast('тут немає комірки: промені нікуди не вперлися');
 }
 // части подвижной системы (ящик + его направляющие) — как при открывании касанием
@@ -1003,14 +1014,18 @@ function easyStatic(h) {
   const k = mainAxis(n), s = geomBox(i).getSize(new THREE.Vector3());
   // кромка: грань смотрит вдоль большого размера детали (не вдоль толщины) — размеры детали
   if (pr.isF || pr.isB || s[k] > Math.min(s.x, s.y, s.z) + 0.01) { showPartDims(i); return; }
-  easyCell(h.point, n);
+  easyCell(h.point, n, i);
 }
 function easyPick(x, y) {
   dropEasy();
   const h = pick(x, y);
   if (!h || !h.face) { if (easyOpenIdx >= 0 && parts[easyOpenIdx].chainA.length && animNode[parts[easyOpenIdx].chainA[0]].t > 0.5) toggleAt(easyOpenIdx); easyOpenIdx = -1; return; }
   const i = h.object.userData.idx; if (parts[i].isL) return;
-  if (parts[i].chainA.length) easyMoving(i, x, y); else easyStatic(h);
+  if (parts[i].chainA.length) { easyMoving(i, x, y); return; }
+  // щелчок мимо открытого ящика/двери — закрыть его (замечание 29.09), размеры считаем уже по тому, что щёлкнули
+  if (easyOpenIdx >= 0 && parts[easyOpenIdx].chainA.length && animNode[parts[easyOpenIdx].chainA[0]].t > 0.5) toggleAt(easyOpenIdx);
+  easyOpenIdx = -1;
+  easyStatic(h);
 }
 
 const RHINT = { easy: 'легкі розміри: торкніться полиці, стінки, дверцят або шухляди', face: 'рулетка: коснитесь грани детали', edge: 'рулетка: коснитесь ребра детали', point: 'рулетка: укажи первую точку' };
@@ -1032,7 +1047,8 @@ function rulerPick(x, y, mouse) {
 // точки на месте, линия с числом уезжает (вверх-вниз — читается спереди, к себе-от себя — сверху).
 // Точки наискосок (отличаются больше чем по одному направлению) → прямая линия с числом, без лапок.
 // Размеры остаются на модели; удалить — правой кнопкой по числу (на телефоне — подержать палец на числе).
-const DIMC = 0xd94f2b, AX = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) };
+// цвет размеров — тёмно-синий: «ядовито-красный» не понравился (29.09)
+const DIMC = 0x1f5fbf, AX = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) };
 const dims = [];
 const fmt = x => String(Math.round(Math.abs(x) * 10) / 10).replace('.', ',');
 function axisOf(a, b) {
@@ -1053,11 +1069,14 @@ function buildDim(dm) {
     const pts = [a2, b2];
     const ext = (p, q) => { const d = q.clone().sub(p); if (d.lengthSq() > 1) pts.push(p, q.clone().addScaledVector(d.normalize(), 8)); };
     ext(dm.a, a2); ext(dm.b, b2);
-    // засечки на концах — косые чёрточки, как на чертеже
-    const L = Math.max(8, Math.min(40, Math.abs(tlen) * 0.03));
-    const u = AX[dm.axis].clone(), w = dm.off.lengthSq() > 1 ? dm.off.clone().normalize() : new THREE.Vector3().crossVectors(u, cam.getWorldDirection(new THREE.Vector3())).normalize();
-    const t = u.clone().add(w).normalize().multiplyScalar(L);
-    for (const p of [a2, b2]) pts.push(p.clone().sub(t), p.clone().add(t));
+    // стрелки на концах, остриём в выносную линию (29.09: вместо косых засечек)
+    const L = Math.max(10, Math.min(45, Math.abs(tlen) * 0.04));
+    const u = AX[dm.axis].clone().multiplyScalar(Math.sign(tlen) || 1);
+    const w = dm.off.lengthSq() > 1 ? dm.off.clone().normalize() : new THREE.Vector3().crossVectors(u, cam.getWorldDirection(new THREE.Vector3())).normalize();
+    for (const [p, s] of [[a2, 1], [b2, -1]]) {
+      const back = p.clone().addScaledVector(u, s * L);
+      pts.push(p, back.clone().addScaledVector(w, L * 0.3), p, back.clone().addScaledVector(w, -L * 0.3));
+    }
     seg(pts);
     dm.mid = a2.clone().add(b2).multiplyScalar(0.5);
   }
@@ -1292,7 +1311,7 @@ function aimAt(x, y) {
   // точка, к которой прилипло (или сам палец)
   let mx = S / 2, my = S / 2;
   if (aim.p) { const s = aim.p.clone().project(cam); mx = S / 2 + (((s.x + 1) / 2 * innerWidth) - x) * Z * k; my = S / 2 + (((1 - s.y) / 2 * innerHeight) - y) * Z * k; }
-  lctx.strokeStyle = '#d94f2b'; lctx.lineWidth = 2;
+  lctx.strokeStyle = '#1f5fbf'; lctx.lineWidth = 2;
   lctx.beginPath(); lctx.moveTo(mx - 14, my); lctx.lineTo(mx + 14, my); lctx.moveTo(mx, my - 14); lctx.lineTo(mx, my + 14); lctx.stroke();
   lctx.restore();
   lctx.strokeStyle = '#2b2f36'; lctx.lineWidth = 3; lctx.beginPath(); lctx.arc(S / 2, S / 2, S / 2 - 2, 0, Math.PI * 2); lctx.stroke();
@@ -1596,6 +1615,9 @@ function wire() {
     closePop();
   }, true);
   $('bOC').onclick = () => { const o = anyOpen() || anims.some(a => a.to === 1); startAnim(allAnimIds(), o ? 0 : 1); syncOC(!o); };
+  { const DS = new Set(M.door || []); parts.forEach(p => { p.isDoor = p.h.some(id => DS.has(id)); });
+    const b = $('bFac'); b.style.display = DS.size ? '' : 'none';
+    b.onclick = () => { hideFac = !hideFac; setOn('bFac', hideFac); dropEasy(); applyVis(); }; }
   $('bUndo').onclick = cancelPoint;
   // подсказка по жестам — при первом открытии на телефоне
   const hint = $('hint');

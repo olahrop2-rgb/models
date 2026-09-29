@@ -83,7 +83,7 @@ button.on { background: var(--accent); color: #fff; border-color: var(--accent);
 #card .lnk { color: var(--accent); cursor: pointer; border-bottom: 1px dotted var(--accent); }
 #card .lnk.cur { color: #fff; background: var(--accent); border-radius: 4px; padding: 1px 5px; border: 0; }
 
-#rlabel { position: fixed; z-index: 4; background: #fff; border: 1px solid #d94f2b; color: #b23a1c; border-radius: 5px;
+#rlabel { position: fixed; z-index: 4; background: #fff; border: 1px solid #1f5fbf; color: #16427f; border-radius: 5px;
   padding: 2px 6px; font-size: 12px; pointer-events: none; display: none; transform: translate(-50%, -130%); white-space: nowrap; }
 #load { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 15px; }
 #stamp { position: fixed; right: 12px; bottom: 8px; color: #9aa4ae; font-size: 11px; z-index: 4; pointer-events: none; }
@@ -95,8 +95,8 @@ button.on { background: var(--accent); color: #fff; border-color: var(--accent);
 #hint p { margin: 4px 0; }
 #hint small { margin-top: 14px; opacity: .75; }
 
-.dim { position: fixed; z-index: 4; transform: translate(-50%, -115%); background: rgba(255,255,255,.92); color: #b23a1c;
-  border: 1px solid #d94f2b; border-radius: 5px; padding: 1px 6px; font: 600 12px system-ui, sans-serif; white-space: nowrap;
+.dim { position: fixed; z-index: 4; transform: translate(-50%, -115%); background: rgba(255,255,255,.92); color: #16427f;
+  border: 1px solid #1f5fbf; border-radius: 5px; padding: 1px 6px; font: 600 12px system-ui, sans-serif; white-space: nowrap;
   cursor: grab; touch-action: none; }
 .touch .dim { font-size: 14px; padding: 4px 9px; }
 /* крестик рулетки: всегда на месте курсора, у угла детали прыгает на угол */
@@ -123,7 +123,7 @@ button.on { background: var(--accent); color: #fff; border-color: var(--accent);
 #tools button { width: 40px; height: 40px; padding: 0; border-radius: 50%; display: flex; align-items: center; justify-content: center;
   background: rgba(43,108,176,.92); color: #fff; border: 0; box-shadow: 0 2px 8px rgba(0,0,0,.25); }
 #tools button.mini { width: 34px; height: 34px; background: rgba(255,255,255,.92); color: var(--text); border: 1px solid var(--line); }
-#tools button.mini.on { background: #d94f2b; color: #fff; border-color: #d94f2b; }
+#tools button.mini.on { background: #1f5fbf; color: #fff; border-color: #1f5fbf; }
 .touch #tools button { width: 46px; height: 46px; }
 .touch #tools button.mini { width: 40px; height: 40px; }
 /* подпись кнопки — подержать палец */
