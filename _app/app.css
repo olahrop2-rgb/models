@@ -10,8 +10,32 @@ button { font: inherit; background: #fff; color: var(--text); border: 1px solid 
   padding: 5px 10px; cursor: pointer; white-space: nowrap; }
 button:hover { background: var(--hover); }
 button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
-.sep { width: 10px; flex: none; }
-#bMore { display: none; }
+
+/* кубик видов справа вверху: поворачивается с моделью, грань — строгий вид с этой стороны */
+#vcube { position: fixed; top: 6px; right: 6px; width: 100px; height: 100px; z-index: 9; touch-action: none; cursor: grab; }
+#vaxes { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+#vcube .cb { position: absolute; left: 50%; top: 50%; width: 0; height: 0; transform-style: preserve-3d; --ch: 22px; }
+#vcube .cf { position: absolute; left: -22px; top: -22px; width: 44px; height: 44px; box-sizing: border-box;
+  display: flex; align-items: center; justify-content: center; font: 700 8.5px system-ui, sans-serif; letter-spacing: .2px;
+  color: #3d4652; background: rgba(250,252,254,.9); border: 1px solid #9aa6b3; backface-visibility: hidden; cursor: pointer; }
+#vcube .cf:hover { background: #cfe0f2; color: var(--accent); }
+
+/* язычок структуры у левого края */
+#ttab { position: fixed; left: 0; z-index: 9; display: flex; flex-direction: column; align-items: center; gap: 1px;
+  padding: 7px 4px 5px 3px; background: rgba(255,255,255,.9); color: var(--text); border: 1px solid var(--line); border-left: 0;
+  border-radius: 0 10px 10px 0; box-shadow: 1px 1px 6px rgba(0,0,0,.12); cursor: pointer; touch-action: none; line-height: 0; }
+#ttab svg { width: 20px; height: 20px; }
+#ttab b { font: 700 15px/1 system-ui, sans-serif; color: var(--muted); }
+#ttab.open { background: var(--accent); color: #fff; border-color: var(--accent); }
+#ttab.open b { color: #fff; }
+
+/* окошко выбора рядом с кнопкой (показ, камера) */
+#pop { position: fixed; z-index: 16; display: none; flex-direction: column; gap: 4px; background: #fff;
+  border: 1px solid var(--line); border-radius: 10px; padding: 6px; box-shadow: 0 3px 14px rgba(0,0,0,.2); }
+#pop button { display: flex; align-items: center; gap: 8px; text-align: left; padding: 5px 10px 5px 6px; }
+#pop button svg { flex: none; }
+#pop .psep { height: 1px; background: var(--line); margin: 2px 0; }
+.touch #pop button { padding: 8px 14px 8px 8px; }
 
 #bar { position: fixed; left: 0; right: 0; bottom: 0; padding: 7px 10px; background: var(--panel); z-index: 5;
   display: flex; gap: 6px; align-items: center; flex-wrap: wrap; box-shadow: 0 -1px 6px rgba(0,0,0,.08); }
@@ -22,7 +46,6 @@ button.on { background: var(--accent); color: #fff; border-color: var(--accent);
   border-right: 1px solid rgba(0,0,0,.08); display: flex; flex-direction: column; }
 #tree .body .tr { text-shadow: 0 0 2px #fff, 0 0 3px #fff, 0 0 6px #fff; }
 #tree .head { background: rgba(255,255,255,.6); }
-#tgrip { display: none; }
 #tree.hidden { display: none; }
 #tree .head { padding: 8px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
 #tree .head .row { display: flex; gap: 5px; flex-wrap: wrap; }
@@ -43,7 +66,7 @@ button.on { background: var(--accent); color: #fff; border-color: var(--accent);
 #bar button.ic svg { display: block; }
 .touch #bar button.ic { padding: 8px 10px; }
 .touch.land #bar button.ic { padding: 7px 9px; }
-#card { position: fixed; right: 64px; top: 12px; background: var(--panel); border: 1px solid var(--line);
+#card { position: fixed; right: 116px; top: 12px; background: var(--panel); border: 1px solid var(--line);
   border-radius: 8px; padding: 8px 12px; z-index: 5; max-width: 340px; display: none; }
 #card b { display: block; margin-bottom: 3px; }
 #card small { color: var(--muted); }
@@ -82,14 +105,9 @@ button.on { background: var(--accent); color: #fff; border-color: var(--accent);
   border-radius: 50%; box-shadow: 0 3px 12px rgba(0,0,0,.35); }
 
 /* ---------- телефон / планшет ---------- */
-.touch #bar .nt { display: none; }
 .touch body { font-size: 15px; }
 .touch button { padding: 9px 13px; border-radius: 9px; }
-.touch #bMore { display: inline-block; }
-.touch #bar { padding: 8px 8px calc(8px + env(safe-area-inset-bottom)); gap: 7px; }
-.touch #bar .x { display: none; }
-.touch #bar.more .x { display: inline-block; }
-.touch #bar .sep { display: none; }
+.touch #bar { padding: 8px 8px calc(8px + env(safe-area-inset-bottom)); gap: 7px; justify-content: center; }
 .touch #st { width: 100%; margin: 0; font-size: 13px; }
 .touch #st:empty { display: none; }
 .touch #stamp { display: none; }
@@ -109,10 +127,6 @@ button.on { background: var(--accent); color: #fff; border-color: var(--accent);
 #toast { position: fixed; left: 50%; top: 18%; transform: translateX(-50%); z-index: 20; max-width: 80vw; display: none;
   background: rgba(43,47,54,.9); color: #fff; padding: 9px 14px; border-radius: 10px; font-size: 14px; text-align: center; pointer-events: none; }
 #toast.show { display: block; }
-.touch #tgrip { display: block; position: absolute; right: -18px; top: 50%; width: 18px; height: 70px; margin-top: -35px;
-  background: rgba(43,47,54,.5); border-radius: 0 9px 9px 0; touch-action: none; }
-.touch #tgrip::after { content: ''; position: absolute; left: 7px; top: 20px; bottom: 20px; width: 4px;
-  border-left: 1px solid #fff; border-right: 1px solid #fff; }
 /* язычок строки кнопок */
 #bgrip { display: none; }
 .touch #bgrip { display: flex; position: fixed; z-index: 9; width: 56px; height: 26px; align-items: center; justify-content: center;
@@ -128,7 +142,6 @@ button.on { background: var(--accent); color: #fff; border-color: var(--accent);
 .touch #tree .head .row { gap: 4px; }
 .touch #tree .head button { padding: 5px 8px; font-size: 13px; }
 .touch #tree input[type=search] { padding: 6px 8px; font-size: 14px; }
-.touch #tClose { font-size: 18px; padding: 6px 14px; }
 .touch .tr { padding: 9px 10px 9px 0; font-size: 15px; }
 .touch .tr .cr { width: 26px; font-size: 13px; }
 .touch .tr input { width: 20px; height: 20px; }
