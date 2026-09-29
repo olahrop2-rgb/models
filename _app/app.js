@@ -1693,7 +1693,7 @@ function loop() {
   dirty = false;
   rend.render(scene, cam);
 }
-fetch('./model.json').then(r => { if (!r.ok) throw new Error('файл модели не найден (' + r.status + ')'); return r.json(); })
+fetch('./model.json?v=' + Date.now(), { cache: 'no-store' }).then(r => { if (!r.ok) throw new Error('файл модели не найден (' + r.status + ')'); return r.json(); })
   .then(data => {
     M = data; build(); initLevels(); wire(); wireLayout(); applyVis(); layout(); fitVisible();
     window.__viewer = { parts, animNode, M, dims, addDim, drawerDims, easyPick, partsUnder, dragDim, THREE, snapAt, pointVisible, picks, get cam() { return cam; }, get placing() { return placing; }, get rp() { return rp; } };   // для проверки из консоли
