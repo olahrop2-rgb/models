@@ -224,17 +224,33 @@ function build() {
     const h = od.h || [];
     // подвижные предки — от внешнего к внутреннему (h идёт от ближайшего владельца вверх)
     const chainA = h.filter(id => animNode[id]).reverse();
-    const rec = { g: grp, meshes, edges, h, n: od.n, kind: od.k || 'p', isF: od.k === 'f' || od.k === 'm', isB: od.k === 'b', isL: od.k === 'l', hidden: false, i, chainA };
+    const rec = { g: grp, meshes, edges, h, v: h, d: od.d || '', n: od.n, kind: od.k || 'p', isF: od.k === 'f' || od.k === 'm', isB: od.k === 'b', isL: od.k === 'l', hidden: false, i, chainA };
     parts.push(rec);
     if (chainA.length) { grp.matrixAutoUpdate = false; moving.push(rec); }
   });
   poseAll();
+  initLevels();
 
-  // структура: цепочка h идёт от ближайшего владельца к верхнему
+  // уровни для показа (дерево, цепочка карточки, Tab) без пустых обёрток (Алексей 29.09): блок в блоке с тем же
+  // содержимым — остаётся верхний; блок с одним объектом — остаётся сама деталь. Сборочная единица не убирается.
+  // REP: убранный узел → оставленный с тем же содержимым (-1 — сама деталь). h (полная цепочка) — для движения.
+  const ASM = new Set(M.nasm || []);
+  parts.forEach(p => {
+    const v = []; let upN = -1, upId = -1;
+    for (let k = p.h.length - 1; k >= 0; k--) {
+      const id = p.h[k], n = NCNT[id] || 0;
+      if (n === upN) { REP[id] = upId; continue; }
+      if (n <= 1 && !ASM.has(id)) { REP[id] = -1; continue; }
+      REP[id] = id; v.unshift(id); upN = n; upId = id;
+    }
+    p.v = v;
+  });
+
+  // структура: цепочка идёт от ближайшего владельца к верхнему
   parts.forEach((p, i) => {
     let parent = null;
-    for (let k = p.h.length - 1; k >= 0; k--) {
-      const id = p.h[k];
+    for (let k = p.v.length - 1; k >= 0; k--) {
+      const id = p.v[k];
       let nd = nodes[id];
       if (!nd) {
         nd = nodes[id] = { id, name: M.names[id] || '(без имени)', kids: [], parts: [], parent: parent ? parent.id : -1,
@@ -528,7 +544,7 @@ function effVisible(p) {
   if (p.isF && !showF) return false;
   if (p.isB && !showB) return false;
   if (p.isL && !showL) return false;
-  for (const id of p.h) if (nodes[id].hidden) return false;
+  for (const id of p.v) if (nodes[id].hidden) return false;
   return true;
 }
 function applyVis() {
@@ -544,7 +560,8 @@ function showAll() {
   applyVis(); renderTree();
 }
 function hideSel() {
-  if (selNode !== null) nodes[selNode].hidden = true;
+  if (selMany.length) for (const id of selMany) nodes[id].hidden = true;
+  else if (selNode !== null) nodes[selNode].hidden = true;
   else for (const i of selSet) parts[i].hidden = true;
   clearSel(); applyVis(); renderTree();
 }
@@ -557,40 +574,65 @@ function isolateSel() {
 }
 
 // ---------------- выделение ----------------
-let selIdx = -1, selLevel = -1, selSet = [], selNode = null;
-const NCNT = {};
+let selIdx = -1, selLevel = -1, selSet = [], selNode = null, selMany = [];
+const NCNT = {}, REP = {};
 function initLevels() { for (const p of parts) for (const id of p.h) NCNT[id] = (NCNT[id] || 0) + 1; }
-function sizeAt(i, k) { return k < 0 ? 1 : (NCNT[parts[i].h[k]] || 1); }
+// уровни — по показанной цепочке v (без пустых обёрток), в ней объём растёт с каждым звеном
+function sizeAt(i, k) { return k < 0 ? 1 : (NCNT[parts[i].v[k]] || 1); }
 function upLevel(i, from) {
-  const h = parts[i].h, cur = sizeAt(i, from);
-  for (let k = from + 1; k < h.length; k++) if ((NCNT[h[k]] || 0) > cur) return k;
-  return h.length ? h.length - 1 : -1;
+  const v = parts[i].v, cur = sizeAt(i, from);
+  for (let k = from + 1; k < v.length; k++) if ((NCNT[v[k]] || 0) > cur) return k;
+  return v.length ? v.length - 1 : -1;
 }
 function downLevel(i, from) {
   if (from < 0) return -1;
   const cur = sizeAt(i, from);
-  for (let k = from - 1; k >= 0; k--) if ((NCNT[parts[i].h[k]] || 0) < cur) return k;
+  for (let k = from - 1; k >= 0; k--) if ((NCNT[parts[i].v[k]] || 0) < cur) return k;
   return -1;
 }
 function partsUnder(id) { const out = []; parts.forEach((p, i) => { if (p.h.includes(id)) out.push(i); }); return out; }
 // деталь, от которой построена цепочка в карточке: щелчки по звеньям цепочки её не меняют
 let chainPart = -1;
 function selectPart(i, level) {
-  selIdx = i; selLevel = level; chainPart = i;
-  if (level < 0) { selNode = null; selSet = [i]; }
-  else { selNode = parts[i].h[Math.min(level, parts[i].h.length - 1)]; selSet = partsUnder(selNode); }
+  selIdx = i; selLevel = level; chainPart = i; selMany = [];
+  const v = parts[i].v;
+  if (level < 0 || !v.length) { selNode = null; selSet = [i]; selLevel = -1; }
+  else { selNode = v[Math.min(level, v.length - 1)]; selSet = partsUnder(selNode); }
   paint(); revealInTree();
 }
-function selectNode(id) { selNode = id; selIdx = -1; chainPart = -1; selSet = partsUnder(id); paint(); renderTree(); }
+function selectNode(id) { selNode = id; selIdx = -1; chainPart = -1; selMany = []; selSet = partsUnder(id); paint(); renderTree(); }
 // звено цепочки карточки: узел (блок, ящик, модуль…) или сама деталь
 function selectChain(id) {
   const i = chainPart;
   if (id === null) { selectPart(i, -1); return; }
-  const k = parts[i].h.indexOf(id);
-  selIdx = i; selLevel = k; selNode = id; selSet = partsUnder(id);
+  const k = parts[i].v.indexOf(id);
+  selIdx = i; selLevel = k; selNode = id; selMany = []; selSet = partsUnder(id);
   paint(); revealInTree();
 }
-function clearSel() { selIdx = -1; selSet = []; selNode = null; chainPart = -1; paint(); renderTree(); }
+function clearSel() { selIdx = -1; selSet = []; selNode = null; chainPart = -1; selMany = []; paint(); renderTree(); }
+// Ctrl+щелчок (компьютер, показ через проектор): набор сборочных единиц — шкаф за шкафом, Delete прячет все (29.09).
+// Шкаф — САМАЯ ВЕРХНЯЯ сборочная единица над деталью (ящики TANDEM тоже помечены — щелчок по ящику берёт весь шкаф,
+// Алексей 29.09); в выгрузке без этой отметки — верхний блок детали (не слой).
+function asmOf(i) {
+  const p = parts[i];
+  if (M.nasm) { const A = new Set(M.nasm); for (let k = p.h.length - 1; k >= 0; k--) { const id = p.h[k]; if (A.has(id)) { const r = REP[id]; if (r !== undefined && r >= 0) return r; } } }
+  for (let k = p.v.length - 1; k >= 0; k--) if (!(M.ntype && M.ntype[p.v[k]] === 'layer')) return p.v[k];
+  return -1;
+}
+function toggleMany(i) {
+  const id = asmOf(i);
+  if (id < 0) return;
+  if (!selMany.length) {                                  // уже выделенное обычным щелчком — первым в набор
+    const first = selNode !== null ? selNode : (selIdx >= 0 ? asmOf(selIdx) : -1);
+    if (first >= 0 && first !== id) selMany.push(first);
+  }
+  const at = selMany.indexOf(id);
+  if (at >= 0) selMany.splice(at, 1); else selMany.push(id);
+  selIdx = -1; selNode = null; chainPart = -1; selLevel = -1;
+  const all = new Set(); for (const n of selMany) for (const j of partsUnder(n)) all.add(j);
+  selSet = [...all];
+  paint(); renderTree();
+}
 function paint() {
   const on = new Set(selSet);
   parts.forEach((p, i) => {
@@ -603,11 +645,14 @@ function paint() {
   if (!selSet.length) { d.style.display = 'none'; need(); return; }
   d.style.display = 'block';
   let title, sub;
-  if (selNode === null) {
+  const num = d => d ? ' · № ' + d : '';                 // обозначение из Базиса — номер как на этикетке
+  if (selMany.length) {
+    title = 'вибрано: ' + selMany.length; sub = selMany.map(id => nodes[id].name).join('; ');
+  } else if (selNode === null) {
     const p = parts[selSet[0]];
-    title = p.n; sub = KIND[p.kind] || '';
+    title = p.n; sub = (KIND[p.kind] || '') + num(p.d);
   } else {
-    title = nodes[selNode].name; sub = selSet.length + ' объектов';
+    title = nodes[selNode].name; sub = selSet.length + ' объектов' + num(M.ndes && M.ndes[selNode]);
   }
   d.innerHTML = '<b></b><small></small><div class="chain"></div><div class="cbtn"><button>сховати</button><button>тільки це</button></div>';
   d.children[0].textContent = title || '(без имени)';
@@ -621,12 +666,14 @@ function paint() {
     a.onclick = e => { e.stopPropagation(); on(); };
     ch.appendChild(a);
   };
-  if (chainPart >= 0 && selSet.includes(chainPart)) {
+  if (selMany.length) {
+    // набор шкафов: цепочки нет
+  } else if (chainPart >= 0 && selSet.includes(chainPart)) {
     const p = parts[chainPart];
-    for (const id of p.h.slice().reverse()) add(M.names[id], () => selectChain(id), selNode === id);
+    for (const id of p.v.slice().reverse()) add(M.names[id], () => selectChain(id), selNode === id);
     add(p.n, () => selectChain(null), selNode === null);
   } else {
-    const any = parts[selSet[0]], chainOf = selNode === null ? any.h : any.h.slice(any.h.indexOf(selNode));
+    const any = parts[selSet[0]], chainOf = selNode === null ? any.v : any.v.slice(Math.max(0, any.v.indexOf(selNode)));
     for (const id of chainOf.slice().reverse()) add(M.names[id], () => selectNode(id), selNode === id);
   }
   const bs = d.querySelectorAll('.cbtn button');
@@ -639,7 +686,7 @@ function paint() {
 const tbody = $('tbody');
 function nodeRow(nd, depth) {
   const r = document.createElement('div');
-  r.className = 'tr' + (selNode === nd.id ? ' sel' : '') + (nodeOff(nd) ? ' off' : '');
+  r.className = 'tr' + (selNode === nd.id || selMany.includes(nd.id) ? ' sel' : '') + (nodeOff(nd) ? ' off' : '');
   r.style.paddingLeft = (4 + depth * 14) + 'px';
   const hasKids = nd.kids.length + nd.parts.length > 0;
   r.innerHTML = '<span class="cr"></span><input type="checkbox"><span class="nm"></span><span class="tp"></span>';
@@ -656,7 +703,7 @@ function nodeRow(nd, depth) {
 function partRow(i, depth) {
   const p = parts[i];
   const r = document.createElement('div');
-  r.className = 'tr' + (selNode === null && selSet.includes(i) ? ' sel' : '') + (effVisible(p) ? '' : ' off');
+  r.className = 'tr' + (selNode === null && !selMany.length && selSet.includes(i) ? ' sel' : '') + (effVisible(p) ? '' : ' off');
   r.style.paddingLeft = (4 + depth * 14) + 'px';
   r.innerHTML = '<span class="cr"></span><input type="checkbox"><span class="nm"></span><span class="tp"></span>';
   r.children[1].checked = !p.hidden;
@@ -698,7 +745,7 @@ function renderTree() {
 }
 function revealInTree() {
   if (selIdx >= 0) {
-    const h = parts[selIdx].h;
+    const h = parts[selIdx].v;
     const upto = selNode === null ? 0 : h.indexOf(selNode) + 1;
     for (let k = h.length - 1; k >= upto; k--) nodes[h[k]].open = true;
   }
@@ -1675,8 +1722,12 @@ cv.addEventListener('pointerup', e => {
     rulerPick(e.clientX, e.clientY, true); return;
   }
   const h = pick(e.clientX, e.clientY);
-  if (h) { const i = h.object.userData.idx; selectPart(i, (e.ctrlKey || e.altKey) ? upLevel(i, -1) : -1); }
-  else clearSel();
+  if (h) {
+    const i = h.object.userData.idx;
+    if (e.ctrlKey || e.metaKey) toggleMany(i);
+    else selectPart(i, e.altKey ? upLevel(i, -1) : -1);
+  }
+  else if (!(e.ctrlKey || e.metaKey)) clearSel();
 });
 cv.addEventListener('wheel', e => {
   e.preventDefault();
@@ -1947,8 +1998,8 @@ function loop() {
 (window.__MODEL ? Promise.resolve(window.__MODEL)
   : fetch('./model.json?v=' + Date.now(), { cache: 'no-store' }).then(r => { if (!r.ok) throw new Error('файл модели не найден (' + r.status + ')'); return r.json(); }))
   .then(data => {
-    M = data; build(); initLevels(); wire(); wireLayout(); applyVis(); layout(); fitVisible();
-    window.__viewer = { parts, animNode, M, dims, addDim, drawerDims, easyPick, easyCell, tubeDims, openTarget, pick, blockersOf, poseAll, toggleAt, scopeIds, boxOf, isTube, toWorld, clearDims, root, partsUnder, dragDim, THREE, snapAt, pointVisible, picks, get cam() { return cam; }, get placing() { return placing; }, get rp() { return rp; } };   // для проверки из консоли
+    M = data; build(); wire(); wireLayout(); applyVis(); layout(); fitVisible();
+    window.__viewer = { parts, animNode, M, dims, addDim, drawerDims, easyPick, easyCell, tubeDims, openTarget, pick, blockersOf, poseAll, toggleAt, scopeIds, boxOf, isTube, toWorld, clearDims, root, partsUnder, dragDim, THREE, snapAt, pointVisible, picks, nodes, NCNT, REP, rootKids, selectPart, toggleMany, hideSel, showAll, upLevel, downLevel, asmOf, effVisible, get selSet() { return selSet; }, get selMany() { return selMany; }, get selNode() { return selNode; }, get cam() { return cam; }, get placing() { return placing; }, get rp() { return rp; } };   // для проверки из консоли
     $('load').remove(); loop();
   })
   .catch(err => { $('load').textContent = 'Не удалось открыть модель: ' + err.message; });
