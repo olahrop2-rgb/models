@@ -292,6 +292,11 @@ function toggleAt(i) {
   const pIdx = h.indexOf(top) + 1, P = pIdx < h.length ? h[pIdx] : null;
   let scope = top;
   if (P !== null && (!M.ntype || M.ntype[P] !== 'layer') && partsUnder(P).length <= 2.5 * partsUnder(top).length) scope = P;
+  // как в Базисе: самый внешний блок с анимацией (даже нулевой) запускает всё движение внутри себя (фасад + петли)
+  if (M.grp && M.grp.length) {
+    const G = new Set(M.grp);
+    for (let k = h.length - 1; k >= 0; k--) if (G.has(h[k]) || animNode[h[k]]) { if (G.has(h[k])) scope = h[k]; break; }
+  }
   for (const pr of moving) {
     if (!pr.h.includes(scope)) continue;
     const k = scope === top ? pr.chainA.indexOf(top) : 0;
