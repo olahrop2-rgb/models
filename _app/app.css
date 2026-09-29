@@ -37,11 +37,15 @@ button.on { background: var(--accent); color: #fff; border-color: var(--accent);
 #pop .psep { height: 1px; background: var(--line); margin: 2px 0; }
 .touch #pop button { padding: 8px 14px 8px 8px; }
 
-/* значки — строкой вверху слева, всегда видны, без подложки на всю ширину (замечание 29.09) */
-#bar { position: fixed; top: 6px; left: 6px; z-index: 9; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+/* значки — строкой внизу посередине, всегда видны, без подложки на всю ширину (замечание 29.09) */
+#bar { position: fixed; bottom: 8px; left: 0; right: 0; margin: 0 auto; width: max-content; max-width: calc(100% - 16px);
+  z-index: 9; display: flex; gap: 6px; align-items: center; justify-content: center; flex-wrap: wrap; }
+/* подсказка рулетки — отдельной строкой над значками, ширину ряда значков не раздувает */
+#bar #st { position: fixed; left: 0; right: 0; margin: 0 auto; width: max-content; max-width: calc(100% - 24px);
+  text-align: center; box-sizing: border-box; }
 #bar button { background: rgba(255,255,255,.92); box-shadow: 0 1px 4px rgba(0,0,0,.14); }
 #bar button.on { background: var(--accent); }
-#st { flex-basis: 100%; color: var(--text); background: rgba(255,255,255,.85); border-radius: 7px; padding: 4px 8px; }
+#st { color: var(--text); background: rgba(255,255,255,.85); border-radius: 7px; padding: 4px 8px; }
 #st:empty { display: none; }
 
 /* структура — текстом на прозрачном фоне, модель под ней видна (замечание 27.09, как в веб-просмотре Базиса) */
