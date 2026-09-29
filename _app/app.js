@@ -83,7 +83,6 @@ document.body.insertAdjacentHTML('beforeend', `
 <div id="ttab" title="Структура: нажать — открыть/закрыть, потянуть — ширина"></div>
 <div id="vcube"><svg id="vaxes" viewBox="-50 -50 100 100"></svg><div class="cb"></div></div>
 <div id="pop"></div>
-<div id="bgrip">☰</div>
 <div id="tools"></div><div id="toast"></div>
 <div id="card"></div>
 <div id="rlabel"></div><div id="snapmk"></div>
@@ -123,7 +122,10 @@ let dirty = true;
 const need = () => { dirty = true; };
 
 // ---------------- данные ----------------
-const EDGE = new THREE.LineBasicMaterial({ color: 0x5a626b, transparent: true, opacity: 0.55 });
+// Рёбра деталей: видимые — тёмные (контрастнее прежнего серого, замечание 29.09); в режиме «линии» ещё и
+// скрытые за деталями — светлые, как у Базиса: сразу видно, что спереди, а что сзади.
+const EDGE = new THREE.LineBasicMaterial({ color: 0x2e343b, transparent: true, opacity: 0.8 });
+const EDGE_HID = new THREE.LineBasicMaterial({ color: 0x9aa4ae, transparent: true, opacity: 0.45, depthWrite: false, depthFunc: THREE.GreaterDepth });
 let M;                 // модель
 const parts = [];      // деталь/единица фурнитуры: {g, meshes, edges, h, n, mat, isF, hidden, i}
 const nodes = {};      // узел структуры: {id, name, kids[], parts[], parent, hidden, count}
@@ -131,6 +133,7 @@ const rootKids = [], rootParts = [];
 const animNode = {};   // подвижный узел: id → {a, ang, d, c, t}
 const moving = [];     // детали, у которых есть подвижные предки
 const picks = [];
+const hidEdges = [];   // копии рёбер для режима «линии»: рисуются только там, где их закрывает деталь
 const box = new THREE.Box3();
 let rad = 1000, showF = true, showB = true, showL = true;
 const KIND = { p: 'панель', f: 'фурнитура', b: 'профиль', m: '3D-объект', l: 'линия' };
@@ -207,6 +210,7 @@ function build() {
         const g = geom(pd); g.computeBoundingBox(); box.union(g.boundingBox);
         const m = new THREE.Mesh(g, materialFor(pd.m)); m.userData.idx = i; grp.add(m); meshes.push(m); picks.push(m);
         const ln = new THREE.LineSegments(new THREE.EdgesGeometry(g, 25), EDGE); grp.add(ln); edges.push(ln);
+        const lh = new THREE.LineSegments(ln.geometry, EDGE_HID); lh.visible = false; lh.renderOrder = 1; grp.add(lh); hidEdges.push(lh);
       }
     }
     root.add(grp);
@@ -375,13 +379,12 @@ function updCube(r, u, b) {
   $('vaxes').innerHTML = s;
 }
 function freeRect() {
-  const t = $('tree'), bar = $('bar');
+  const t = $('tree');
   const open = t && !t.classList.contains('hidden');
-  // на телефоне строка кнопок лежит поверх модели и прячется сама — модель под неё не сдвигаем
-  const y1 = innerHeight - (bar && !TOUCH ? bar.offsetHeight : 0);
+  // значки наверху лежат поверх модели маленькой строкой — модель под них не сдвигаем
   // структура слева; на телефоне она прозрачная и модель под ней не двигаем (иначе модель уезжает за край)
   const x0 = open && !TOUCH ? t.offsetWidth : 0;
-  return { x0, x1: innerWidth, y0: 0, y1 };
+  return { x0, x1: innerWidth, y0: 0, y1: innerHeight };
 }
 // «нажата» — только пометка on; остальные пометки кнопки (например «прятать в ⋯») не трогаем
 const setOn = (id, v) => $(id).classList.toggle('on', !!v);
@@ -1045,7 +1048,7 @@ function showPending(hover) {
 }
 function clearDims() { while (dims.length) removeDim(dims[0]); rp = []; showPending(); }
 function stopRuler() {
-  ruler = false; rp = []; placing = null; clearFace1(); faceHoverEnd(); clearEdge1(); edgeHoverEnd(); showPending(); hideHover(); armBarHide(); syncTools();
+  ruler = false; rp = []; placing = null; clearFace1(); faceHoverEnd(); clearEdge1(); edgeHoverEnd(); showPending(); hideHover(); syncTools();
   cv.style.cursor = '';
   setOn('bRuler', false); $('st').textContent = ''; need();
 }
@@ -1150,16 +1153,16 @@ function aimAt(x, y) {
   lctx.beginPath(); lctx.moveTo(mx - 14, my); lctx.lineTo(mx + 14, my); lctx.moveTo(mx, my - 14); lctx.lineTo(mx, my + 14); lctx.stroke();
   lctx.restore();
   lctx.strokeStyle = '#2b2f36'; lctx.lineWidth = 3; lctx.beginPath(); lctx.arc(S / 2, S / 2, S / 2 - 2, 0, Math.PI * 2); lctx.stroke();
-  // лупа всегда в верхнем левом углу; палец зашёл в этот угол — перескакивает в верхний правый
+  // лупа вверху слева, под строкой значков; палец зашёл в этот угол — перескакивает вправо
   // (над пальцем у верхнего края экрана она пряталась под палец — замечание 27.09)
-  const L = 120, G = 10, sf = safe(), zone = L + 2 * G + 40;
-  const right = x < zone + sf.l && y < zone + sf.t;
+  const L = 120, G = 10, sf = safe(), top = barBottom() + G, zone = L + 2 * G + 40;
+  const right = x < zone + sf.l && y < top + zone;
   loupe.style.display = 'block';
-  loupe.style.left = (right ? innerWidth - L - G - sf.r - barSideW() : G + sf.l) + 'px';
-  loupe.style.top = (G + sf.t) + 'px';
+  loupe.style.left = (right ? innerWidth - L - G - sf.r : G + sf.l) + 'px';
+  loupe.style.top = top + 'px';
 }
-// ширина строки кнопок, когда она стоит справа (телефон лёжа)
-function barSideW() { const b = $('bar'); return TOUCH && isLand() && !b.classList.contains('closed') ? b.offsetWidth : 0; }
+// нижний край строки значков наверху — под ним начинаются структура, карточка, лупа
+function barBottom() { return $('bar').getBoundingClientRect().bottom; }
 function isLand() { return innerWidth > innerHeight; }
 // отпустили палец: точка ставится; не поставилась — сказать почему (замечание 27.09: «ставятся не всегда»)
 function aimEnd(place, cancelled) {
@@ -1313,11 +1316,15 @@ function mode(m) {
   curMode = m;
   for (const p of parts) for (const x of p.meshes) {
     const mt = x.material, b = mt.userData.base || mt;   // стекло остаётся прозрачным и в обычном режиме
-    mt.visible = m !== 3;
-    mt.transparent = m === 2 || b.transparent;
+    // «линии»: детали не рисуются, но закрывают собой то, что за ними (для светлых скрытых линий);
+    // чуть отодвинуты вглубь, чтобы рёбра на их же поверхности считались видимыми
+    mt.colorWrite = m !== 3;
+    mt.polygonOffset = m === 3; mt.polygonOffsetFactor = 1; mt.polygonOffsetUnits = 1;
+    mt.transparent = m === 2 || (m !== 3 && b.transparent);
     mt.opacity = m === 2 ? Math.min(0.32, b.opacity) : b.opacity;
-    mt.depthWrite = m !== 2 && b.depthWrite; mt.needsUpdate = true;
+    mt.depthWrite = m === 3 || (m !== 2 && b.depthWrite); mt.needsUpdate = true;
   }
+  for (const l of hidEdges) l.visible = m === 3;
   setIcon('bMode', ['solid', 'ghost', 'wire'][m - 1]);
   need();
 }
@@ -1341,12 +1348,9 @@ function openPop(btn, items) {
   }
   p.style.display = 'flex';
   const r = btn.getBoundingClientRect(), w = p.offsetWidth, h = p.offsetHeight;
-  let x, y;
-  if (TOUCH && isLand()) { x = r.left - w - 8; y = r.top + r.height / 2 - h / 2; }   // строка кнопок справа
-  else { x = r.left + r.width / 2 - w / 2; y = r.top - h - 8; }                      // строка внизу
-  p.style.left = Math.max(6, Math.min(innerWidth - w - 6, x)) + 'px';
-  p.style.top = Math.max(6, Math.min(innerHeight - h - 6, y)) + 'px';
-  armBarHide();
+  // значки наверху — окошко под своей кнопкой
+  p.style.left = Math.max(6, Math.min(innerWidth - w - 6, r.left)) + 'px';
+  p.style.top = Math.max(6, Math.min(innerHeight - h - 6, r.bottom + 6)) + 'px';
 }
 function closePop() { popFor = null; const p = $('pop'); if (p) p.style.display = 'none'; }
 function modeItems() {
@@ -1387,8 +1391,7 @@ function placeTab() {
   tab.innerHTML = ICON.tree + '<b>' + (open ? '‹' : '›') + '</b>';
   tab.classList.toggle('open', open);
   tab.style.left = (open ? t.offsetWidth : s.l) + 'px';
-  const bottom = !TOUCH ? $('bar').offsetHeight : 0;
-  tab.style.top = Math.round((innerHeight - bottom) / 2 - tab.offsetHeight / 2) + 'px';
+  tab.style.top = Math.round((barBottom() + innerHeight) / 2 - tab.offsetHeight / 2) + 'px';   // середина места под значками
 }
 function wireTab() {
   const tab = $('ttab'), t = $('tree');
@@ -1432,8 +1435,7 @@ function tip(b) {
   let el = $('tip'); if (!el) { el = document.createElement('div'); el.id = 'tip'; document.body.appendChild(el); }
   el.textContent = b.title; el.style.display = 'block';
   const r = b.getBoundingClientRect(), w = el.offsetWidth, h = el.offsetHeight;
-  let x = r.left + r.width / 2 - w / 2, y = r.top - h - 8;
-  if (isLand() && TOUCH) { x = r.left - w - 8; y = r.top + r.height / 2 - h / 2; }
+  const x = r.left + r.width / 2 - w / 2, y = r.bottom + 8;   // значки наверху — подпись под кнопкой
   el.style.left = Math.max(6, Math.min(innerWidth - w - 6, x)) + 'px'; el.style.top = Math.max(6, y) + 'px';
   clearTimeout(tip.t); tip.t = setTimeout(() => { el.style.display = 'none'; }, 1600);
 }
@@ -1468,43 +1470,23 @@ function wire() {
   $('bShowAll').onclick = showAll;
 }
 
-// ---------------- телефон: шторки ----------------
-// Строка кнопок: стоя — внизу, лёжа — столбиком справа. Два положения: спрятана (виден только язычок ☰)
-// или показана. Язычок: коснуться — спрятать/показать. Сама прячется через 6 с без касаний (в рулетке — нет:
-// там подсказки внизу). Структура — слева, текстом на прозрачном фоне, открывается своим язычком.
-let barHideT = null;
-function barState() { return $('bar').classList.contains('closed') ? 0 : 1; }
-function setBar(n) {
-  const b = $('bar');
-  b.classList.toggle('closed', n === 0);
-  if (n === 0) closePop();
-  layout(); armBarHide();
-}
-function armBarHide() {
-  clearTimeout(barHideT);
-  if (!TOUCH) return;
-  barHideT = setTimeout(() => { if (!ruler && barState() !== 0) setBar(0); }, 6000);
-}
+// ---------------- раскладка экрана ----------------
+// Значки — всегда видны, строкой вверху слева (замечание 29.09: прячущаяся нижняя строка с язычком ☰ убрана).
+// Справа вверху — кубик. Под строкой значков начинаются структура и карточка.
 function layout() {
-  if (!TOUCH) { placeTools(); placeTab(); place(); return; }
-  const b = $('bar'), g = $('bgrip'), t = $('tree'), land = isLand(), shut = barState() === 0;
+  const b = $('bar'), t = $('tree'), land = isLand(), s = safe(), cw = $('vcube').offsetWidth;
   document.documentElement.classList.toggle('land', land);
-  const r = b.getBoundingClientRect(), s = safe();
-  // спрятанная строка: язычок у края экрана, но не в вырезе камеры (у открытой строки отступ уже внутри неё)
-  if (land) {
-    const w = shut ? s.r : r.width;
-    g.style.left = ''; g.style.bottom = ''; g.style.right = w + 'px'; g.style.top = (innerHeight / 2 - 28) + 'px';
-    t.style.bottom = '0px';
-  } else {
-    const h = shut ? s.b : r.height;
-    g.style.top = ''; g.style.right = ''; g.style.left = (innerWidth / 2 - 28) + 'px'; g.style.bottom = h + 'px';
-    t.style.bottom = h + 'px';
+  b.style.top = (6 + s.t) + 'px'; b.style.left = (6 + s.l) + 'px';
+  b.style.maxWidth = Math.max(120, innerWidth - 18 - s.l - s.r - cw) + 'px';   // не заходить на кубик
+  const bb = barBottom();
+  t.style.top = (bb + 6) + 'px';
+  const c = $('card'); c.style.top = (bb + 6) + 'px';
+  if (TOUCH) {
+    c.style.left = (10 + s.l) + 'px'; c.style.right = (16 + s.r + cw) + 'px';
+    let tw = 0; try { tw = +localStorage.getItem('viewerTreeW' + (land ? 'L' : 'P')) || 0; } catch (e) {}
+    t.style.width = Math.round((tw || (land ? 0.4 : 0.62)) * innerWidth) + 'px';
   }
-  const c = $('card'); c.style.top = (10 + s.t) + 'px'; c.style.left = (10 + s.l) + 'px';
-  c.style.right = (16 + s.r + barSideW() + $('vcube').offsetWidth) + 'px';   // не заходить на кубик
   placeTools();
-  let tw = 0; try { tw = +localStorage.getItem('viewerTreeW' + (land ? 'L' : 'P')) || 0; } catch (e) {}
-  t.style.width = Math.round((tw || (land ? 0.4 : 0.62)) * innerWidth) + 'px';
   placeTab();
   place();
 }
@@ -1530,10 +1512,10 @@ function syncTools() {
 }
 // кубик видов — справа вверху; значки включённого — столбиком под ним
 function placeTools() {
-  const box = $('tools'), c = $('vcube'), s = safe(), right = (6 + s.r + barSideW()) + 'px';
-  c.style.top = (6 + s.t) + 'px'; c.style.right = right;
+  const box = $('tools'), c = $('vcube'), s = safe();
+  c.style.top = (6 + s.t) + 'px'; c.style.right = (6 + s.r) + 'px';
   box.style.top = (6 + s.t + c.offsetHeight + 4) + 'px';
-  box.style.right = (6 + s.r + barSideW() + (c.offsetWidth - 46) / 2) + 'px';
+  box.style.right = (6 + s.r + (c.offsetWidth - 46) / 2) + 'px';
 }
 // отступы под вырез камеры и полоску «домой» (у айфона — env(safe-area-inset-*), у остальных нули)
 function safe() {
@@ -1546,23 +1528,9 @@ function safe() {
   const c = getComputedStyle(p);
   return { t: parseFloat(c.paddingTop) || 0, r: parseFloat(c.paddingRight) || 0, b: parseFloat(c.paddingBottom) || 0, l: parseFloat(c.paddingLeft) || 0 };
 }
-function wireTouch() {
-  if (!TOUCH) return;
-  const g = $('bgrip');
-  let st = null;
-  g.addEventListener('pointerdown', e => { e.preventDefault(); try { g.setPointerCapture(e.pointerId); } catch (er) {} st = { x: e.clientX, y: e.clientY }; });
-  g.addEventListener('pointerup', e => {
-    if (!st) return;
-    const d = isLand() ? st.x - e.clientX : st.y - e.clientY; st = null;   // к середине экрана — плюс
-    const n = barState();
-    if (Math.abs(d) < 12) setBar(n === 0 ? 1 : 0);
-    else setBar(d > 0 ? 1 : 0);
-  });
-  g.addEventListener('pointercancel', () => { st = null; });
-  $('bar').addEventListener('pointerdown', armBarHide);
-  // строка кнопок меняет высоту (подсказка рулетки, «показать всё») — язычок и структура следуют за ней
+function wireLayout() {
+  // строка значков меняет высоту (подсказка рулетки, «показать всё») — структура и карточка следуют за ней
   if (window.ResizeObserver) new ResizeObserver(() => layout()).observe($('bar'));
-  armBarHide();
 }
 
 // ---------------- запуск ----------------
@@ -1584,7 +1552,7 @@ function loop() {
 }
 fetch('./model.json').then(r => { if (!r.ok) throw new Error('файл модели не найден (' + r.status + ')'); return r.json(); })
   .then(data => {
-    M = data; build(); initLevels(); wire(); wireTouch(); applyVis(); layout(); fitVisible();
+    M = data; build(); initLevels(); wire(); wireLayout(); applyVis(); layout(); fitVisible();
     window.__viewer = { parts, animNode, M, dims, addDim, dragDim, THREE, snapAt, pointVisible, picks, get cam() { return cam; }, get placing() { return placing; }, get rp() { return rp; } };   // для проверки из консоли
     $('load').remove(); loop();
   })

@@ -37,12 +37,15 @@ button.on { background: var(--accent); color: #fff; border-color: var(--accent);
 #pop .psep { height: 1px; background: var(--line); margin: 2px 0; }
 .touch #pop button { padding: 8px 14px 8px 8px; }
 
-#bar { position: fixed; left: 0; right: 0; bottom: 0; padding: 7px 10px; background: var(--panel); z-index: 5;
-  display: flex; gap: 6px; align-items: center; flex-wrap: wrap; box-shadow: 0 -1px 6px rgba(0,0,0,.08); }
-#st { color: var(--muted); margin-left: 6px; }
+/* значки — строкой вверху слева, всегда видны, без подложки на всю ширину (замечание 29.09) */
+#bar { position: fixed; top: 6px; left: 6px; z-index: 9; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+#bar button { background: rgba(255,255,255,.92); box-shadow: 0 1px 4px rgba(0,0,0,.14); }
+#bar button.on { background: var(--accent); }
+#st { flex-basis: 100%; color: var(--text); background: rgba(255,255,255,.85); border-radius: 7px; padding: 4px 8px; }
+#st:empty { display: none; }
 
 /* структура — текстом на прозрачном фоне, модель под ней видна (замечание 27.09, как в веб-просмотре Базиса) */
-#tree { position: fixed; left: 0; top: 0; bottom: 46px; width: 330px; background: rgba(255,255,255,.22); z-index: 6;
+#tree { position: fixed; left: 0; top: 50px; bottom: 0; width: 330px; background: rgba(255,255,255,.22); z-index: 6;
   border-right: 1px solid rgba(0,0,0,.08); display: flex; flex-direction: column; }
 #tree .body .tr { text-shadow: 0 0 2px #fff, 0 0 3px #fff, 0 0 6px #fff; }
 #tree .head { background: rgba(255,255,255,.6); }
@@ -79,7 +82,7 @@ button.on { background: var(--accent); color: #fff; border-color: var(--accent);
 #rlabel { position: fixed; z-index: 4; background: #fff; border: 1px solid #d94f2b; color: #b23a1c; border-radius: 5px;
   padding: 2px 6px; font-size: 12px; pointer-events: none; display: none; transform: translate(-50%, -130%); white-space: nowrap; }
 #load { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 15px; }
-#stamp { position: fixed; right: 12px; bottom: 52px; color: #9aa4ae; font-size: 11px; z-index: 4; pointer-events: none; }
+#stamp { position: fixed; right: 12px; bottom: 8px; color: #9aa4ae; font-size: 11px; z-index: 4; pointer-events: none; }
 
 #hint { display: none; position: fixed; inset: 0; z-index: 20; background: rgba(20,28,38,.72); color: #fff;
   flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 24px; text-align: center; font-size: 16px; }
@@ -107,11 +110,10 @@ button.on { background: var(--accent); color: #fff; border-color: var(--accent);
 /* ---------- телефон / планшет ---------- */
 .touch body { font-size: 15px; }
 .touch button { padding: 9px 13px; border-radius: 9px; }
-.touch #bar { padding: 8px 8px calc(8px + env(safe-area-inset-bottom)); gap: 7px; justify-content: center; }
-.touch #st { width: 100%; margin: 0; font-size: 13px; }
-.touch #st:empty { display: none; }
+.touch #bar { gap: 7px; }
+.touch #st { font-size: 13px; }
 .touch #stamp { display: none; }
-.touch #tree { top: 0; left: 0; bottom: 0; z-index: 8; padding-left: env(safe-area-inset-left); padding-top: env(safe-area-inset-top); }
+.touch #tree { left: 0; bottom: 0; z-index: 8; padding-left: env(safe-area-inset-left); }
 /* значки включённого: нажал — выключил; под рулеткой — выбор способа (грани / точки) */
 #tools { display: flex; flex-direction: column; align-items: center; gap: 8px; position: fixed; z-index: 9; top: 12px; right: 12px; }
 #tools button { width: 40px; height: 40px; padding: 0; border-radius: 50%; display: flex; align-items: center; justify-content: center;
@@ -127,17 +129,6 @@ button.on { background: var(--accent); color: #fff; border-color: var(--accent);
 #toast { position: fixed; left: 50%; top: 18%; transform: translateX(-50%); z-index: 20; max-width: 80vw; display: none;
   background: rgba(43,47,54,.9); color: #fff; padding: 9px 14px; border-radius: 10px; font-size: 14px; text-align: center; pointer-events: none; }
 #toast.show { display: block; }
-/* язычок строки кнопок */
-#bgrip { display: none; }
-.touch #bgrip { display: flex; position: fixed; z-index: 9; width: 56px; height: 26px; align-items: center; justify-content: center;
-  background: rgba(43,47,54,.55); color: #fff; font-size: 15px; border-radius: 10px 10px 0 0; touch-action: none; }
-.touch.land #bgrip { width: 26px; height: 56px; border-radius: 10px 0 0 10px; }
-.touch #bar.closed { display: none; }
-/* лёжа — кнопки столбиком справа, ширину экрана не отнимаем */
-.touch.land #bar { left: auto; top: 0; right: 0; bottom: 0; flex-direction: column; flex-wrap: nowrap; align-items: stretch;
-  overflow-y: auto; padding: 8px calc(8px + env(safe-area-inset-right)) 8px 8px; gap: 6px; box-shadow: -1px 0 6px rgba(0,0,0,.08); }
-.touch.land #bar button { padding: 7px 10px; }
-.touch.land #st { width: 130px; white-space: normal; }
 .touch #tree .head { padding: 6px; gap: 5px; }
 .touch #tree .head .row { gap: 4px; }
 .touch #tree .head button { padding: 5px 8px; font-size: 13px; }
