@@ -919,31 +919,143 @@ function geomBox(i) {
   for (const m of parts[i].meshes) { const g = m.geometry; if (!g.boundingBox) g.computeBoundingBox(); b.union(g.boundingBox); }
   return b;
 }
-// ячейка в свету от точки p на грани с нормалью n (n смотрит в ячейку); i — щёлкнутая деталь
-// Ширина — горизонталь поперёк взгляда, глубина — горизонталь вдоль взгляда (замечание 29.09: нужна и глубина).
-// Спереди у глубины часто пусто (фасады спрятаны, ячейка открытая) — тогда до переднего края щёлкнутой детали.
-function easyCell(p, n, i) {
-  const k = mainAxis(n), o = p.clone().addScaledVector(AX[k], Math.sign(n[k]));
-  const d = cam.getWorldDirection(new THREE.Vector3());
-  const dAx = Math.abs(d.x) >= Math.abs(d.z) ? 'x' : 'z', wAx = dAx === 'x' ? 'z' : 'x';
-  const pb = i >= 0 ? geomBox(i).applyMatrix4(parts[i].g.matrixWorld) : null;
-  const edgeOf = (ax, s) => { if (!pb) return null; const q = o.clone(); q[ax] = s > 0 ? pb.max[ax] : pb.min[ax]; return q; };
-  const pair = (ax, label, fill) => {
-    let a = rayHit(o, AX[ax].clone().negate()), b = rayHit(o, AX[ax]);
-    if (fill) { if (!a && b) a = edgeOf(ax, -1); else if (a && !b) b = edgeOf(ax, 1); }
-    if (a && b) easyDim(a, b, label);
-    return !!(a && b);
-  };
-  const one = (ax, label) => {   // от щёлкнутой грани до следующей детали
-    const b = rayHit(o, AX[ax].clone().multiplyScalar(Math.sign(n[ax])));
-    if (b) easyDim(p.clone(), b, label);
-    return !!b;
-  };
-  let any = false;
-  any = (k === 'y' ? one('y', 'висота') : pair('y', 'висота')) | any;
-  any = (k === wAx ? one(wAx, 'ширина') : pair(wAx, 'ширина')) | any;
-  any = (k === dAx ? one(dAx, 'глибина') : pair(dAx, 'глибина', true)) | any;
-  if (!any) toast('тут немає комірки: промені нікуди не вперлися');
+// ---------------- ячейка: коробка из стенок вокруг щелчка (29.09, вместо лучей из одной точки) ----------------
+// Всё считается в координатах модели при закрытых дверях и ящиках. Направления берутся от щёлкнутой детали,
+// не от камеры: у полки длинная горизонталь — ширина, короткая — глубина; у стенки — по соседям.
+// Стенки ячейки — неподвижные панели (двери не в счёт). Внутри ячейки ищутся препятствия — всё, что стоит в ней
+// (брючница, корзина, ящик, вешалка — по форме, не по названию); крепёж, петли, полкодержатели не в счёт.
+// Штанга (тип «труба») — отдельно: до верха штанги и от штанги до полки над ней.
+let BOX = null;
+function boxOf(j) {   // в координатах модели, закрытое положение; у фурнитуры форма стоит через свою матрицу
+  if (!BOX) BOX = [];
+  if (BOX[j]) return BOX[j];
+  const b = new THREE.Box3(), pr = parts[j];
+  for (const m of pr.meshes) {
+    const g = m.geometry; if (!g.boundingBox) g.computeBoundingBox();
+    const bb = g.boundingBox.clone(); if (m.parent !== pr.g) bb.applyMatrix4(m.parent.matrix);
+    b.union(bb);
+  }
+  return (BOX[j] = b);
+}
+const toModel = p => root.worldToLocal(p.clone()), toWorld = p => root.localToWorld(p.clone());
+function chainFt(j) { return M.nft ? parts[j].h.map(id => M.nft[id] || '') : []; }
+const SMALL_RX = /петл|стяжк|полкодерж|заглушк|саморез|конфирмат|эксцентр|минификс|шкант|шуруп|ламел|демпф|tip-on|ручк/i;
+function isHardwareSmall(j) {
+  const ft = chainFt(j);
+  if (ft.includes('Петля') || ft.includes('стяжки межсекционные')) return true;
+  if (SMALL_RX.test(parts[j].n)) return true;
+  const s = boxOf(j).getSize(new THREE.Vector3());
+  return Math.max(s.x, s.y, s.z) < 60;
+}
+function isTube(j) { const ft = chainFt(j); return ft.includes('труба') || (!M.nft && /труба|штанг/i.test(parts[j].n)); }
+const isWall = j => { const p = parts[j]; return p.kind === 'p' && !p.chainA.length && !p.isDoor && !p.isL; };
+// ближайшая стенка от точки P по оси ax в сторону s (±1): её плоскость должна перекрывать P по двум другим осям
+function wallBound(P, ax, s, skip) {
+  const [o1, o2] = ['x', 'y', 'z'].filter(k => k !== ax);
+  let best = null, bj = -1;
+  parts.forEach((p, j) => {
+    if (!isWall(j) || (skip && skip.has(j))) return;
+    const b = boxOf(j);
+    if (P[o1] < b.min[o1] - 0.5 || P[o1] > b.max[o1] + 0.5 || P[o2] < b.min[o2] - 0.5 || P[o2] > b.max[o2] + 0.5) return;
+    const f = s > 0 ? b.min[ax] : b.max[ax];
+    if (s * (f - P[ax]) < -0.5) return;
+    if (best === null || s * (f - best) < 0) { best = f; bj = j; }
+  });
+  return best === null ? null : { v: best, j: bj };
+}
+function easyCell(pW, n, i) {
+  const P = toModel(pW), k = mainAxis(n), sn = Math.sign(n[k]) || 1, cb = boxOf(i), cs = cb.getSize(new THREE.Vector3());
+  const P0 = P.clone(); P0[k] += sn * 1;
+  let wAx, dAx;
+  if (k === 'y') {
+    // полка: ширина — где стенки с обеих сторон вплотную к полке, глубина — где стенка только одна (задняя);
+    // «длинная сторона = ширина» ошибалась у узкого глубокого шкафа (Шкаф 7: полка 464×537, 29.09)
+    const both = a => {
+      const lo = wallBound(P0, a, -1, new Set([i])), hi = wallBound(P0, a, 1, new Set([i]));
+      return !!(lo && hi && cb.min[a] - lo.v < 40 && hi.v - cb.max[a] < 40);
+    };
+    const bx = both('x'), bz = both('z');
+    wAx = bx && !bz ? 'x' : bz && !bx ? 'z' : (cs.x >= cs.z ? 'x' : 'z');
+    dAx = wAx === 'x' ? 'z' : 'x';
+  }
+  else {
+    // вертикальная стенка: напротив (по нормали) есть параллельная стенка — это боковина, иначе — задняя стенка
+    const opp = wallBound(P0, k, sn, new Set([i]));
+    const h2 = k === 'x' ? 'z' : 'x';
+    if (opp && Math.abs(opp.v - P0[k]) < 2500) { wAx = k; dAx = h2; } else { dAx = k; wAx = h2; }
+  }
+  // высота и ширина — до стенок
+  const skipMe = new Set([i]);
+  const yLo = k === 'y' && sn > 0 ? { v: P[k], j: i } : wallBound(P0, 'y', -1, skipMe);
+  const yHi = k === 'y' && sn < 0 ? { v: P[k], j: i } : wallBound(P0, 'y', 1, skipMe);
+  const wLo = k === wAx && sn > 0 ? { v: P[k], j: i } : wallBound(P0, wAx, -1, skipMe);
+  const wHi = k === wAx && sn < 0 ? { v: P[k], j: i } : wallBound(P0, wAx, 1, skipMe);
+  if (!yLo || !wLo || !wHi) { toast('тут немає комірки: не знайшов стінок навколо'); return; }
+  // глубина: вдоль боковин (или щёлкнутой детали); задняя стенка — внутри этого отрезка, перед — открытый край
+  const sides = [wLo.j, wHi.j].map(j => boxOf(j));
+  let dMin = Math.max(sides[0].min[dAx], sides[1].min[dAx]), dMax = Math.min(sides[0].max[dAx], sides[1].max[dAx]);
+  if (!(dMax - dMin > 50)) { dMin = cb.min[dAx]; dMax = cb.max[dAx]; }
+  const Pm = P0.clone(); Pm[dAx] = (dMin + dMax) / 2;
+  const bLo = wallBound(Pm, dAx, -1, skipMe), bHi = wallBound(Pm, dAx, 1, skipMe);
+  const inLo = bLo && bLo.v >= dMin - 1, inHi = bHi && bHi.v <= dMax + 1;
+  let back, front, fs;
+  if (k === dAx) { back = P[k]; fs = sn; front = sn > 0 ? dMax : dMin; }
+  else if (inLo && !inHi) { back = bLo.v; front = dMax; fs = 1; }
+  else if (inHi && !inLo) { back = bHi.v; front = dMin; fs = -1; }
+  else { // обе или ни одной — задняя та, что ближе к краю отрезка
+    const lo = inLo ? bLo.v : dMin, hi = inHi ? bHi.v : dMax;
+    if (Math.abs(lo - dMin) <= Math.abs(dMax - hi)) { back = lo; front = dMax; fs = 1; } else { back = hi; front = dMin; fs = -1; }
+  }
+  const y0 = yLo.v, y1 = yHi ? yHi.v : null, w0 = wLo.v, w1 = wHi.v;
+  const d0 = Math.min(back, front), d1 = Math.max(back, front);
+  // препятствия внутри ячейки (при закрытых ящиках): всё, что не стенка, не дверь, не мелкий крепёж
+  const C = { min: { y: y0 + 2, [wAx]: w0 + 2, [dAx]: d0 + 2 }, max: { y: (y1 ?? y0 + 3000) - 2, [wAx]: w1 - 2, [dAx]: d1 - 2 } };
+  const inside = [];
+  parts.forEach((p, j) => {
+    if (j === i || isWall(j) || p.isDoor || p.isL || isHardwareSmall(j)) return;
+    const b = boxOf(j);
+    if (b.max.y <= C.min.y || b.min.y >= C.max.y || b.max[wAx] <= C.min[wAx] || b.min[wAx] >= C.max[wAx] || b.max[dAx] <= C.min[dAx] || b.min[dAx] >= C.max[dAx]) return;
+    inside.push({ j, b });
+  });
+  // что стоит на дне (зазор до 50 мм — ящик на направляющих, корзина) — занятое место: высоту мерим от его верха
+  let base = y0;
+  for (let grow = true; grow;) {   // стопка ящиков: поднимаемся, пока следующий стоит вплотную к предыдущему
+    grow = false;
+    for (const o of inside) if (!isTube(o.j) && o.b.min.y <= base + 50 && o.b.max.y > base + 0.5) { base = o.b.max.y; grow = true; }
+  }
+  let obst = null, tube = null;
+  for (const o of inside) {
+    if (o.b.min.y <= base + 5) continue;
+    if (isTube(o.j)) { if (!tube || o.b.min.y < tube.min.y) tube = o.b; continue; }
+    if (!obst || o.b.min.y < obst.min.y) obst = o.b;
+  }
+  const H = (y1 ?? y0 + 1000) - y0, W = w1 - w0;
+  const pt = (w, y, d) => { const q = { y }; q[wAx] = w; q[dAx] = d; return toWorld(vec(q)); };
+  const dF = front - fs * 30;                                  // линии — у переднего края, внутри
+  const topY = obst && (!tube || obst.min.y < tube.min.y) ? obst.min.y : y1;
+  easyDim(pt(w0, y0 + Math.min(0.25 * H, 250), dF), pt(w1, y0 + Math.min(0.25 * H, 250), dF), 'ширина');
+  easyDim(pt(w0 + 0.5 * W, y0 + 0.12 * H, back), pt(w0 + 0.5 * W, y0 + 0.12 * H, front), 'глибина');
+  if (tube && (!obst || tube.min.y < obst.min.y)) {
+    const wt = w0 + 0.3 * W;
+    easyDim(pt(wt, base, dF), pt(wt, tube.max.y, dF), 'до штанги');
+    const above = obst && obst.min.y > tube.max.y ? obst.min.y : y1;
+    if (above != null) easyDim(pt(wt, tube.max.y, dF), pt(wt, above, dF), 'над штангою');
+  } else if (topY != null) {
+    // над тем, что стоит на дне, почти пусто (ящик под полкой) — показываем нишу целиком, от дна
+    const from = topY - base < 50 ? y0 : base;
+    easyDim(pt(w0 + 0.15 * W, from, dF), pt(w0 + 0.15 * W, topY, dF), 'висота');
+  }
+}
+// щелчок по самой штанге: до штанги (от полки/дна под ней) и от штанги до полки над ней
+function tubeDims(i) {
+  const b = boxOf(i), c = b.getCenter(new THREE.Vector3());
+  const lo = wallBound(new THREE.Vector3(c.x, b.min.y - 1, c.z), 'y', -1), hi = wallBound(new THREE.Vector3(c.x, b.max.y + 1, c.z), 'y', 1);
+  const s = b.getSize(new THREE.Vector3()), along = s.x >= s.z ? 'x' : 'z';
+  const q = c.clone(); q[along] = b.min[along] + 0.3 * s[along];
+  const at = y => toWorld(new THREE.Vector3(q.x, y, q.z));
+  if (lo) easyDim(at(lo.v), at(b.max.y), 'до штанги');
+  if (hi) easyDim(at(b.max.y), at(hi.v), 'над штангою');
+  if (!lo && !hi) showPartDims(i);
 }
 // части подвижной системы (ящик + его направляющие) — как при открывании касанием
 function scopeOf(i) {
@@ -955,16 +1067,21 @@ function scopeOf(i) {
 // ящик: всё считается в закрытом положении (в координатах модели), показывается на открытом
 function drawerDims(i) {
   const top = parts[i].chainA[0], nd = animNode[top];
-  const own = partsUnder(top).filter(j => !parts[j].isF && !parts[j].isL && !parts[j].isB);
+  // детали фасада ящика (блоки типа «фасад»/«фронт», метка двери) в коробку не берём: кромка рамочного фасада
+  // оказывалась «самой нижней плоской» и считалась дном — «корисна висота 12» (050_8, 29.09)
+  const inFac = j => parts[j].isDoor || chainFt(j).some(t => t === 'фасад' || t === 'фронт');
+  const all = partsUnder(top).filter(j => !parts[j].isF && !parts[j].isL && !parts[j].isB);
+  const own = all.filter(j => !inFac(j));
   if (own.length < 3) return null;
   const v = nd.a.clone().multiplyScalar(Math.sign(nd.d) || 1);          // куда выезжает
   const kD = Math.abs(v.x) >= Math.abs(v.z) ? 'x' : 'z', kW = kD === 'x' ? 'z' : 'x', s = Math.sign(v[kD]) || 1;
   const bx = own.map(j => ({ j, b: geomBox(j) }));
   bx.forEach(o => { o.s = o.b.getSize(new THREE.Vector3()); o.u0 = Math.min(s * o.b.min[kD], s * o.b.max[kD]); o.u1 = Math.max(s * o.b.min[kD], s * o.b.max[kD]); });
-  const fac = bx.reduce((p, q) => q.u1 > p.u1 ? q : p);                  // фасад — самый передний
+  const fac = bx.reduce((p, q) => q.u1 > p.u1 ? q : p);                  // самая передняя деталь коробки
   const rest = bx.filter(o => o !== fac);
   const thin = (o, k) => o.s[k] <= Math.min(o.s.x, o.s.y, o.s.z) + 0.01;
-  const bottoms = rest.filter(o => thin(o, 'y')).sort((p, q) => p.b.min.y - q.b.min.y);
+  // дно — самая большая горизонтальная панель, а не самая нижняя
+  const bottoms = rest.filter(o => thin(o, 'y')).sort((p, q) => q.s.x * q.s.z - p.s.x * p.s.z);
   const sides = rest.filter(o => thin(o, kW)).sort((p, q) => (p.b.min[kW] + p.b.max[kW]) - (q.b.min[kW] + q.b.max[kW]));
   const walls = rest.filter(o => thin(o, kD)).sort((p, q) => (p.u0 + p.u1) - (q.u0 + q.u1));
   if (!bottoms.length || sides.length < 2 || !walls.length) return null;
@@ -973,8 +1090,7 @@ function drawerDims(i) {
   const uB = walls[0].u1, uF = walls.length > 1 ? walls[walls.length - 1].u0 : fac.u0;
   // что нависает над ящиком (над его коробкой с фасадом), в закрытом положении; свою систему не считаем
   const mine = new Set(partsUnder(scopeOf(i)));
-  const fp = new THREE.Box3(); for (const o of bx) fp.union(o.b);
-  let yTop = Infinity;
+  const fp = new THREE.Box3(); for (const o of bx) fp.union(o.b);  let yTop = Infinity;
   parts.forEach((pr, j) => {
     if (mine.has(j) || pr.isL || !pr.g.visible) return;
     const b = geomBox(j);
@@ -987,7 +1103,8 @@ function drawerDims(i) {
     [P(Math.min(w0, w1), uf, ym), P(Math.max(w0, w1), uf, ym), 'ширина', null],
     [P(wm, uB, ym), P(wm, uF, ym), 'глибина', null],
   ];
-  if (isFinite(yTop)) out.push([P(wm, ub, y0), P(wm, ub, yTop), 'корисна висота', String(Math.round(yTop - y0 - 6))]);
+  // полезная высота = до того, что над ящиком, минус 6 мм; линия — ровно под число (замечание 29.09)
+  if (isFinite(yTop)) out.push([P(wm, ub, y0), P(wm, ub, yTop - 6), 'корисна висота', String(Math.round(yTop - y0 - 6))]);
   return { g: parts[bot.j].g, out };
 }
 function easyMoving(i, cx, cy) {
@@ -1012,6 +1129,7 @@ function easyStatic(h) {
   const i = h.object.userData.idx, pr = parts[i];
   const n = h.face.normal.clone().applyMatrix3(new THREE.Matrix3().getNormalMatrix(h.object.matrixWorld)).normalize();
   const k = mainAxis(n), s = geomBox(i).getSize(new THREE.Vector3());
+  if (isTube(i)) { tubeDims(i); return; }
   // кромка: грань смотрит вдоль большого размера детали (не вдоль толщины) — размеры детали
   if (pr.isF || pr.isB || s[k] > Math.min(s.x, s.y, s.z) + 0.01) { showPartDims(i); return; }
   easyCell(h.point, n, i);
@@ -1180,6 +1298,21 @@ function updRuler() {
     dm.el.style.display = vis && dimsShown ? 'block' : 'none';
     dm.el.style.left = x + 'px';
     dm.el.style.top = y + 'px';
+    dm._x = x; dm._y = y; dm._vis = vis && dimsShown;
+  }
+  // подписи не ложатся друг на друга: наехавшую сдвигаем вниз, пока не освободится место (ТЗ 3.5, замечание 29.09)
+  const placed = [];
+  for (const dm of dims) {
+    if (!dm._vis) continue;
+    const w = dm.el.offsetWidth, h = dm.el.offsetHeight;
+    let y = dm._y;
+    for (let t = 0; t < 8; t++) {
+      const hit = placed.find(r => Math.abs(r.x - dm._x) < (r.w + w) / 2 + 2 && Math.abs(r.y - y) < (r.h + h) / 2 + 2);
+      if (!hit) break;
+      y = hit.y + (hit.h + h) / 2 + 3;
+    }
+    if (y !== dm._y) dm.el.style.top = y + 'px';
+    placed.push({ x: dm._x, y, w, h });
   }
 }
 // первая точка ждёт вторую; вторая — ставит размер
@@ -1722,7 +1855,7 @@ function loop() {
   : fetch('./model.json?v=' + Date.now(), { cache: 'no-store' }).then(r => { if (!r.ok) throw new Error('файл модели не найден (' + r.status + ')'); return r.json(); }))
   .then(data => {
     M = data; build(); initLevels(); wire(); wireLayout(); applyVis(); layout(); fitVisible();
-    window.__viewer = { parts, animNode, M, dims, addDim, drawerDims, easyPick, partsUnder, dragDim, THREE, snapAt, pointVisible, picks, get cam() { return cam; }, get placing() { return placing; }, get rp() { return rp; } };   // для проверки из консоли
+    window.__viewer = { parts, animNode, M, dims, addDim, drawerDims, easyPick, easyCell, tubeDims, boxOf, isTube, toWorld, clearDims, root, partsUnder, dragDim, THREE, snapAt, pointVisible, picks, get cam() { return cam; }, get placing() { return placing; }, get rp() { return rp; } };   // для проверки из консоли
     $('load').remove(); loop();
   })
   .catch(err => { $('load').textContent = 'Не удалось открыть модель: ' + err.message; });
