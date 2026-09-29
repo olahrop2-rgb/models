@@ -301,20 +301,7 @@ function tick() {
 function toggleAt(i, to) {
   const ch = parts[i].chainA;
   if (!ch.length) return false;
-  const top = ch[0], ids = new Set(), h = parts[i].h;
-  const pIdx = h.indexOf(top) + 1, P = pIdx < h.length ? h[pIdx] : null;
-  let scope = top;
-  if (P !== null && (!M.ntype || M.ntype[P] !== 'layer') && partsUnder(P).length <= 2.5 * partsUnder(top).length) scope = P;
-  // как в Базисе: самый внешний блок с анимацией (даже нулевой) запускает всё движение внутри себя (фасад + петли)
-  if (M.grp && M.grp.length) {
-    const G = new Set(M.grp);
-    for (let k = h.length - 1; k >= 0; k--) if (G.has(h[k]) || animNode[h[k]]) { if (G.has(h[k])) scope = h[k]; break; }
-  }
-  for (const pr of moving) {
-    if (!pr.h.includes(scope)) continue;
-    const k = scope === top ? pr.chainA.indexOf(top) : 0;
-    for (let q = Math.max(0, k); q < pr.chainA.length; q++) ids.add(pr.chainA[q]);
-  }
+  const top = ch[0], ids = scopeIds(i);
   const dir = to !== undefined ? to : (openTarget(top) ? 0 : 1);
   lastOpenDelay = 0;
   if (dir === 1) {
@@ -331,6 +318,26 @@ function toggleAt(i, to) {
   }
   startAnim([...ids], dir);
   return true;
+}
+// всё, что движется вместе с деталью i по щелчку (фасад + его петли, ящик + направляющие) — одно правило
+// и для щелчка, и для закрытия мешающей двери (иначе петли оставались открытыми, 29.09)
+function scopeIds(i) {
+  const ch = parts[i].chainA;
+  const top = ch[0], ids = new Set(), h = parts[i].h;
+  const pIdx = h.indexOf(top) + 1, P = pIdx < h.length ? h[pIdx] : null;
+  let scope = top;
+  if (P !== null && (!M.ntype || M.ntype[P] !== 'layer') && partsUnder(P).length <= 2.5 * partsUnder(top).length) scope = P;
+  // как в Базисе: самый внешний блок с анимацией (даже нулевой) запускает всё движение внутри себя (фасад + петли)
+  if (M.grp && M.grp.length) {
+    const G = new Set(M.grp);
+    for (let k = h.length - 1; k >= 0; k--) if (G.has(h[k]) || animNode[h[k]]) { if (G.has(h[k])) scope = h[k]; break; }
+  }
+  for (const pr of moving) {
+    if (!pr.h.includes(scope)) continue;
+    const k = scope === top ? pr.chainA.indexOf(top) : 0;
+    for (let q = Math.max(0, k); q < pr.chainA.length; q++) ids.add(pr.chainA[q]);
+  }
+  return ids;
 }
 let lastOpenDelay = 0;
 const pendingOpen = new Set();
@@ -366,7 +373,7 @@ function blockersOf(ids) {
   }
   // закрываем мешающее звено целиком, со всем, что внутри его системы
   const out = new Set();
-  for (const t0 of hit) for (const pr of moving) if (pr.chainA[0] === t0) for (const id of pr.chainA) out.add(id);
+  for (const t0 of hit) { const pr = moving.find(q => q.chainA[0] === t0); if (pr) for (const id of scopeIds(pr.i)) out.add(id); }
   return [...out];
 }
 // открыт ли узел — по тому, КУДА он сейчас едет, а не по тому, где он в эту долю секунды
@@ -1194,7 +1201,12 @@ function easyMoving(i, cx, cy) {
   if (openTarget(top)) { closeEasyOpen(top); toggleAt(i, 0); return; }      // повторное касание — закрыть
   closeEasyOpen(top);
   const isDrawer = Math.abs(nd.ang) < 1e-3 && Math.abs(nd.d) > 0;
-  const dd = isDrawer ? drawerDims(i) : null;
+  let dd = isDrawer ? drawerDims(i) : null;
+  // щёлкнули по направляющей (едет вместе с ящиком) — размеры берём у ящика той же системы (29.09, Шкаф 8)
+  if (isDrawer && !dd) {
+    const S = scopeIds(i);
+    for (const pr of moving) if (pr.chainA[0] !== top && S.has(pr.chainA[0]) && pr.kind === 'p') { dd = drawerDims(pr.i); if (dd) break; }
+  }
   toggleAt(i, 1); easyOpenIdx = i;
   const mark = easyOpenIdx;
   easyTimer = setTimeout(() => {                                            // после остановки
@@ -1936,7 +1948,7 @@ function loop() {
   : fetch('./model.json?v=' + Date.now(), { cache: 'no-store' }).then(r => { if (!r.ok) throw new Error('файл модели не найден (' + r.status + ')'); return r.json(); }))
   .then(data => {
     M = data; build(); initLevels(); wire(); wireLayout(); applyVis(); layout(); fitVisible();
-    window.__viewer = { parts, animNode, M, dims, addDim, drawerDims, easyPick, easyCell, tubeDims, openTarget, pick, blockersOf, poseAll, boxOf, isTube, toWorld, clearDims, root, partsUnder, dragDim, THREE, snapAt, pointVisible, picks, get cam() { return cam; }, get placing() { return placing; }, get rp() { return rp; } };   // для проверки из консоли
+    window.__viewer = { parts, animNode, M, dims, addDim, drawerDims, easyPick, easyCell, tubeDims, openTarget, pick, blockersOf, poseAll, toggleAt, scopeIds, boxOf, isTube, toWorld, clearDims, root, partsUnder, dragDim, THREE, snapAt, pointVisible, picks, get cam() { return cam; }, get placing() { return placing; }, get rp() { return rp; } };   // для проверки из консоли
     $('load').remove(); loop();
   })
   .catch(err => { $('load').textContent = 'Не удалось открыть модель: ' + err.message; });
