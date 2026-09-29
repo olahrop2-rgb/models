@@ -1037,25 +1037,29 @@ function easyCell(pW, n, i) {
   easyDim(pt(w0 + 0.5 * W, y0 + 0.12 * H, back), pt(w0 + 0.5 * W, y0 + 0.12 * H, front), 'глибина');
   if (tube && (!obst || tube.min.y < obst.min.y)) {
     const wt = w0 + 0.3 * W;
+    // штанга: от полки/дна под ней — какой длины вещь повесить; от пола (низ ножек) — достанет ли человек (29.09)
     easyDim(pt(wt, base, dF), pt(wt, tube.max.y, dF), 'до штанги');
-    const above = obst && obst.min.y > tube.max.y ? obst.min.y : y1;
-    if (above != null) easyDim(pt(wt, tube.max.y, dF), pt(wt, above, dF), 'над штангою');
+    easyDim(pt(w0 + 0.6 * W, floorY(), dF), pt(w0 + 0.6 * W, tube.max.y, dF), 'штанга від підлоги');
   } else if (topY != null) {
     // над тем, что стоит на дне, почти пусто (ящик под полкой) — показываем нишу целиком, от дна
     const from = topY - base < 50 ? y0 : base;
     easyDim(pt(w0 + 0.15 * W, from, dF), pt(w0 + 0.15 * W, topY, dF), 'висота');
   }
 }
-// щелчок по самой штанге: до штанги (от полки/дна под ней) и от штанги до полки над ней
+// пол — низ ножек: самая нижняя точка изделия (отрезки помещения не в счёт)
+let FLOOR = null;
+function floorY() {
+  if (FLOOR === null) { FLOOR = Infinity; parts.forEach((p, j) => { if (!p.isL) FLOOR = Math.min(FLOOR, boxOf(j).min.y); }); }
+  return FLOOR;
+}
+// щелчок по самой штанге: от полки/дна под ней до верха штанги и от пола до верха штанги
 function tubeDims(i) {
   const b = boxOf(i), c = b.getCenter(new THREE.Vector3());
-  const lo = wallBound(new THREE.Vector3(c.x, b.min.y - 1, c.z), 'y', -1), hi = wallBound(new THREE.Vector3(c.x, b.max.y + 1, c.z), 'y', 1);
+  const lo = wallBound(new THREE.Vector3(c.x, b.min.y - 1, c.z), 'y', -1);
   const s = b.getSize(new THREE.Vector3()), along = s.x >= s.z ? 'x' : 'z';
-  const q = c.clone(); q[along] = b.min[along] + 0.3 * s[along];
-  const at = y => toWorld(new THREE.Vector3(q.x, y, q.z));
-  if (lo) easyDim(at(lo.v), at(b.max.y), 'до штанги');
-  if (hi) easyDim(at(b.max.y), at(hi.v), 'над штангою');
-  if (!lo && !hi) showPartDims(i);
+  const at = (f, y) => { const q = c.clone(); q[along] = b.min[along] + f * s[along]; q.y = y; return toWorld(q); };
+  if (lo) easyDim(at(0.3, lo.v), at(0.3, b.max.y), 'до штанги');
+  easyDim(at(0.6, floorY()), at(0.6, b.max.y), 'штанга від підлоги');
 }
 // части подвижной системы (ящик + его направляющие) — как при открывании касанием
 function scopeOf(i) {
@@ -1077,8 +1081,10 @@ function drawerDims(i) {
   const kD = Math.abs(v.x) >= Math.abs(v.z) ? 'x' : 'z', kW = kD === 'x' ? 'z' : 'x', s = Math.sign(v[kD]) || 1;
   const bx = own.map(j => ({ j, b: geomBox(j) }));
   bx.forEach(o => { o.s = o.b.getSize(new THREE.Vector3()); o.u0 = Math.min(s * o.b.min[kD], s * o.b.max[kD]); o.u1 = Math.max(s * o.b.min[kD], s * o.b.max[kD]); });
-  const fac = bx.reduce((p, q) => q.u1 > p.u1 ? q : p);                  // самая передняя деталь коробки
-  const rest = bx.filter(o => o !== fac);
+  // фасад уже отброшен по типу; если типов нет (старая выгрузка) — отбрасываем самую переднюю деталь, как раньше
+  const hasFt = !!M.nft && all.length > own.length;
+  const fac = bx.reduce((p, q) => q.u1 > p.u1 ? q : p);
+  const rest = hasFt ? bx : bx.filter(o => o !== fac);
   const thin = (o, k) => o.s[k] <= Math.min(o.s.x, o.s.y, o.s.z) + 0.01;
   // дно — самая большая горизонтальная панель, а не самая нижняя
   const bottoms = rest.filter(o => thin(o, 'y')).sort((p, q) => q.s.x * q.s.z - p.s.x * p.s.z);
@@ -1087,7 +1093,7 @@ function drawerDims(i) {
   if (!bottoms.length || sides.length < 2 || !walls.length) return null;
   const bot = bottoms[0], y0 = bot.b.max.y;
   const w0 = sides[0].b.max[kW], w1 = sides[sides.length - 1].b.min[kW];
-  const uB = walls[0].u1, uF = walls.length > 1 ? walls[walls.length - 1].u0 : fac.u0;
+  const uB = walls[0].u1, uF = walls.length > 1 ? walls[walls.length - 1].u0 : hasFt ? fac.u1 : fac.u0;
   // что нависает над ящиком (над его коробкой с фасадом), в закрытом положении; свою систему не считаем
   const mine = new Set(partsUnder(scopeOf(i)));
   const fp = new THREE.Box3(); for (const o of bx) fp.union(o.b);  let yTop = Infinity;
