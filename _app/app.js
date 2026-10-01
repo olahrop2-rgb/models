@@ -561,7 +561,7 @@ function showAll() {
   applyVis(); renderTree();
 }
 function hideSel() {
-  if (selMany.length) for (const id of selMany) nodes[id].hidden = true;
+  if (selMany.length || selOne.length) { for (const id of selMany) nodes[id].hidden = true; for (const i of selOne) parts[i].hidden = true; }
   else if (selNode !== null) nodes[selNode].hidden = true;
   else for (const i of selSet) parts[i].hidden = true;
   clearSel(); applyVis(); renderTree();
@@ -575,7 +575,7 @@ function isolateSel() {
 }
 
 // ---------------- выделение ----------------
-let selIdx = -1, selLevel = -1, selSet = [], selNode = null, selMany = [];
+let selIdx = -1, selLevel = -1, selSet = [], selNode = null, selMany = [], selOne = [];   // набор: шкафы (Shift) + отдельные детали (Ctrl)
 const NCNT = {}, REP = {};
 function initLevels() { for (const p of parts) for (const id of p.h) NCNT[id] = (NCNT[id] || 0) + 1; }
 // уровни — по показанной цепочке v (без пустых обёрток), в ней объём растёт с каждым звеном
@@ -595,23 +595,24 @@ function partsUnder(id) { const out = []; parts.forEach((p, i) => { if (p.h.incl
 // деталь, от которой построена цепочка в карточке: щелчки по звеньям цепочки её не меняют
 let chainPart = -1;
 function selectPart(i, level) {
-  selIdx = i; selLevel = level; chainPart = i; selMany = [];
+  selIdx = i; selLevel = level; chainPart = i; selMany = []; selOne = [];
   const v = parts[i].v;
   if (level < 0 || !v.length) { selNode = null; selSet = [i]; selLevel = -1; }
   else { selNode = v[Math.min(level, v.length - 1)]; selSet = partsUnder(selNode); }
   paint(); revealInTree();
 }
-function selectNode(id) { selNode = id; selIdx = -1; chainPart = -1; selMany = []; selSet = partsUnder(id); paint(); renderTree(); }
+function selectNode(id) { selNode = id; selIdx = -1; chainPart = -1; selMany = []; selOne = []; selSet = partsUnder(id); paint(); renderTree(); }
 // звено цепочки карточки: узел (блок, ящик, модуль…) или сама деталь
 function selectChain(id) {
   const i = chainPart;
   if (id === null) { selectPart(i, -1); return; }
   const k = parts[i].v.indexOf(id);
-  selIdx = i; selLevel = k; selNode = id; selMany = []; selSet = partsUnder(id);
+  selIdx = i; selLevel = k; selNode = id; selMany = []; selOne = []; selSet = partsUnder(id);
   paint(); revealInTree();
 }
-function clearSel() { selIdx = -1; selSet = []; selNode = null; chainPart = -1; selMany = []; paint(); renderTree(); }
-// Ctrl+щелчок (компьютер, показ через проектор): набор сборочных единиц — шкаф за шкафом, Delete прячет все (29.09).
+function clearSel() { selIdx = -1; selSet = []; selNode = null; chainPart = -1; selMany = []; selOne = []; paint(); renderTree(); }
+// Набор (компьютер, показ через проектор): Shift+щелчок — шкаф целиком, Ctrl+щелчок — одна деталь; повторный щелчок
+// по набранному убирает его из набора; Delete прячет все (29.09, Ctrl/Shift разведены 01.10).
 // Шкаф — САМАЯ ВЕРХНЯЯ сборочная единица над деталью (ящики TANDEM тоже помечены — щелчок по ящику берёт весь шкаф,
 // Алексей 29.09); в выгрузке без этой отметки — верхний блок детали (не слой).
 function asmOf(i) {
@@ -620,19 +621,36 @@ function asmOf(i) {
   for (let k = p.v.length - 1; k >= 0; k--) if (!(M.ntype && M.ntype[p.v[k]] === 'layer')) return p.v[k];
   return -1;
 }
-function toggleMany(i) {
-  const id = asmOf(i);
+function toggleMany(i, whole) {
+  const id = whole ? asmOf(i) : i;
   if (id < 0) return;
-  if (!selMany.length) {                                  // уже выделенное обычным щелчком — первым в набор
-    const first = selNode !== null ? selNode : (selIdx >= 0 ? asmOf(selIdx) : -1);
-    if (first >= 0 && first !== id) selMany.push(first);
+  const list = whole ? selMany : selOne;
+  let seeded = false;
+  if (!selMany.length && !selOne.length) {                // уже выделенное обычным щелчком — первым в набор
+    if (selNode !== null) { selMany.push(selNode); seeded = whole && selNode === id; }
+    else if (selIdx >= 0) { selOne.push(selIdx); seeded = !whole && selIdx === id; }
   }
-  const at = selMany.indexOf(id);
-  if (at >= 0) selMany.splice(at, 1); else selMany.push(id);
+  if (!seeded) {                                          // щелчок по только что перенесённому — не снимать
+    const at = list.indexOf(id);
+    if (at >= 0) list.splice(at, 1); else list.push(id);
+  }
   selIdx = -1; selNode = null; chainPart = -1; selLevel = -1;
-  const all = new Set(); for (const n of selMany) for (const j of partsUnder(n)) all.add(j);
+  const all = new Set(selOne); for (const n of selMany) for (const j of partsUnder(n)) all.add(j);
   selSet = [...all];
   paint(); renderTree();
+}
+// Телефон: касание детали — деталь, повторное касание той же — её шкаф, ещё раз — снять (Алексей 01.10).
+// У дверей и ящиков то же — долгим нажатием (короткое открывает).
+function stepSel(i) {
+  const a = asmOf(i), plain = !selMany.length && !selOne.length;
+  if (plain && selNode === null && selIdx === i) {
+    if (a < 0) { clearSel(); return; }
+    const k = parts[i].v.indexOf(a);
+    if (k >= 0) selectPart(i, k); else selectNode(a);
+    return;
+  }
+  if (plain && a >= 0 && selNode === a && selSet.includes(i)) { clearSel(); return; }
+  selectPart(i, -1);
 }
 function paint() {
   const on = new Set(selSet);
@@ -647,8 +665,9 @@ function paint() {
   d.style.display = 'block';
   let title, sub;
   const num = d => d ? ' · № ' + d : '';                 // обозначение из Базиса — номер как на этикетке
-  if (selMany.length) {
-    title = 'вибрано: ' + selMany.length; sub = selMany.map(id => nodes[id].name).join('; ');
+  if (selMany.length || selOne.length) {
+    title = 'вибрано: ' + (selMany.length + selOne.length);
+    sub = selMany.map(id => nodes[id].name).concat(selOne.map(i => parts[i].n + num(parts[i].d))).join('; ');
   } else if (selNode === null) {
     const p = parts[selSet[0]];
     title = p.n; sub = (KIND[p.kind] || '') + num(p.d);
@@ -667,8 +686,8 @@ function paint() {
     a.onclick = e => { e.stopPropagation(); on(); };
     ch.appendChild(a);
   };
-  if (selMany.length) {
-    // набор шкафов: цепочки нет
+  if (selMany.length || selOne.length) {
+    // набор шкафов и деталей: цепочки нет
   } else if (chainPart >= 0 && selSet.includes(chainPart)) {
     const p = parts[chainPart];
     for (const id of p.v.slice().reverse()) add(M.names[id], () => selectChain(id), selNode === id);
@@ -705,7 +724,7 @@ function nodeRow(nd, depth) {
 function partRow(i, depth) {
   const p = parts[i];
   const r = document.createElement('div');
-  r.className = 'tr' + (selNode === null && !selMany.length && selSet.includes(i) ? ' sel' : '') + (effVisible(p) ? '' : ' off');
+  r.className = 'tr' + ((selNode === null && !selMany.length && selSet.includes(i)) || selOne.includes(i) ? ' sel' : '') + (effVisible(p) ? '' : ' off');
   r.style.paddingLeft = (4 + depth * 14) + 'px';
   r.innerHTML = '<span class="cr"></span><input type="checkbox"><span class="nm"></span><span class="tp"></span>';
   r.children[1].checked = !p.hidden;
@@ -935,7 +954,7 @@ function showPartDims(i) {
   $('st').textContent = 'деталь ' + fmt(s[ks[0]]) + ' × ' + fmt(s[ks[1]]) + ' мм';
 }
 // ---------------- габарит выделенного ----------------
-// Способ рулетки «габарит» (Алексей 29.09): щелчок выделяет, Tab/Shift+Tab — выше/ниже, Ctrl — добавить шкаф;
+// Способ рулетки «габарит» (Алексей 29.09): щелчок выделяет, Tab/Shift+Tab — выше/ниже, Ctrl — деталь, Shift — шкаф;
 // на экране ОДИН габарит (ширина, висота, глибина) — пересчитывается при каждой смене выделения.
 // Поворот — по габаритной рамке ближайшего фрагмента (выгрузка: M.nfax), числа — по самим видимым деталям в том
 // положении, что на экране. Нет рамки или шкафы набора стоят по-разному — по осям комнаты.
@@ -962,8 +981,10 @@ function frameAxesNow(i, fid) {             // оси рамки с учётом
 function selGab() {
   if (!selSet.length) return false;
   const ref = [];
-  if (selMany.length) for (const n of selMany) { const i = partsUnder(n)[0]; if (i !== undefined) ref.push([i, parts[i].h.indexOf(n)]); }
-  else if (selNode !== null) ref.push([selSet[0], parts[selSet[0]].h.indexOf(selNode)]);
+  if (selMany.length || selOne.length) {
+    for (const n of selMany) { const i = partsUnder(n)[0]; if (i !== undefined) ref.push([i, parts[i].h.indexOf(n)]); }
+    for (const i of selOne) ref.push([i, 0]);
+  } else if (selNode !== null) ref.push([selSet[0], parts[selSet[0]].h.indexOf(selNode)]);
   else ref.push([selSet[0], 0]);
   let ax = null;
   for (const [i, from] of ref) {
@@ -1377,7 +1398,8 @@ function easyPick(x, y) {
 }
 
 const RHINT = { easy: 'легкі розміри: торкніться полиці, стінки, дверцят або шухляди', face: 'рулетка: коснитесь грани детали', edge: 'рулетка: коснитесь ребра детали', point: 'рулетка: укажи первую точку',
-  gab: 'габарит: виділіть деталь; Tab — вище, Shift+Tab — нижче, Ctrl — додати шафу' };
+  gab: matchMedia('(pointer: coarse)').matches ? 'габарит: торкніться деталі; ще раз — вся шафа'
+    : 'габарит: виділіть деталь; Tab — вище, Shift+Tab — нижче, Ctrl — додати деталь, Shift — додати шафу' };
 function setRMode(m) {
   rmode = m; try { localStorage.setItem('viewerRMode2', m); } catch (e) {}
   rp = []; clearFace1(); faceHoverEnd(); clearEdge1(); edgeHoverEnd(); hideHover(); dropEasy();
@@ -1388,7 +1410,7 @@ function setRMode(m) {
 }
 // выбор под пальцем/курсором по текущему способу
 function rulerPick(x, y, mouse) {
-  if (rmode === 'gab') { const h = pick(x, y); if (h) selectPart(h.object.userData.idx, -1); else clearSel(); return; }
+  if (rmode === 'gab') { const h = pick(x, y); if (h) stepSel(h.object.userData.idx); else clearSel(); return; }   // только телефон
   if (rmode === 'easy') { easyPick(x, y); return; }
   if (rmode === 'face') { faceHoverEnd(); faceClick(faceAt(x, y), mouse); }
   else if (rmode === 'edge') { edgeHoverEnd(); edgeClick(edgeAt(x, y), mouse); }
@@ -1729,11 +1751,11 @@ function touchDown(e) {
       }, 350);
       return;
     }
-    pressTimer = setTimeout(() => {                        // долгое нажатие — выделить
+    pressTimer = setTimeout(() => {                        // долгое нажатие — выделить (повторное — шкаф)
       if (!tState || tState.moved || touches.size !== 1) return;
       tState.long = true;
       const h = pick(tState.x0, tState.y0);
-      if (h) selectPart(h.object.userData.idx, -1); else clearSel();
+      if (h) stepSel(h.object.userData.idx); else clearSel();
     }, 550);
   } else if (touches.size === 2) {
     tState = { one: false, ...twoInfo() };
@@ -1769,7 +1791,7 @@ function touchUp(e) {
   // короткое касание
   if (ruler) { rulerPick(e.clientX, e.clientY); return; }
   const h = pick(e.clientX, e.clientY);
-  if (h) { if (!toggleAt(h.object.userData.idx)) selectPart(h.object.userData.idx, -1); }
+  if (h) { if (!toggleAt(h.object.userData.idx)) stepSel(h.object.userData.idx); }
   else clearSel();
 }
 
@@ -1820,10 +1842,11 @@ cv.addEventListener('pointerup', e => {
   const h = pick(e.clientX, e.clientY);
   if (h) {
     const i = h.object.userData.idx;
-    if (e.ctrlKey || e.metaKey) toggleMany(i);
+    if (e.shiftKey) toggleMany(i, true);
+    else if (e.ctrlKey || e.metaKey) toggleMany(i, false);
     else selectPart(i, e.altKey ? upLevel(i, -1) : -1);
   }
-  else if (!(e.ctrlKey || e.metaKey)) clearSel();
+  else if (!(e.ctrlKey || e.metaKey || e.shiftKey)) clearSel();
 });
 cv.addEventListener('wheel', e => {
   e.preventDefault();
