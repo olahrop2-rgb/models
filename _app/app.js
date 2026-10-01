@@ -611,46 +611,78 @@ function selectChain(id) {
   paint(); revealInTree();
 }
 function clearSel() { selIdx = -1; selSet = []; selNode = null; chainPart = -1; selMany = []; selOne = []; paint(); renderTree(); }
-// Набор (компьютер, показ через проектор): Shift+щелчок — шкаф целиком, Ctrl+щелчок — одна деталь; повторный щелчок
-// по набранному убирает его из набора; Delete прячет все (29.09, Ctrl/Shift разведены 01.10).
-// Шкаф — САМАЯ ВЕРХНЯЯ сборочная единица над деталью (ящики TANDEM тоже помечены — щелчок по ящику берёт весь шкаф,
-// Алексей 29.09); в выгрузке без этой отметки — верхний блок детали (не слой).
-function asmOf(i) {
-  const p = parts[i];
-  if (M.nasm) { const A = new Set(M.nasm); for (let k = p.h.length - 1; k >= 0; k--) { const id = p.h[k]; if (A.has(id)) { const r = REP[id]; if (r !== undefined && r >= 0) return r; } } }
-  for (let k = p.v.length - 1; k >= 0; k--) if (!(M.ntype && M.ntype[p.v[k]] === 'layer')) return p.v[k];
+// Лестница сборочных единиц (Алексей 01.10): от детали вверх только по галочкам «сборочная единица» из Базиса —
+// самая нижняя, потом та, в которую она входит, и так до верха. Нет галочек (выгрузки до 29.09 вечера) — подъёма нет.
+function asmChain(i) {
+  const out = [];
+  if (!M.nasm) return out;
+  const A = new Set(M.nasm), h = parts[i].h;
+  for (let k = 0; k < h.length; k++) {
+    if (!A.has(h[k])) continue;
+    const r = REP[h[k]];
+    if (r !== undefined && r >= 0 && !out.includes(r)) out.push(r);
+  }
+  return out;
+}
+// ступень выше: первая единица над деталью i, которая больше нынешнего выделения (cur — узел или null = сама деталь)
+function asmAbove(i, cur) {
+  const n0 = cur === null ? 1 : (NCNT[cur] || 0);
+  for (const c of asmChain(i)) if (c !== cur && (NCNT[c] || 0) > n0) return c;
   return -1;
 }
-function toggleMany(i, whole) {
-  const id = whole ? asmOf(i) : i;
-  if (id < 0) return;
-  const list = whole ? selMany : selOne;
-  let seeded = false;
-  if (!selMany.length && !selOne.length) {                // уже выделенное обычным щелчком — первым в набор
-    if (selNode !== null) { selMany.push(selNode); seeded = whole && selNode === id; }
-    else if (selIdx >= 0) { selOne.push(selIdx); seeded = !whole && selIdx === id; }
-  }
-  if (!seeded) {                                          // щелчок по только что перенесённому — не снимать
-    const at = list.indexOf(id);
-    if (at >= 0) list.splice(at, 1); else list.push(id);
-  }
+function rebuildMany() {
   selIdx = -1; selNode = null; chainPart = -1; selLevel = -1;
   const all = new Set(selOne); for (const n of selMany) for (const j of partsUnder(n)) all.add(j);
   selSet = [...all];
   paint(); renderTree();
 }
-// Телефон: касание детали — деталь, повторное касание той же — её шкаф, ещё раз — снять (Алексей 01.10).
-// У дверей и ящиков то же — долгим нажатием (короткое открывает).
-function stepSel(i) {
-  const a = asmOf(i), plain = !selMany.length && !selOne.length;
-  if (plain && selNode === null && selIdx === i) {
-    if (a < 0) { clearSel(); return; }
-    const k = parts[i].v.indexOf(a);
-    if (k >= 0) selectPart(i, k); else selectNode(a);
-    return;
+function seedMany() {                                       // уже выделенное обычным щелчком — первым в набор
+  if (selMany.length || selOne.length) return;
+  if (selNode !== null) selMany.push(selNode); else if (selIdx >= 0) selOne.push(selIdx);
+}
+// Набор (компьютер, показ через проектор): Ctrl+щелчок — добавить/убрать одну деталь; Delete прячет все.
+function toggleOne(i) {
+  const fresh = !selMany.length && !selOne.length;
+  seedMany();
+  if (fresh && selOne.length === 1 && selOne[0] === i) { rebuildMany(); return; }   // Ctrl по уже выделенной — остаётся
+  const at = selOne.indexOf(i);
+  if (at >= 0) selOne.splice(at, 1); else selOne.push(i);
+  rebuildMany();
+}
+// Shift+щелчок: по невыделенной детали — добавить её самую нижнюю сборочную единицу; по выделенной — поднять ту
+// единицу на ступень выше (выделенное внутри неё вливается); выше некуда — снять её из набора (Алексей 01.10).
+function shiftPick(i) {
+  seedMany();
+  const own = selMany.find(n => partsUnder(n).includes(i));
+  const cur = own !== undefined ? own : (selOne.includes(i) ? null : undefined);
+  if (cur === undefined) {                                  // ещё не выделена
+    const c = asmAbove(i, null);
+    if (c < 0) selOne.push(i); else addUnit(c);
+  } else {
+    const c = asmAbove(i, cur);
+    if (cur === null) selOne.splice(selOne.indexOf(i), 1); else selMany.splice(selMany.indexOf(cur), 1);
+    if (c >= 0) addUnit(c);
   }
-  if (plain && a >= 0 && selNode === a && selSet.includes(i)) { clearSel(); return; }
-  selectPart(i, -1);
+  rebuildMany();
+}
+function addUnit(c) {                                       // единица поглощает выделенное внутри себя
+  const inside = new Set(partsUnder(c));
+  selMany = selMany.filter(n => !partsUnder(n).every(j => inside.has(j)));
+  selOne = selOne.filter(j => !inside.has(j));
+  selMany.push(c);
+}
+// Телефон: касание детали — деталь, каждое следующее по ней же — сборочная единица ступенью выше, после самой
+// верхней — снять (Алексей 01.10). У дверей и ящиков — долгим нажатием (короткое открывает).
+function stepSel(i) {
+  const plain = !selMany.length && !selOne.length;
+  let cur;
+  if (plain && selNode === null && selIdx === i) cur = null;
+  else if (plain && selNode !== null && selSet.includes(i)) cur = selNode;
+  else { selectPart(i, -1); return; }
+  const c = asmAbove(i, cur);
+  if (c < 0) { clearSel(); return; }
+  const k = parts[i].v.indexOf(c);
+  if (k >= 0) selectPart(i, k); else selectNode(c);
 }
 function paint() {
   const on = new Set(selSet);
@@ -954,7 +986,7 @@ function showPartDims(i) {
   $('st').textContent = 'деталь ' + fmt(s[ks[0]]) + ' × ' + fmt(s[ks[1]]) + ' мм';
 }
 // ---------------- габарит выделенного ----------------
-// Способ рулетки «габарит» (Алексей 29.09): щелчок выделяет, Tab/Shift+Tab — выше/ниже, Ctrl — деталь, Shift — шкаф;
+// Способ рулетки «габарит» (Алексей 29.09): щелчок выделяет, Tab/Shift+Tab — выше/ниже, Ctrl — деталь, Shift — сборочная единица (ещё раз — выше);
 // на экране ОДИН габарит (ширина, висота, глибина) — пересчитывается при каждой смене выделения.
 // Поворот — по габаритной рамке ближайшего фрагмента (выгрузка: M.nfax), числа — по самим видимым деталям в том
 // положении, что на экране. Нет рамки или шкафы набора стоят по-разному — по осям комнаты.
@@ -1398,8 +1430,8 @@ function easyPick(x, y) {
 }
 
 const RHINT = { easy: 'легкі розміри: торкніться полиці, стінки, дверцят або шухляди', face: 'рулетка: коснитесь грани детали', edge: 'рулетка: коснитесь ребра детали', point: 'рулетка: укажи первую точку',
-  gab: matchMedia('(pointer: coarse)').matches ? 'габарит: торкніться деталі; ще раз — вся шафа'
-    : 'габарит: виділіть деталь; Tab — вище, Shift+Tab — нижче, Ctrl — додати деталь, Shift — додати шафу' };
+  gab: matchMedia('(pointer: coarse)').matches ? 'габарит: торкніться деталі; ще раз — збірна одиниця, далі — вища'
+    : 'габарит: виділіть деталь; Tab — вище, Shift+Tab — нижче, Ctrl — додати деталь, Shift — збірна одиниця (ще раз — вища)' };
 function setRMode(m) {
   rmode = m; try { localStorage.setItem('viewerRMode2', m); } catch (e) {}
   rp = []; clearFace1(); faceHoverEnd(); clearEdge1(); edgeHoverEnd(); hideHover(); dropEasy();
@@ -1842,8 +1874,8 @@ cv.addEventListener('pointerup', e => {
   const h = pick(e.clientX, e.clientY);
   if (h) {
     const i = h.object.userData.idx;
-    if (e.shiftKey) toggleMany(i, true);
-    else if (e.ctrlKey || e.metaKey) toggleMany(i, false);
+    if (e.shiftKey) shiftPick(i);
+    else if (e.ctrlKey || e.metaKey) toggleOne(i);
     else selectPart(i, e.altKey ? upLevel(i, -1) : -1);
   }
   else if (!(e.ctrlKey || e.metaKey || e.shiftKey)) clearSel();
@@ -2125,7 +2157,7 @@ function loop() {
   : fetch('./model.json?v=' + Date.now(), { cache: 'no-store' }).then(r => { if (!r.ok) throw new Error('файл модели не найден (' + r.status + ')'); return r.json(); }))
   .then(data => {
     M = data; build(); wire(); wireLayout(); applyVis(); layout(); fitVisible();
-    window.__viewer = { parts, animNode, M, dims, addDim, drawerDims, easyPick, easyCell, tubeDims, openTarget, pick, blockersOf, poseAll, toggleAt, scopeIds, boxOf, isTube, toWorld, clearDims, root, partsUnder, dragDim, THREE, snapAt, pointVisible, picks, nodes, NCNT, REP, rootKids, selectPart, toggleMany, hideSel, showAll, upLevel, downLevel, asmOf, effVisible, selGab, gabShow, gabDims, setRMode, frameNodeFor, get ruler() { return ruler; }, get selSet() { return selSet; }, get selMany() { return selMany; }, get selNode() { return selNode; }, get cam() { return cam; }, get placing() { return placing; }, get rp() { return rp; } };   // для проверки из консоли
+    window.__viewer = { parts, animNode, M, dims, addDim, drawerDims, easyPick, easyCell, tubeDims, openTarget, pick, blockersOf, poseAll, toggleAt, scopeIds, boxOf, isTube, toWorld, clearDims, root, partsUnder, dragDim, THREE, snapAt, pointVisible, picks, nodes, NCNT, REP, rootKids, selectPart, toggleOne, shiftPick, stepSel, asmChain, hideSel, showAll, upLevel, downLevel, effVisible, selGab, gabShow, gabDims, setRMode, frameNodeFor, get ruler() { return ruler; }, get selSet() { return selSet; }, get selMany() { return selMany; }, get selOne() { return selOne; }, get selNode() { return selNode; }, get cam() { return cam; }, get placing() { return placing; }, get rp() { return rp; } };   // для проверки из консоли
     $('load').remove(); loop();
   })
   .catch(err => { $('load').textContent = 'Не удалось открыть модель: ' + err.message; });
