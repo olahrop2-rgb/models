@@ -610,7 +610,11 @@ function selectChain(id) {
   selIdx = i; selLevel = k; selNode = id; selMany = []; selOne = []; selSet = partsUnder(id);
   paint(); revealInTree();
 }
-function clearSel() { selIdx = -1; selSet = []; selNode = null; chainPart = -1; selMany = []; selOne = []; paint(); renderTree(); }
+function clearSel() { selIdx = -1; selSet = []; selNode = null; chainPart = -1; selMany = []; selOne = []; addMode = false; paint(); renderTree(); }
+// Телефон: кнопка «＋ додати» в карточке — пока включена, касание работает как Shift на компьютере (Алексей 01.10).
+// Снятое выделение выключает её.
+let addMode = false;
+function tapPick(i) { if (addMode) shiftPick(i); else stepSel(i); }
 // Лестница сборочных единиц (Алексей 01.10): от детали вверх только по галочкам «сборочная единица» из Базиса —
 // самая нижняя, потом та, в которую она входит, и так до верха. Нет галочек (выгрузки до 29.09 вечера) — подъёма нет.
 function asmChain(i) {
@@ -634,6 +638,7 @@ function rebuildMany() {
   selIdx = -1; selNode = null; chainPart = -1; selLevel = -1;
   const all = new Set(selOne); for (const n of selMany) for (const j of partsUnder(n)) all.add(j);
   selSet = [...all];
+  if (!selSet.length) addMode = false;
   paint(); renderTree();
 }
 function seedMany() {                                       // уже выделенное обычным щелчком — первым в набор
@@ -706,7 +711,8 @@ function paint() {
   } else {
     title = nodes[selNode].name; sub = selSet.length + ' объектов' + num(M.ndes && M.ndes[selNode]);
   }
-  d.innerHTML = '<b></b><small></small><div class="chain"></div><div class="cbtn"><button>сховати</button><button>тільки це</button></div>';
+  d.innerHTML = '<b></b><small></small><div class="chain"></div><div class="cbtn"><button>сховати</button><button>тільки це</button>' +
+    (TOUCH ? '<button class="add' + (addMode ? ' on' : '') + '">＋ додати</button>' : '') + '</div>';
   d.children[0].textContent = title || '(без имени)';
   d.children[1].textContent = sub || '';
   // цепочка «изделие ▸ модуль ▸ ящик ▸ фасад»: щелчок по звену выделяет весь этот узел,
@@ -731,6 +737,7 @@ function paint() {
   const bs = d.querySelectorAll('.cbtn button');
   bs[0].onclick = () => hideSel();
   bs[1].onclick = () => { isolateSel(); clearSel(); fitVisible(); };
+  if (bs[2]) bs[2].onclick = e => { e.stopPropagation(); addMode = !addMode; bs[2].classList.toggle('on', addMode); };
   need(); gabShow();
 }
 // любая смена выделения (щелчок, Tab, Ctrl, дерево, цепочка карточки) проходит через paint → габарит следует за ней
@@ -1442,7 +1449,7 @@ function setRMode(m) {
 }
 // выбор под пальцем/курсором по текущему способу
 function rulerPick(x, y, mouse) {
-  if (rmode === 'gab') { const h = pick(x, y); if (h) stepSel(h.object.userData.idx); else clearSel(); return; }   // только телефон
+  if (rmode === 'gab') { const h = pick(x, y); if (h) tapPick(h.object.userData.idx); else clearSel(); return; }   // только телефон
   if (rmode === 'easy') { easyPick(x, y); return; }
   if (rmode === 'face') { faceHoverEnd(); faceClick(faceAt(x, y), mouse); }
   else if (rmode === 'edge') { edgeHoverEnd(); edgeClick(edgeAt(x, y), mouse); }
@@ -1787,7 +1794,7 @@ function touchDown(e) {
       if (!tState || tState.moved || touches.size !== 1) return;
       tState.long = true;
       const h = pick(tState.x0, tState.y0);
-      if (h) stepSel(h.object.userData.idx); else clearSel();
+      if (h) tapPick(h.object.userData.idx); else clearSel();
     }, 550);
   } else if (touches.size === 2) {
     tState = { one: false, ...twoInfo() };
@@ -1823,7 +1830,7 @@ function touchUp(e) {
   // короткое касание
   if (ruler) { rulerPick(e.clientX, e.clientY); return; }
   const h = pick(e.clientX, e.clientY);
-  if (h) { if (!toggleAt(h.object.userData.idx)) stepSel(h.object.userData.idx); }
+  if (h) { if (!toggleAt(h.object.userData.idx)) tapPick(h.object.userData.idx); }
   else clearSel();
 }
 
@@ -2157,7 +2164,7 @@ function loop() {
   : fetch('./model.json?v=' + Date.now(), { cache: 'no-store' }).then(r => { if (!r.ok) throw new Error('файл модели не найден (' + r.status + ')'); return r.json(); }))
   .then(data => {
     M = data; build(); wire(); wireLayout(); applyVis(); layout(); fitVisible();
-    window.__viewer = { parts, animNode, M, dims, addDim, drawerDims, easyPick, easyCell, tubeDims, openTarget, pick, blockersOf, poseAll, toggleAt, scopeIds, boxOf, isTube, toWorld, clearDims, root, partsUnder, dragDim, THREE, snapAt, pointVisible, picks, nodes, NCNT, REP, rootKids, selectPart, toggleOne, shiftPick, stepSel, asmChain, hideSel, showAll, upLevel, downLevel, effVisible, selGab, gabShow, gabDims, setRMode, frameNodeFor, get ruler() { return ruler; }, get selSet() { return selSet; }, get selMany() { return selMany; }, get selOne() { return selOne; }, get selNode() { return selNode; }, get cam() { return cam; }, get placing() { return placing; }, get rp() { return rp; } };   // для проверки из консоли
+    window.__viewer = { parts, animNode, M, dims, addDim, drawerDims, easyPick, easyCell, tubeDims, openTarget, pick, blockersOf, poseAll, toggleAt, scopeIds, boxOf, isTube, toWorld, clearDims, root, partsUnder, dragDim, THREE, snapAt, pointVisible, picks, nodes, NCNT, REP, rootKids, selectPart, toggleOne, shiftPick, stepSel, tapPick, asmChain, hideSel, showAll, upLevel, downLevel, effVisible, selGab, gabShow, gabDims, setRMode, frameNodeFor, get ruler() { return ruler; }, get selSet() { return selSet; }, get selMany() { return selMany; }, get selOne() { return selOne; }, get selNode() { return selNode; }, get cam() { return cam; }, get placing() { return placing; }, get rp() { return rp; } };   // для проверки из консоли
     $('load').remove(); loop();
   })
   .catch(err => { $('load').textContent = 'Не удалось открыть модель: ' + err.message; });
