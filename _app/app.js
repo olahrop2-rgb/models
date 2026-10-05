@@ -55,6 +55,7 @@ const ICON = {
   gab: sv('<path d="M4 8l8-4 8 4v8l-8 4-8-4zM4 8l8 4 8-4M12 12v8"/>'),
   easy: sv('<rect x="3" y="3" width="18" height="18" rx="1.5"/><path d="M7 12h10M7 12l2-2M7 12l2 2M17 12l-2-2M17 12l-2 2"/>'),
   points: sv('<circle cx="5" cy="12" r="2.2" fill="currentColor"/><circle cx="19" cy="12" r="2.2" fill="currentColor"/><path d="M8 12h8" stroke-dasharray="2 2"/>'),
+  sheet: sv('<path d="M5 3h10l4 4v14H5z"/><path d="M15 3v4h4M8 17h8M8 17v-6M16 17v-6M8 11h8"/>'),
 };
 // кнопка строки → значок и подпись
 // Строка кнопок — короткая (решение 28–29.09): виды ушли в кубик, способы показа и камеры — окошком
@@ -68,6 +69,7 @@ const BTN_ICON = {
   bFac: ['fac', 'сховати фасади / показати фасади'],
   bRuler: ['ruler', 'рулетка'], bUndo: ['undo', 'скасувати точку (Esc, права кнопка)'],
   bDims: ['dims', 'розміри: коротко — сховати/показати, довго — видалити всі'],
+  bDraw: ['sheet', 'креслення: кадри для отчёта'],
 };
 // Фурнитура, профили, линии — служебное, заказчику не показываем. Видно, когда проигрыватель открыт
 // у Алексея на компьютере (местный адрес) или в режиме сборки (хвост ссылки #сборка).
@@ -105,8 +107,12 @@ document.body.insertAdjacentHTML('beforeend', `
   <button id="bShowAll" style="display:none">показать всё</button>
   <button id="bMode">показ</button><button id="bCam">камера</button><button id="bOC">открыть всё</button><button id="bFac" style="display:none">фасады</button>
   <button id="bRuler">рулетка</button><button id="bUndo" style="display:none" title="Убрать поставленную первую точку (Esc, правая кнопка)">отменить точку</button><button id="bDims" style="display:none" title="Коротко — спрятать/показать, долго — удалить все">размеры</button>
+  <button id="bDraw" style="display:none">креслення</button>
   <span id="st"></span>
-</div>`);
+</div>
+<div id="sheet"><span></span></div>
+<svg id="dsvg"></svg>
+<div id="dpanel"></div>`);
 $('stamp').textContent = 'проигрыватель от ' + APP_DATE;
 
 // ---------------- сцена ----------------
@@ -144,6 +150,7 @@ const picks = [];
 const hidEdges = [];   // копии рёбер для режима «линии»: рисуются только там, где их закрывает деталь
 const box = new THREE.Box3();
 let rad = 1000, showF = true, showB = true, showL = true;
+let drawOn = false;    // вкладка «креслення» (см. ниже)
 const KIND = { p: 'панель', f: 'фурнитура', b: 'профиль', m: '3D-объект', l: 'линия' };
 const NTYPE = { TFurnBlock: 'блок', TFurnAsm: 'сборка', TDraftBlock: 'полуфабрикат', layer: 'слой' };
 
@@ -424,7 +431,7 @@ function place() {
   ortho.near = -rad * 60; ortho.far = rad * 60;
   ortho.setViewOffset(innerWidth, innerHeight, ox, oy, innerWidth, innerHeight);
   updCube(right, up, f.clone().negate());
-  updRuler(); need();
+  updRuler(); if (drawOn) drawInfo(); need();
 }
 
 // ---------------- кубик видов ----------------
@@ -453,6 +460,7 @@ function initCube() {
     if (!st) return;
     const dx = e.clientX - st.x, dy = e.clientY - st.y;
     if (!cubeMoved && Math.hypot(dx, dy) < 5) return;
+    if (drawOn && drawLines) return;                       // креслення: только строгие виды, кубик не вращает
     if (!cubeMoved) try { w.setPointerCapture(e.pointerId); } catch (er) {}
     cubeMoved = true; st = { x: e.clientX, y: e.clientY };
     if (view.strict) view.strict = false;
@@ -486,6 +494,8 @@ function freeRect() {
   // значки наверху лежат поверх модели маленькой строкой — модель под них не сдвигаем
   // структура слева; на телефоне она прозрачная и модель под ней не двигаем (иначе модель уезжает за край)
   const x0 = open && !TOUCH ? t.offsetWidth : 0;
+  // креслення: справа панель кадров и столбик значков, снизу строка кнопок — лист в середине оставшегося места
+  if (drawOn) return { x0, x1: innerWidth - $('dpanel').offsetWidth - 70, y0: 0, y1: barTop() - 30 };
   return { x0, x1: innerWidth, y0: 0, y1: innerHeight };
 }
 // «нажата» — только пометка on; остальные пометки кнопки (например «прятать в ⋯») не трогаем
@@ -493,7 +503,7 @@ const setOn = (id, v) => $(id).classList.toggle('on', !!v);
 function setPersp(on) { view.persp = on; setIcon('bCam', on ? 'persp' : 'ortho'); place(); }
 // строгий вид (грань кубика): на телефоне не поворачивается — один палец двигает, два приближают;
 // обратно к вращению — потянуть кубик или «камера» → перспектива / без перспективы
-function strictView(yaw, pitch) { view.strict = true; view.yaw = yaw; view.pitch = pitch; setPersp(false); fitVisible(); }
+function strictView(yaw, pitch) { view.strict = true; view.yaw = yaw; view.pitch = pitch; setPersp(false); if (drawOn) fitSheet(); else fitVisible(); }
 
 // точка под курсором на плоскости цели (для масштаба к курсору и сдвига)
 function onTargetPlane(cx, cy) {
@@ -556,11 +566,13 @@ function applyVis() {
   syncTools(); need();
 }
 function showAll() {
+  pushUndo();                                               // в кресленні — для Ctrl+Z
   for (const p of parts) p.hidden = false;
   for (const k in nodes) nodes[k].hidden = false;
   applyVis(); renderTree();
 }
 function hideSel() {
+  pushUndo();
   if (selMany.length || selOne.length) { for (const id of selMany) nodes[id].hidden = true; for (const i of selOne) parts[i].hidden = true; }
   else if (selNode !== null) nodes[selNode].hidden = true;
   else for (const i of selSet) parts[i].hidden = true;
@@ -568,6 +580,7 @@ function hideSel() {
 }
 function isolateSel() {
   if (!selSet.length) return;
+  pushUndo();
   const keep = new Set(selSet);
   for (const k in nodes) nodes[k].hidden = false;
   parts.forEach((p, i) => { p.hidden = !keep.has(i); });
@@ -693,6 +706,7 @@ function paint() {
   const on = new Set(selSet);
   parts.forEach((p, i) => {
     for (const m of p.meshes) {
+      if (drawOn && m.userData.mat) { if (!m.userData.glass) m.material = on.has(i) ? DRAW_SEL : DRAW_MAT; continue; }
       m.material.emissive.setHex(on.has(i) ? 0x2b6cb0 : 0x000000);
       m.material.emissiveIntensity = on.has(i) ? 0.45 : 0;
     }
@@ -755,7 +769,7 @@ function nodeRow(nd, depth) {
   r.children[2].textContent = nd.name;
   r.children[3].textContent = ((M.ntype && NTYPE[M.ntype[nd.id]]) || 'узел') + ' · ' + nd.count;
   r.children[0].onclick = e => { e.stopPropagation(); nd.open = !nd.open; renderTree(); };
-  r.children[1].onclick = e => { e.stopPropagation(); nd.hidden = !r.children[1].checked; applyVis(); renderTree(); };
+  r.children[1].onclick = e => { e.stopPropagation(); pushUndo(); nd.hidden = !r.children[1].checked; applyVis(); renderTree(); };
   r.onclick = () => selectNode(nd.id);
   r.ondblclick = () => { selectNode(nd.id); fitBox(visibleBox(true)); };
   return r;
@@ -769,7 +783,7 @@ function partRow(i, depth) {
   r.children[1].checked = !p.hidden;
   r.children[2].textContent = p.n || '(без имени)';
   r.children[3].textContent = KIND[p.kind] || '';
-  r.children[1].onclick = e => { e.stopPropagation(); p.hidden = !r.children[1].checked; applyVis(); renderTree(); };
+  r.children[1].onclick = e => { e.stopPropagation(); pushUndo(); p.hidden = !r.children[1].checked; applyVis(); renderTree(); };
   r.onclick = () => selectPart(i, -1);
   r.ondblclick = () => { selectPart(i, -1); fitBox(visibleBox(true)); };
   return r;
@@ -850,14 +864,14 @@ function pointVisible(p) {
   }
   return true;
 }
-function snapAt(cx, cy) {
+function snapAt(cx, cy, radii) {
   root.updateMatrixWorld(true);
   const persp = cam.isPerspectiveCamera, fwd = cam.getWorldDirection(new THREE.Vector3());
   const pxPerMm = d => persp ? innerHeight / 2 / (d * Math.tan(THREE.MathUtils.degToRad(cam.fov / 2)))
                              : innerHeight / (cam.top - cam.bottom);
   const toPx = s => [(s.x + 1) / 2 * innerWidth, (1 - s.y) / 2 * innerHeight];
   const c = new THREE.Vector3(), v = new THREE.Vector3(), s = new THREE.Vector3();
-  for (const R of SNAP_R) {
+  for (const R of (radii || SNAP_R)) {
     // в одной точке экрана (сетка 2×2) держим только ближний к глазу угол: дальние за ним всё равно не видны,
     // а у мелкой фурнитуры сотни углов — без этого проверка видимости тонула в них
     const cell = new Map();
@@ -1093,8 +1107,10 @@ function edgeAt(cx, cy) {
   const toPx = s => [(s.x + 1) / 2 * innerWidth, (1 - s.y) / 2 * innerHeight];
   const cand = [];
   for (const pr of parts) {
-    if (!pr.g.visible || !pr.edges.length) continue;
-    for (const ln of pr.edges) {
+    // в кресленні цепляемся ещё за рёбра фурнитуры (ножка) и отрезки помещения (линия чистого пола)
+    const src = drawOn ? (pr.isL ? pr.g.children.filter(o => o.isLineSegments) : pr.edges.concat(pr.dEdges || [])) : pr.edges;
+    if (!pr.g.visible || !src.length) continue;
+    for (const ln of src) {
       const pos = ln.geometry.attributes.position, mw = ln.matrixWorld;
       for (let i = 0; i + 1 < pos.count; i += 2) {
         A.fromBufferAttribute(pos, i).applyMatrix4(mw); B.fromBufferAttribute(pos, i + 1).applyMatrix4(mw);
@@ -1168,9 +1184,14 @@ function edgeClick(e, mouse) {
 //    ближайшего, что нависает над ящиком (с его фасадом), минус 6 мм, до целого; считается закрытым.
 // Штанга и подсветка — позже (нужна отметка в выгрузке).
 const easyDims = [];
-let easyOpenIdx = -1;
+let easyOpen = [];   // детали, чьи звенья открыли лёгкие размеры: ящик и дверь перед ним держатся вместе (05.10)
 function dropEasy() { while (easyDims.length) { const dm = easyDims.pop(); if (dims.includes(dm)) removeDim(dm); } dropPartDims(); }
-function easyDim(a, b, label, text) { if (a.distanceTo(b) < 1) return; easyDims.push(addDim(a, b, { label, text })); }
+function easyDim(a, b, label, text) {
+  if (a.distanceTo(b) < 1) return;
+  // креслення: размер вдоль взгляда (глубина на виде спереди) на листе — точка, не ставим
+  if (drawOn && Math.abs(b.clone().sub(a).normalize().dot(cam.getWorldDirection(new THREE.Vector3()))) > 0.9) return;
+  easyDims.push(addDim(a, b, { label, text }));
+}
 function mainAxis(v) { const a = ['x', 'y', 'z'].map(k => Math.abs(v[k])); return ['x', 'y', 'z'][a.indexOf(Math.max(...a))]; }
 function vec(o) { return new THREE.Vector3(o.x || 0, o.y || 0, o.z || 0); }
 const easyRay = new THREE.Raycaster();
@@ -1384,19 +1405,62 @@ function drawerDims(i) {
   return { g: parts[bot.j].g, out };
 }
 let easyTimer = null;
-// закрыть то, что открыли лёгкие размеры (кроме узла keep), и отменить отложенные размеры
+// закрыть то, что открыли лёгкие размеры (кроме звеньев из keep), и отменить отложенные размеры
 function closeEasyOpen(keep) {
   clearTimeout(easyTimer);
-  if (easyOpenIdx >= 0 && parts[easyOpenIdx].chainA.length) {
-    const t = parts[easyOpenIdx].chainA[0];
-    if (t !== keep && openTarget(t)) toggleAt(easyOpenIdx, 0);
+  const K = keep instanceof Set ? keep : new Set(keep !== undefined ? [keep] : []), rest = [];
+  for (const j of easyOpen) {
+    const t = parts[j].chainA[0];
+    if (K.has(t)) { rest.push(j); continue; }
+    if (openTarget(t)) toggleAt(j, 0);
   }
-  easyOpenIdx = -1;
+  easyOpen = rest;
 }
-function easyMoving(i, cx, cy) {
+// подвижные детали, которые в ЗАКРЫТОМ положении стоят на луче щелчка перед попаданием (дверь перед ящиком):
+// по одной детали на звено. Луч — от последнего pick (05.10: щелчок по ящику за дверью закрывал дверь)
+function doorsInFront(i, h) {
+  const own = parts[i].chainA[0], seen = new Map(), v = new THREE.Vector3();
+  root.updateMatrixWorld(true);
+  for (const pr of moving) {
+    if (pr.kind !== 'p') continue;
+    const t0 = pr.chainA[0];
+    if (t0 === own || seen.has(t0) || parts[i].chainA.includes(t0)) continue;
+    const b = panelBox(pr, poseOf(pr, () => 0)).applyMatrix4(root.matrixWorld);
+    if (ray.ray.intersectBox(b, v) && ray.ray.origin.distanceTo(v) < h.distance - 0.5) seen.set(t0, pr.i);
+  }
+  return [...seen.values()];
+}
+// открыть деталь i вместе с дверьми перед ней: сначала двери, ящик — когда они отойдут
+function openWithFront(i, front) {
+  const doors = front.filter(j => !openTarget(parts[j].chainA[0]));
+  if (!doors.length) { if (!openTarget(parts[i].chainA[0])) toggleAt(i, 1); else lastOpenDelay = 0; return; }
+  let delay = 0;
+  for (const j of doors) { toggleAt(j, 1); delay = Math.max(delay, lastOpenDelay); }
+  delay += 600;
+  const list = [...scopeIds(i)];
+  for (const id of list) pendingOpen.add(id);
+  setTimeout(() => { for (const id of list) pendingOpen.delete(id); startAnim(list, 1); }, delay);
+  lastOpenDelay = delay;
+}
+let easySeq = 0;
+function easyMoving(i, cx, cy, front = []) {
   const top = parts[i].chainA[0], nd = animNode[top];
-  if (openTarget(top)) { closeEasyOpen(top); toggleAt(i, 0); return; }      // повторное касание — закрыть
-  closeEasyOpen(top);
+  // креслення: ничего не открываем — ящик меряется закрытым, на своём месте; двери — спрятать фасады
+  if (drawOn) {
+    if (!(Math.abs(nd.ang) < 1e-3 && Math.abs(nd.d) > 0)) { toast('у кресленні двері не відкриваються — сховайте фасади'); return; }
+    let dd = drawerDims(i);
+    if (!dd) { const S = scopeIds(i); for (const pr of moving) if (pr.chainA[0] !== top && S.has(pr.chainA[0]) && pr.kind === 'p') { dd = drawerDims(pr.i); if (dd) break; } }
+    if (!dd) { toast('не розібрав шухляду'); return; }
+    root.updateMatrixWorld(true);
+    for (const [a, b, l, t] of dd.out) easyDim(a.applyMatrix4(dd.g.matrixWorld), b.applyMatrix4(dd.g.matrixWorld), l, t);
+    return;
+  }
+  const keep = new Set([top, ...front.map(j => parts[j].chainA[0])]);      // дверь перед ящиком не закрываем
+  // повторное касание открытого ЛЁГКИМИ размерами — закрыть; открытое иначе («відкрити все», касание) — размеры (05.10)
+  if (openTarget(top) && easyOpen.some(j => parts[j].chainA[0] === top)) {
+    clearTimeout(easyTimer); toggleAt(i, 0); easyOpen = easyOpen.filter(j => parts[j].chainA[0] !== top); return;   // дверь перед ним остаётся
+  }
+  closeEasyOpen(keep);
   const isDrawer = Math.abs(nd.ang) < 1e-3 && Math.abs(nd.d) > 0;
   let dd = isDrawer ? drawerDims(i) : null;
   // щёлкнули по направляющей (едет вместе с ящиком) — размеры берём у ящика той же системы (29.09, Шкаф 8)
@@ -1404,17 +1468,22 @@ function easyMoving(i, cx, cy) {
     const S = scopeIds(i);
     for (const pr of moving) if (pr.chainA[0] !== top && S.has(pr.chainA[0]) && pr.kind === 'p') { dd = drawerDims(pr.i); if (dd) break; }
   }
-  toggleAt(i, 1); easyOpenIdx = i;
-  const mark = easyOpenIdx;
-  easyTimer = setTimeout(() => {                                            // после остановки
-    if (easyOpenIdx !== mark || !openTarget(top) || !ruler || rmode !== 'easy') return;
+  openWithFront(i, front);
+  for (const j of [...front, i]) if (!easyOpen.some(q => parts[q].chainA[0] === parts[j].chainA[0])) easyOpen.push(j);
+  const mark = ++easySeq;
+  const fire = n => {                                                       // после остановки
+    if (easySeq !== mark || !openTarget(top) || !ruler || rmode !== 'easy') return;
+    // ещё едет (тяжёлая модель, медленные кадры) — подождать, иначе размеры встанут посреди хода,
+    // а щелчок за дверью попадёт в саму дверь (05.10)
+    if (n < 15 && (pendingOpen.has(top) || anims.some(a => a.ids.includes(top)))) { easyTimer = setTimeout(() => fire(n + 1), 200); return; }
     root.updateMatrixWorld(true);
     if (dd) { for (const [a, b, l, t] of dd.out) easyDim(a.applyMatrix4(dd.g.matrixWorld), b.applyMatrix4(dd.g.matrixWorld), l, t); return; }
     // дверь (в том числе раздвижная — она тоже едет прямо, но дна и боковин у неё нет): ячейка за ней
-    const h = pick(cx, cy); if (!h || !h.face) return;
+    const h = pickSolid(cx, cy); if (!h || !h.face) return;
     const pr = parts[h.object.userData.idx]; if (pr.chainA.length) return;
     easyStatic(h);
-  }, 980 + lastOpenDelay);
+  };
+  easyTimer = setTimeout(() => fire(0), 980 + lastOpenDelay);
 }
 function easyStatic(h) {
   const i = h.object.userData.idx, pr = parts[i];
@@ -1426,13 +1495,15 @@ function easyStatic(h) {
   easyCell(h.point, n, i);
 }
 function easyPick(x, y) {
-  dropEasy();
-  const h = pick(x, y);
+  if (drawOn) dropPartDims(); else dropEasy();               // в кресленні размеры ячеек копятся — лист собирается из многих
+  const h = pickSolid(x, y);                                 // стекло пропускаем: ящик за стеклянной дверью (05.10)
   if (!h || !h.face) { closeEasyOpen(); return; }
   const i = h.object.userData.idx; if (parts[i].isL) { closeEasyOpen(); return; }
-  if (parts[i].chainA.length) { easyMoving(i, x, y); return; }
-  // щелчок мимо открытого ящика/двери — закрыть его (замечание 29.09), размеры считаем уже по тому, что щёлкнули
-  closeEasyOpen();
+  const front = doorsInFront(i, h);
+  if (parts[i].chainA.length) { easyMoving(i, x, y, front); return; }
+  // щелчок мимо открытого ящика/двери — закрыть его (замечание 29.09), кроме двери, за которой щёлкнули;
+  // размеры считаем уже по тому, что щёлкнули
+  closeEasyOpen(new Set(front.map(j => parts[j].chainA[0])));
   easyStatic(h);
 }
 
@@ -1493,7 +1564,7 @@ function buildDim(dm) {
     seg(pts);
     dm.mid = a2.clone().add(b2).multiplyScalar(0.5);
   }
-  dm.g = g; g.visible = dimsShown; scene.add(g);
+  dm.g = g; g.visible = dimsShown && !drawOn; scene.add(g);   // в кресленні размеры рисует лист (по правилам чертежа)
   // лёгкие размеры подписаны словом («ширина 564»), у ящика число — расчётное («корисна висота 187»)
   dm.el.textContent = (dm.label ? dm.label + ' ' : '') + (dm.text != null ? dm.text : fmt(dm.axis ? dm.b.clone().sub(dm.a).dot(AX[dm.axis]) : dm.a.distanceTo(dm.b)));
 }
@@ -1525,12 +1596,13 @@ function syncDimBtn() {
 }
 function setDimsShown(on) {
   dimsShown = on;
-  for (const dm of dims) dm.g.visible = on;
+  for (const dm of dims) dm.g.visible = on && !drawOn;
   updRuler(); syncDimBtn(); need();
 }
 function addDim(a, b, opt) {
   const dm = Object.assign({ a, b, axis: axisOf(a, b), off: new THREE.Vector3(), el: document.createElement('div') }, opt || {});
   dm.el.className = 'dim';
+  if (drawOn && !dm.vdir) dm.vdir = viewDir();             // в кресленні размер принадлежит виду, на котором поставлен
   document.body.appendChild(dm.el);
   dims.push(dm); if (!dimsShown) setDimsShown(true); buildDim(dm); hookDim(dm); updRuler(); syncDimBtn(); need();
   const dv = b.clone().sub(a);
@@ -1538,7 +1610,7 @@ function addDim(a, b, opt) {
     : 'по прямой ' + fmt(a.distanceTo(b)) + ' мм  (ширина ' + fmt(dv.x) + ', высота ' + fmt(dv.y) + ', глубина ' + fmt(dv.z) + ')';
   return dm;
 }
-function removeDim(dm) { scene.remove(dm.g); dm.el.remove(); dims.splice(dims.indexOf(dm), 1); syncDimBtn(); need(); }
+function removeDim(dm) { if (dm === selDim) selDim = null; scene.remove(dm.g); dm.el.remove(); dims.splice(dims.indexOf(dm), 1); syncDimBtn(); need(); }
 // оттаскивание: смещение — по одной из двух осей поперёк размера, какая лучше совпадает с движением
 function dragDim(dm, cx, cy, sdx, sdy) {
   if (!dm.axis) return;
@@ -1584,6 +1656,7 @@ function hookDim(dm) {
 // число размера показываем, только когда середина размера на экране и перед глазом
 // (замечание 27.09: число «висело» у края и на строке кнопок, когда сам размер ушёл за экран)
 function updRuler() {
+  if (drawOn) { for (const dm of dims) dm.el.style.display = 'none'; drawOverlay(); return; }   // в кресленні — числа на листе
   const fwd = cam.getWorldDirection(new THREE.Vector3());
   for (const dm of dims) {
     const s = dm.mid.clone().project(cam);
@@ -1641,7 +1714,8 @@ function stopRuler() {
   ruler = false; rp = []; placing = null; dropEasy(); clearFace1(); faceHoverEnd(); clearEdge1(); edgeHoverEnd(); showPending(); hideHover(); syncTools();
   cv.style.cursor = '';
   setOn('bRuler', false); $('st').textContent = ''; need();
-  if (dims.length) setDimsShown(false);     // рулетку погасили — размеры спрятаны до следующего включения (29.09)
+  // рулетку погасили — размеры спрятаны до следующего включения (29.09); в кресленні размеры — часть листа, остаются
+  if (dims.length && !drawOn) setDimsShown(false);
 }
 // компьютер: крестик всегда на месте курсора; у угла детали прыгает на угол ещё до щелчка.
 // После второго щелчка размер «висит на мыши»: ведёшь — лапки отъезжают, третий щелчок фиксирует.
@@ -1683,6 +1757,13 @@ function pick(cx, cy) {
   ray.setFromCamera(new THREE.Vector2((cx / innerWidth) * 2 - 1, -(cy / innerHeight) * 2 + 1), cam);
   const hs = ray.intersectObjects(picks, false);
   for (const h of hs) { let o = h.object, vis = true; while (o) { if (!o.visible) { vis = false; break; } o = o.parent; } if (vis) return h; }
+  return null;
+}
+// то же, но сквозь стекло (лёгкие размеры: ящик и полки за стеклянной дверью)
+function pickSolid(cx, cy) {
+  ray.setFromCamera(new THREE.Vector2((cx / innerWidth) * 2 - 1, -(cy / innerHeight) * 2 + 1), cam);
+  const hs = ray.intersectObjects(picks, false);
+  for (const h of hs) { if (isGlassMesh(h.object)) continue; let o = h.object, vis = true; while (o) { if (!o.visible) { vis = false; break; } o = o.parent; } if (vis) return h; }
   return null;
 }
 const cv = rend.domElement;
@@ -1849,14 +1930,20 @@ cv.addEventListener('pointercancel', e => { if (e.pointerType === 'touch') touch
 cv.addEventListener('pointermove', e => {
   if (e.pointerType === 'touch') { touchMove(e); return; }
   if (!drag) {
-    if (ruler && e.pointerType === 'mouse') {         // поиск угла — не чаще одного раза за кадр
+    // курсор показывает, что сделает щелчок: креслення — прицел инструмента / палец над деталью; рулетка — свой крестик;
+    // обычный просмотр — палец над деталью (Алексей 04.10). Поиск — не чаще одного раза за кадр.
+    if (e.pointerType === 'mouse') {
       const first = !hoverAt; hoverAt = [e.clientX, e.clientY];
-      if (first) requestAnimationFrame(() => { const [x, y] = hoverAt; hoverAt = null; if (ruler) hover(x, y); });
+      if (first) requestAnimationFrame(() => {
+        const [x, y] = hoverAt; hoverAt = null;
+        if (drawOn) drawHover(x, y); else if (ruler) hover(x, y); else cv.style.cursor = pick(x, y) ? 'pointer' : '';
+      });
     }
     return;
   }
   const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY;
-  if (drag.b === 0) {
+  if (drag.b === 0 && drawOn && drawLines) { panBy(dx, dy); place(); cv.style.cursor = 'grabbing'; }   // креслення: лист двигается, не вращается
+  else if (drag.b === 0) {
     view.yaw -= dx * 0.006;
     view.pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, view.pitch + dy * 0.006));
     place();
@@ -1866,12 +1953,17 @@ cv.addEventListener('pointermove', e => {
     const up = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 1);
     view.target.addScaledVector(right, -dx * k).addScaledVector(up, dy * k);
     place();
+    if (drawOn) cv.style.cursor = 'grabbing';
   }
 });
 cv.addEventListener('pointerup', e => {
   if (e.pointerType === 'touch') { touchUp(e); return; }
   const d = drag; drag = null;
+  if (drawOn) cv.style.cursor = drawTool && drawTool !== 'gab' ? 'none' : 'default';
   if (!d || Math.abs(e.clientX - d.x0) > 4 || Math.abs(e.clientY - d.y0) > 4) return;
+  // креслення с инструментом: левая — точка, правая — закончить цепочку (габаритный и «без инструмента» — выделение, как обычно)
+  if (drawOn && drawTool && drawTool !== 'gab') { if (d.b === 2) endTool(); else if (d.b === 0) toolClick(e.clientX, e.clientY); return; }
+  if (drawOn && d.b === 0 && selDim) { selDim = null; drawOverlay(); }
   if (d.b === 2) { if (ruler && (rp.length || face1 || edge1)) cancelPoint(); return; }   // правая кнопка без сдвига — убрать первую точку
   if (d.b !== 0) return;
   if (ruler && rmode !== 'gab') {                           // «габарит» — щелчок выделяет, как без рулетки (с Ctrl)
@@ -1895,7 +1987,19 @@ cv.addEventListener('wheel', e => {
   view.dist *= k; place();
 }, { passive: false });
 addEventListener('keydown', e => {
-  if (e.target.tagName === 'INPUT') return;
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if (drawOn) {                                             // креслення: отмена/возврат, удалить размер, Enter, Esc
+    const ctl = e.ctrlKey || e.metaKey;
+    if (ctl && e.code === 'KeyZ') { e.preventDefault(); if (e.shiftKey) drawRedo(); else drawUndo(); return; }
+    if (ctl && e.code === 'KeyY') { e.preventDefault(); drawRedo(); return; }
+    if (e.key === 'Delete' && selDim) { pushUndo(); removeDim(selDim); drawOverlay(); return; }
+    if (e.key === 'Enter') { if (drawTool === 'gab') gabCommit(); else if (drawTool) endTool(); return; }
+    if (e.key === 'Escape') {
+      if (tpts.length || tAxis !== null) { endTool(); return; }
+      if (drawTool) { setTool(null); return; }
+      if (selDim) { selDim = null; drawOverlay(); return; }
+    }
+  }
   if (e.key === 'Tab') {
     e.preventDefault(); if (selIdx < 0) return;
     selectPart(selIdx, e.shiftKey ? downLevel(selIdx, selLevel) : upLevel(selIdx, selLevel));
@@ -1911,6 +2015,7 @@ addEventListener('resize', () => { rend.setSize(innerWidth, innerHeight); layout
 
 // ---------------- кнопки ----------------
 function mode(m) {
+  if (drawOn) return;                                       // в кресленні материалы свои, показ не переключается
   curMode = m;
   for (const p of parts) for (const x of p.meshes) {
     const mt = x.material, b = mt.userData.base || mt;   // стекло остаётся прозрачным и в обычном режиме
@@ -2052,7 +2157,7 @@ function wire() {
   $('bOC').onclick = () => { const o = anyOpen() || anims.some(a => a.to === 1); startAnim(allAnimIds(), o ? 0 : 1); syncOC(!o); };
   { const DS = new Set(M.door || []); parts.forEach(p => { p.isDoor = p.h.some(id => DS.has(id)); });
     const b = $('bFac'); b.style.display = DS.size ? '' : 'none';
-    b.onclick = () => { hideFac = !hideFac; setOn('bFac', hideFac); dropEasy(); applyVis(); }; }
+    b.onclick = () => { pushUndo(); hideFac = !hideFac; setOn('bFac', hideFac); if (!drawOn) dropEasy(); applyVis(); }; }
   $('bUndo').onclick = cancelPoint;
   // подсказка по жестам — при первом открытии на телефоне
   const hint = $('hint');
@@ -2075,6 +2180,604 @@ function wire() {
     b.addEventListener('pointerleave', () => clearTimeout(t));
     b.addEventListener('contextmenu', e => { e.preventDefault(); clearTimeout(t); clearDims(); }); }
   $('bShowAll').onclick = showAll;
+  if (DRAW_OK) { $('bDraw').style.display = ''; $('bDraw').onclick = () => setDraw(!drawOn); wireOverlay(); }
+}
+
+// ---------------- креслення: кадры для отчёта Федосова (Алексей 04.10) ----------------
+// Только компьютер и только файл-страница из «Заказы» (модель внутри файла): по ссылке у заказчика вкладки нет.
+// Кадр = один файл: лист — SVG (вектор, рёбра и размеры), снимок — PNG (как на экране). Кладутся в папки зоны, откуда
+// их берёт отчёт (пресет «Заказчику», источник «Динамический»): <заказ>\5. Креслення\Чертежи для отчета(wmf)\<зона>
+// и …\Визуализация\<зона>, имена «01 — …» по порядку. Пишет локальный сервер (127.0.0.1:8765, /draw/…).
+// Лист — бумага А3 (400 × 283 мм), привязан к модели: колесо и сдвиг приближают лист целиком — линии, цифры и рамку
+// вместе, на экране ровно то, что будет на бумаге. Масштаб чертежа (мм модели на мм бумаги) — по виду или закреплённый.
+// В «линиях» модель не вращается: только строгие виды (кнопки, грани кубика). Невидимого на листе нет: детали белые и
+// закрывают то, что за ними и внутри них; видимость каждого ребра проверяется по глубине кадра, точка за точкой.
+// Размеры на листе — по правилам чертежа (Алексей 04.10): засечки или стрелки, число вдоль линии, шрифт как в Базисе,
+// на каждом виде — только размеры этого вида; ручки: концы прилипают к углам и линиям, середина отводит линию поперёк.
+const LOCAL = window.__LOCAL || null;
+const DRAW_OK = !!window.__MODEL && !TOUCH;
+const SRV = 'http://127.0.0.1:8765';
+const SHEET_W = 400, SHEET_H = 283;
+const SCALES = [5, 10, 15, 20, 25, 30, 40, 50, 75, 100];
+const DFONT = 'Sofia Sans Condensed';
+const DIR_DRAW = LOCAL ? LOCAL.order + '\\5. Креслення\\Чертежи для отчета(wmf)\\' + LOCAL.zone : '';
+const DIR_SHOT = LOCAL ? LOCAL.order + '\\5. Креслення\\Визуализация\\' + LOCAL.zone : '';
+const DRAW_MAT = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
+const DRAW_SEL = DRAW_MAT.clone(); DRAW_SEL.color.setHex(0xd4e3f3);
+const DRAW_GLASS = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });   // стекло не закрывает то, что за ним
+// глубина кадра — 24 бита в цвете точки (свой простой материал, без упаковок three — одинаково в любой версии)
+const DEPTH_MAT = new THREE.ShaderMaterial({ side: THREE.DoubleSide,
+  vertexShader: 'void main(){ gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: 'void main(){ float v = floor(gl_FragCoord.z * 16777215.0 + 0.5); float r = floor(v / 65536.0);' +
+    ' float g = floor((v - r * 65536.0) / 256.0); float b = v - r * 65536.0 - g * 256.0; gl_FragColor = vec4(r / 255.0, g / 255.0, b / 255.0, 1.0); }' });
+let drawLines = true, drawFix = 0, drawN = 20, sheetC = null;   // линии/цвет; закреплённый масштаб; масштаб листа; середина листа
+let dimEnd = 'tick'; try { dimEnd = localStorage.getItem('drawDimEnd') || 'tick'; } catch (e) {}
+let drawTool = null, tpts = [], tAxis = null, tLine = 0, tSide = 1, chainPrev = null, preview = null, selDim = null;
+const autoFlags = {};                                      // авторазмеры по видам: { mod, all }
+const drawFiles = { d: [], s: [] };                        // что лежит в папках отчёта
+const fEdges = new Map();
+const V3 = () => new THREE.Vector3();
+const toScr = v => { const s = v.clone().project(cam); return [(s.x + 1) / 2 * innerWidth, (1 - s.y) / 2 * innerHeight]; };
+const fmtN = n => String(Math.round(n * 10) / 10).replace('.', ',');
+// рёбра фурнитуры — только для креслення (на экране у фурнитуры рёбер нет): одна копия на форму
+function drawEdgesFor(p) {
+  if (p.dEdges) return p.dEdges;
+  p.dEdges = [];
+  if (p.isF) for (const m of p.meshes) {
+    let g = fEdges.get(m.geometry);
+    if (!g) { g = new THREE.EdgesGeometry(m.geometry, 30); fEdges.set(m.geometry, g); }
+    const ln = new THREE.LineSegments(g, EDGE); ln.visible = false; m.parent.add(ln); p.dEdges.push(ln);
+  }
+  return p.dEdges;
+}
+const isGlassMesh = m => m.userData.mat ? m.userData.glass : !!(m.material.userData.base || m.material).transparent;
+// направления вида: вправо и вверх на экране — какие оси модели (буква и знак)
+function viewDir() { return cam.getWorldDirection(V3()); }
+function viewAxes() {
+  cam.updateMatrixWorld();
+  const r = V3().setFromMatrixColumn(cam.matrixWorld, 0), u = V3().setFromMatrixColumn(cam.matrixWorld, 1);
+  const big = v => ['x', 'y', 'z'].reduce((p, q) => Math.abs(v[q]) > Math.abs(v[p]) ? q : p, 'x');
+  const R = big(r), U = big(u);
+  return { R, U, D: ['x', 'y', 'z'].find(q => q !== R && q !== U), rs: Math.sign(r[R]) || 1, us: Math.sign(u[U]) || 1 };
+}
+function perpAxis(axis) { const { R, U } = viewAxes(); return AX[axis === R ? U : R].clone(); }
+function viewKey() { const d = viewDir(); return [d.x, d.y, d.z].map(v => Math.round(v * 100)).join(','); }
+function flags() { const k = viewKey(); return autoFlags[k] || (autoFlags[k] = { mod: false, all: false }); }
+// размер принадлежит виду, на котором поставлен; старые (без вида) — если лежат в плоскости вида
+function dimHere(dm) {
+  const d = viewDir();
+  if (dm.vdir) return dm.vdir.dot(d) > 0.99;
+  return !!dm.axis && Math.abs(AX[dm.axis].dot(d)) < 0.1;
+}
+
+function setDraw(on) {
+  if (on === drawOn) return;
+  if (on) { closePop(); mode(1); if (ruler) stopRuler(); }
+  drawOn = on;
+  document.documentElement.classList.toggle('draw', on);
+  setOn('bDraw', on);
+  for (const id of ['bMode', 'bRuler']) $(id).style.display = on ? 'none' : '';
+  setTool(null);
+  for (const dm of dims) if (dm.g) dm.g.visible = dimsShown && !on;
+  if (on) { renderPanel(); applyLook(); layout(); strictView(0, 0); checkFolders(); }
+  else { selDim = null; applyLook(); $('dpanel').replaceChildren(); $('dsvg').replaceChildren(); layout(); updRuler(); }
+  syncTools(); need();
+}
+// вид в кресленні: «линии» — белые детали, чёрные рёбра, без перспективы; «цвет» — как обычно (для снимков)
+function applyLook() {
+  const L = drawOn && drawLines;
+  for (const p of parts) {
+    for (const m of p.meshes) {
+      if (L) {
+        if (!m.userData.mat) { m.userData.mat = m.material; m.userData.glass = !!(m.material.userData.base || m.material).transparent; }
+        m.material = m.userData.glass ? DRAW_GLASS : DRAW_MAT;
+      } else if (m.userData.mat) { m.material = m.userData.mat; delete m.userData.mat; }
+    }
+    if (p.isF && (L || p.dEdges)) for (const l of drawEdgesFor(p)) l.visible = L;
+  }
+  EDGE.color.setHex(L ? 0x000000 : 0x0c0e11); EDGE.opacity = L ? 1 : 0.92;
+  document.documentElement.classList.toggle('dlines', L);
+  $('bCam').style.display = L ? 'none' : '';
+  if (L && view.persp) setPersp(false);
+  paint(); syncPanel();
+}
+// ---------- лист: прямоугольник бумаги в плоскости вида, стоит на модели ----------
+const pxPerPaper = () => drawN * innerHeight / viewHeight();          // точек экрана на мм бумаги
+function sheetRect() {
+  cam.updateMatrixWorld();
+  const r = V3().setFromMatrixColumn(cam.matrixWorld, 0), u = V3().setFromMatrixColumn(cam.matrixWorld, 1);
+  const hw = SHEET_W * drawN / 2, hh = SHEET_H * drawN / 2;
+  const a = toScr(sheetC.clone().addScaledVector(r, -hw).addScaledVector(u, hh)), b = toScr(sheetC.clone().addScaledVector(r, hw).addScaledVector(u, -hh));
+  return { x0: a[0], y0: a[1], w: b[0] - a[0], h: b[1] - a[1] };
+}
+// масштаб по виду: видимое с полями под размеры (22 мм бумаги с каждой стороны) влезает в лист; любое число, не только стандартное
+function fitSheet() {
+  const b = visibleBox(false); if (b.isEmpty()) return;
+  const c = b.getCenter(V3()); view.target.copy(c); place(); cam.updateMatrixWorld();
+  const right = V3().setFromMatrixColumn(cam.matrixWorld, 0), up = V3().setFromMatrixColumn(cam.matrixWorld, 1);
+  let w = 0, h = 0;
+  for (const x of [b.min.x, b.max.x]) for (const y of [b.min.y, b.max.y]) for (const z of [b.min.z, b.max.z]) {
+    const d = new THREE.Vector3(x, y, z).sub(c); w = Math.max(w, Math.abs(d.dot(right))); h = Math.max(h, Math.abs(d.dot(up)));
+  }
+  const m = 22;
+  drawN = drawFix || Math.ceil(Math.max(2 * w / (SHEET_W - 2 * m), 2 * h / (SHEET_H - 2 * m)) * 10) / 10;
+  sheetC = c.clone();
+  fitView();
+}
+// показать лист целиком в свободном месте экрана
+function fitView() {
+  if (!sheetC) return;
+  const fr = freeRect(), fw = fr.x1 - fr.x0 - 40, fh = fr.y1 - fr.y0 - 40;
+  const mmpp = Math.max(SHEET_W * drawN / fw, SHEET_H * drawN / fh);
+  view.target.copy(sheetC); view.dist = mmpp * innerHeight / (2 * Math.tan(THREE.MathUtils.degToRad(persp.fov / 2)));
+  place();
+}
+function drawInfo() {
+  if (!sheetC) return;
+  const S = sheetRect(), el = $('sheet');
+  el.style.left = S.x0 + 'px'; el.style.top = S.y0 + 'px'; el.style.width = S.w + 'px'; el.style.height = S.h + 'px';
+  const txt = view.persp ? 'перспектива — без масштаба' : 'М 1:' + fmtN(drawN);
+  el.firstChild.textContent = txt;
+  const t = $('dScaleNow'); if (t) t.textContent = txt + (view.persp ? '' : drawFix ? ' (закреплён)' : ' (по виду)');
+  drawOverlay();
+}
+function placeSheet() { drawInfo(); }
+// ---------- размер на листе: линии, засечки/стрелки, число ----------
+// toP — точка модели → [x, y] в единицах вывода; k — единиц вывода на мм бумаги (экран: точки, файл: 1)
+function dimPrims(dm, toP, k) {
+  const L = [], T = [], F = [];
+  let pa, pb, pa2, pb2, val;
+  if (dm.axis) {
+    const u0 = AX[dm.axis], tl = dm.b.clone().sub(dm.a).dot(u0), a2 = dm.a.clone().add(dm.off), b2 = a2.clone().addScaledVector(u0, tl);
+    pa = toP(dm.a); pb = toP(dm.b); pa2 = toP(a2); pb2 = toP(b2); val = tl;
+  } else { pa = pa2 = toP(dm.a); pb = pb2 = toP(dm.b); val = dm.a.distanceTo(dm.b); }
+  let ex = pb2[0] - pa2[0], ey = pb2[1] - pa2[1];
+  const Ln = Math.hypot(ex, ey);
+  if (Ln < 0.5 * k) return null;                          // размер вдоль взгляда — на листе точка
+  ex /= Ln; ey /= Ln;
+  if (ex < -1e-6 || (Math.abs(ex) < 1e-6 && ey > 0)) { ex = -ex; ey = -ey; }   // читается слева направо / снизу вверх
+  if (dm.axis) for (const [p, p2] of [[pa, pa2], [pb, pb2]]) {   // выносные: зазор 1 мм от детали, 2 мм за размерную линию
+    const wx = p2[0] - p[0], wy = p2[1] - p[1], wl = Math.hypot(wx, wy);
+    if (wl < 0.3 * k) continue;
+    const g0 = wl > 3 * k ? k : 0;
+    L.push([p[0] + wx / wl * g0, p[1] + wy / wl * g0, p2[0] + wx / wl * 2 * k, p2[1] + wy / wl * 2 * k]);
+  }
+  const tick = dimEnd === 'tick', ov = tick && dm.axis ? 2 * k : 0, sg = (pb2[0] - pa2[0]) * ex + (pb2[1] - pa2[1]) * ey >= 0 ? 1 : -1;
+  L.push([pa2[0] - ex * ov * sg, pa2[1] - ey * ov * sg, pb2[0] + ex * ov * sg, pb2[1] + ey * ov * sg]);
+  if (tick) {                                             // засечка: 3 мм под 45° к линии
+    const s = 1.5 * k / Math.SQRT2, tx = (ex + ey) * s, ty = (ey - ex) * s;
+    for (const p of [pa2, pb2]) T.push([p[0] - tx, p[1] - ty, p[0] + tx, p[1] + ty]);
+  } else {
+    const AL = Math.min(3 * k, Ln / 3), AW = AL * 0.28;
+    for (const [p, s] of [[pa2, sg], [pb2, -sg]]) {
+      const bx = p[0] + ex * AL * s, by = p[1] + ey * AL * s;
+      F.push([p[0], p[1], bx - ey * AW, by + ex * AW, bx + ey * AW, by - ex * AW]);
+    }
+  }
+  const ang = Math.atan2(ey, ex) * 180 / Math.PI, r = ang * Math.PI / 180;
+  const tp = [(pa2[0] + pb2[0]) / 2, (pa2[1] + pb2[1]) / 2];
+  return { L, T, F, txt: dm.text != null ? String(dm.text) : fmt(val), x: tp[0] + Math.sin(r) * k, y: tp[1] - Math.cos(r) * k, ang, pa, pb, tp };
+}
+function dimSvg(g, k, o) {
+  const col = o.sel ? '#e0301e' : o.prev ? '#7aa7e0' : '#1f5fbf', f = v => String(Math.round(v * 100) / 100);
+  const seg = a => a.map(q => 'M' + f(q[0]) + ' ' + f(q[1]) + 'L' + f(q[2]) + ' ' + f(q[3])).join('');
+  const sw = o.exp ? 0.18 : Math.max(1, 0.18 * k), tw = o.exp ? 0.35 : Math.max(1.4, 0.35 * k);
+  let s = `<path d="${seg(g.L)}" fill="none" stroke="${col}" stroke-width="${f(sw)}"/>`;
+  if (g.T.length) s += `<path d="${seg(g.T)}" fill="none" stroke="${col}" stroke-width="${f(tw)}" stroke-linecap="round"/>`;
+  if (g.F.length) s += `<path d="${g.F.map(t => 'M' + f(t[0]) + ' ' + f(t[1]) + 'L' + f(t[2]) + ' ' + f(t[3]) + 'L' + f(t[4]) + ' ' + f(t[5]) + 'Z').join('')}" fill="${col}" stroke="none"/>`;
+  s += `<text x="${f(g.x)}" y="${f(g.y)}" font-family="${DFONT}" font-size="${f(3.5 * k)}" fill="${col}" text-anchor="middle"` +
+    (Math.abs(g.ang) > 0.01 ? ` transform="rotate(${f(g.ang)} ${f(g.x)} ${f(g.y)})"` : '') + (o.exp || o.prev ? '' : ` class="dt" data-d="${o.i}"`) + `>${g.txt}</text>`;
+  if (!o.exp && !o.prev) s += `<path d="${seg(g.L)}" class="dh" data-d="${o.i}"/>`;
+  return s;
+}
+// размеры на экране — тем же рисунком, что в файле, в масштабе листа
+function drawOverlay() {
+  const sv = $('dsvg'); if (!sv) return;
+  if (!drawOn) { if (sv.firstChild) sv.replaceChildren(); return; }
+  cam.updateMatrixWorld();
+  const k = pxPerPaper();
+  let h = '';
+  if (dimsShown) dims.forEach((dm, i) => { if (!dimHere(dm)) return; const g = dimPrims(dm, toScr, k); if (g) h += dimSvg(g, k, { i, sel: dm === selDim }); });
+  if (preview) { const g = dimPrims(preview, toScr, k); if (g) h += dimSvg(g, k, { prev: true }); }
+  if (selDim && dims.includes(selDim) && dimHere(selDim)) {
+    const g = dimPrims(selDim, toScr, k);
+    if (g) for (const [p, n] of [[g.pa, 'a'], [g.pb, 'b'], [g.tp, 'm']]) h += `<rect class="grip" data-g="${n}" x="${p[0] - 5}" y="${p[1] - 5}" width="10" height="10"/>`;
+  }
+  sv.innerHTML = h;
+}
+// ---------- прилипание точки: угол детали → линия (ребро, отрезок помещения) → просто место на виде ----------
+function snapDraw(x, y) {
+  const c = snapAt(x, y, [12]); if (c) return { p: c, kind: 'pt' };
+  const e = edgeAt(x, y); if (e) return { p: e.p, kind: 'edge' };
+  return { p: onTargetPlane(x, y) || V3(), kind: 'free' };
+}
+function showSnap(s) {
+  const mk = $('snapmk'), [x, y] = toScr(s.p);
+  mk.style.display = 'block'; mk.style.left = x + 'px'; mk.style.top = y + 'px';
+  mk.classList.toggle('snapped', s.kind === 'pt'); mk.classList.toggle('edge', s.kind === 'edge');
+}
+// ---------- ручки размера ----------
+// середина (число, линия) — отводит размерную линию поперёк; конец — прилипает к углу/линии, число пересчитывается,
+// а размерная линия стоит на месте: вбок меняется только длина выносной ножки (Алексей 04.10)
+function dragDimTo(dm, kind, x, y) {
+  if (!dm.axis) return;
+  const w = perpAxis(dm.axis);
+  if (kind === 'm') { const P = onTargetPlane(x, y); if (!P) return; dm.off.copy(w).multiplyScalar(P.sub(dm.a).dot(w)); }
+  else {
+    const s = snapDraw(x, y); showSnap(s);
+    if (kind === 'a') { const a2 = dm.a.clone().add(dm.off); dm.a.copy(s.p); dm.off.copy(w).multiplyScalar(a2.sub(dm.a).dot(w)); }
+    else dm.b.copy(s.p);
+  }
+  buildDim(dm); drawOverlay();
+}
+function wireOverlay() {
+  const sv = $('dsvg'); let dr = null;
+  sv.addEventListener('pointerdown', e => {
+    const di = e.target.dataset.d, gr = e.target.dataset.g;
+    if (di === undefined && gr === undefined) return;
+    e.preventDefault(); e.stopPropagation();
+    if (gr) { dr = { dm: selDim, kind: gr, x: e.clientX, y: e.clientY, moved: false }; return; }
+    const dm = dims[+di]; if (!dm) return;
+    if (e.button === 2) { pushUndo(); removeDim(dm); drawOverlay(); return; }
+    selDim = dm; dr = { dm, kind: 'm', x: e.clientX, y: e.clientY, moved: false }; drawOverlay();
+  });
+  sv.addEventListener('contextmenu', e => e.preventDefault());
+  addEventListener('pointermove', e => {
+    if (!dr) return;
+    if (!dr.moved && Math.hypot(e.clientX - dr.x, e.clientY - dr.y) < 3) return;
+    if (!dr.moved) { dr.moved = true; pushUndo(); }
+    dragDimTo(dr.dm, dr.kind, e.clientX, e.clientY);
+  });
+  addEventListener('pointerup', () => { if (dr) { dr = null; hideHover(); drawOverlay(); } });
+}
+// ---------- инструменты: линейный, цепочка, от базы, габаритный, полезные ----------
+const THINT = {
+  lin: 'линейный: две точки (угол или линия), потом щелчок — куда встанет размер',
+  chain: 'цепочка: две точки и место, дальше — следующие точки; Esc или правая кнопка — закончить',
+  base: 'от базы: база (точка или линия), вторая точка и место, дальше — следующие точки; Esc — закончить',
+  gab: 'габаритный: выделите модули (Shift — несколько) и нажмите Enter',
+  easy: 'полезные: щелчок по ячейке, полке, ящику',
+};
+function setTool(t) {
+  drawTool = t; tpts = []; tAxis = null; chainPrev = null; preview = null; hideHover();
+  cv.style.cursor = t && t !== 'gab' ? 'none' : '';
+  $('st').textContent = t ? THINT[t] : '';
+  syncPanel(); drawOverlay();
+}
+function endTool() { tpts = []; tAxis = null; chainPrev = null; preview = null; if (drawTool) $('st').textContent = THINT[drawTool]; drawOverlay(); }
+// горизонтально или вертикально — по тому, куда увели мышь от двух точек (как в Базисе)
+function orient(p1, p2, x, y) {
+  const { R, U } = viewAxes(), a = toScr(p1), b = toScr(p2);
+  const dx = Math.abs(a[0] - b[0]), dy = Math.abs(a[1] - b[1]);
+  if (dy < 3) return R; if (dx < 3) return U;
+  const inX = x > Math.min(a[0], b[0]) && x < Math.max(a[0], b[0]), inY = y > Math.min(a[1], b[1]) && y < Math.max(a[1], b[1]);
+  if (inX && !inY) return R; if (inY && !inX) return U;
+  return dx >= dy ? R : U;
+}
+function mkPrev(a, b, axis, line) { const w = perpAxis(axis); return { a, b, axis, off: w.multiplyScalar(line - a.dot(w)), text: null }; }
+function toolHover(x, y) {
+  const s = snapDraw(x, y); showSnap(s);
+  preview = null;
+  if (tAxis === null && tpts.length === 2) {
+    const o = orient(tpts[0], tpts[1], x, y), P = onTargetPlane(x, y);
+    if (P) preview = mkPrev(tpts[0], tpts[1], o, P.dot(perpAxis(o)));
+  } else if (tAxis !== null) {
+    const from = drawTool === 'chain' ? chainPrev : tpts[0];
+    preview = mkPrev(from, s.p, tAxis, drawTool === 'base' ? tLine + tSide * 7 * drawN : tLine);
+  } else if (tpts.length === 1) preview = { a: tpts[0], b: s.p, axis: null, off: V3() };
+  drawOverlay();
+}
+function toolDim(a, b) {
+  if (Math.abs(b.clone().sub(a).dot(AX[tAxis])) < 0.5) { toast('точки на одной линии — 0 мм'); return; }
+  const dm = addDim(a.clone(), b.clone()), w = perpAxis(tAxis);
+  dm.axis = tAxis; dm.off = w.multiplyScalar(tLine - a.dot(w)); buildDim(dm);
+}
+function toolClick(x, y) {
+  if (drawTool === 'easy') { pushUndo(); easyPick(x, y); drawOverlay(); return; }
+  const s = snapDraw(x, y);
+  if (tAxis === null) {
+    if (tpts.length < 2) { tpts.push(s.p.clone()); toolHover(x, y); return; }
+    const o = orient(tpts[0], tpts[1], x, y), P = onTargetPlane(x, y); if (!P) return;
+    const w = perpAxis(o);
+    tAxis = o; tLine = P.dot(w); tSide = Math.sign(tLine - tpts[0].dot(w)) || 1;
+    pushUndo(); toolDim(tpts[0], tpts[1]); chainPrev = tpts[1];
+    if (drawTool === 'lin') endTool(); else { preview = null; $('st').textContent = 'следующая точка; Esc или правая кнопка — закончить'; drawOverlay(); }
+    return;
+  }
+  const from = drawTool === 'chain' ? chainPrev : tpts[0];
+  pushUndo();
+  if (drawTool === 'base') tLine += tSide * 7 * drawN;      // каждый следующий от базы — ступенькой дальше от чертежа
+  toolDim(from, s.p); chainPrev = s.p.clone(); drawOverlay();
+}
+function drawHover(x, y) {
+  if (drawTool && drawTool !== 'gab') { toolHover(x, y); return; }
+  hideHover();
+  cv.style.cursor = pick(x, y) ? 'pointer' : 'default';
+}
+// ---------- габариты: модули (сборочные единицы) видимого, выделенное по Enter ----------
+// Модули — самые верхние сборочные единицы видимых деталей (галочки Базиса; нет галочек — верхний блок).
+// Ширины модулей — цепочкой снизу, под ними общая ширина; высоты модулей — слева (одна на каждую разную высоту),
+// общая высота — справа. Отступы — 9 мм бумаги при любом масштабе. Всё — в осях вида (сбоку ширина = глубина).
+function unitBoxes() {
+  root.updateMatrixWorld(true);
+  const map = new Map();
+  parts.forEach((p, i) => {
+    if (p.isL || !p.g.visible) return;
+    const ch = asmChain(i), u = ch.length ? ch[ch.length - 1] : (p.v.length ? p.v[p.v.length - 1] : null);
+    if (u === null) return;
+    if (!map.has(u)) map.set(u, new THREE.Box3());
+    for (const m of p.meshes) map.get(u).expandByObject(m);
+  });
+  return [...map.values()].filter(b => !b.isEmpty());
+}
+function boxTools(all) {
+  const { R, U, D, rs, us } = viewAxes(), d = viewDir(), zF = d[D] < 0 ? all.max[D] : all.min[D];
+  const P = (h, v) => { const p = V3(); p[R] = h; p[U] = v; p[D] = zF; return p; };
+  const put = (a, b, offAx, offV, tag) => { if (a.distanceTo(b) < 1) return; const dm = addDim(a, b); dm.off = AX[offAx].clone().multiplyScalar(offV); dm.auto = tag; buildDim(dm); };
+  return { R, U, rs, us, P, put, lo: b => us > 0 ? b.min[U] : b.max[U], le: b => rs > 0 ? b.min[R] : b.max[R], ri: b => rs > 0 ? b.max[R] : b.min[R], g: 9 * drawN };
+}
+function autoDims() {
+  const F = flags();
+  for (const dm of dims.filter(q => q.auto && q.auto !== 'gab' && dimHere(q))) removeDim(dm);
+  if (!F.mod && !F.all) { drawOverlay(); return; }
+  const B = unitBoxes(); if (!B.length) { toast('на виде нет модулей'); return; }
+  const all = new THREE.Box3(); B.forEach(b => all.union(b));
+  const { R, U, rs, us, P, put, lo, le, ri, g } = boxTools(all), low = lo(all);
+  if (F.mod) {
+    for (const b of B) put(P(b.min[R], lo(b)), P(b.max[R], lo(b)), U, low - us * g - lo(b), 'mod');
+    const seen = [];
+    B.slice().sort((p, q) => (q.max[U] - q.min[U]) - (p.max[U] - p.min[U])).forEach(b => {
+      if (seen.some(s => Math.abs(s[0] - b.min[U]) < 1 && Math.abs(s[1] - b.max[U]) < 1)) return;
+      seen.push([b.min[U], b.max[U]]);
+      const e = le(b);
+      put(P(e, b.min[U]), P(e, b.max[U]), R, le(all) - rs * g * seen.length - e, 'mod');
+    });
+  }
+  if (F.all) {
+    put(P(all.min[R], low), P(all.max[R], low), U, -us * g * (F.mod ? 2 : 1), 'all');
+    const e = ri(all); put(P(e, all.min[U]), P(e, all.max[U]), R, rs * g, 'all');
+  }
+  drawOverlay();
+}
+function gabCommit() {
+  if (!selSet.length) { toast('выделите модули (Shift — несколько), потом Enter'); return; }
+  root.updateMatrixWorld(true);
+  const b = new THREE.Box3();
+  for (const i of selSet) { const p = parts[i]; if (!effVisible(p) || p.isL) continue; for (const m of p.meshes) b.expandByObject(m); }
+  if (b.isEmpty()) return;
+  pushUndo();
+  // размеры — снаружи всего вида (третьим рядом, за габаритами модулей и общим), выносные тянутся от выделенного
+  const all = visibleBox(false), { R, U, rs, us, P, put, lo, le, g } = boxTools(b), low = lo(b), e = le(b);
+  put(P(b.min[R], low), P(b.max[R], low), U, lo(all) - us * g * 3 - low, 'gab');
+  put(P(e, b.min[U]), P(e, b.max[U]), R, le(all) - rs * g * 3 - e, 'gab');
+  clearSel(); drawOverlay();
+}
+// ---------- Ctrl+Z / Ctrl+Y: размеры, спрятанное, фасады ----------
+const undoS = [], redoS = [];
+function stateNow() {
+  return { dims: dims.map(d => ({ a: d.a.toArray(), b: d.b.toArray(), axis: d.axis, off: d.off.toArray(), label: d.label, text: d.text, vdir: d.vdir ? d.vdir.toArray() : null, auto: d.auto })),
+           ph: parts.map(p => p.hidden ? '1' : '0').join(''), nh: Object.keys(nodes).filter(k => nodes[k].hidden), fac: hideFac, af: JSON.stringify(autoFlags) };
+}
+function pushUndo() { if (!drawOn) return; undoS.push(stateNow()); if (undoS.length > 80) undoS.shift(); redoS.length = 0; }
+function restoreState(s) {
+  selDim = null; preview = null;
+  while (dims.length) removeDim(dims[0]);
+  easyDims.length = 0; partDims.length = 0; gabDims.length = 0;
+  for (const q of s.dims) {
+    const dm = addDim(new THREE.Vector3().fromArray(q.a), new THREE.Vector3().fromArray(q.b), { label: q.label, text: q.text });
+    dm.axis = q.axis; dm.off = new THREE.Vector3().fromArray(q.off); dm.vdir = q.vdir ? new THREE.Vector3().fromArray(q.vdir) : null; dm.auto = q.auto;
+    buildDim(dm);
+  }
+  parts.forEach((p, i) => { p.hidden = s.ph[i] === '1'; });
+  for (const k in nodes) nodes[k].hidden = s.nh.includes(k);
+  hideFac = s.fac; setOn('bFac', hideFac);
+  for (const k in autoFlags) delete autoFlags[k];
+  Object.assign(autoFlags, JSON.parse(s.af));
+  applyVis(); renderTree(); syncPanel(); drawOverlay();
+}
+function drawUndo() { if (!undoS.length) { toast('отменять нечего'); return; } redoS.push(stateNow()); restoreState(undoS.pop()); }
+function drawRedo() { if (!redoS.length) { toast('возвращать нечего'); return; } undoS.push(stateNow()); restoreState(redoS.pop()); }
+
+const DVIEWS = { front: [0, 0], back: [Math.PI, 0], left: [-Math.PI / 2, 0], right: [Math.PI / 2, 0], top: [0, Math.PI / 2], iso: [Math.PI / 4, 0.6155] };
+const DNAMES = { front: 'вид спереди', back: 'вид сзади', left: 'вид слева', right: 'вид справа', top: 'вид сверху', iso: 'изометрия' };
+function renderPanel() {
+  const d = $('dpanel');
+  d.innerHTML = `<b>Креслення</b><div class="dz"></div>
+    <div class="dsec">вид</div>
+    <div class="drow"><button data-l="1">линии</button><button data-l="0">цвет</button></div>
+    <div class="drow"><button data-v="front">спереди</button><button data-v="back">сзади</button><button data-v="left">слева</button><button data-v="right">справа</button><button data-v="top">сверху</button><button data-v="iso" class="iso">изометрия</button></div>
+    <div class="dsec">масштаб</div>
+    <div class="drow"><select id="dScale"></select><button id="dFit" title="Пересчитать масштаб и вписать лист в экран">вписать</button></div>
+    <small id="dScaleNow"></small>
+    <div class="dsec">размеры</div>
+    <div class="drow"><button data-t="lin">линейный</button><button data-t="chain">цепочка</button><button data-t="base">от базы</button><button data-t="gab">габаритный</button><button data-t="easy">полезные</button></div>
+    <div class="drow"><button id="dMod" title="Ширина каждого модуля снизу, высоты слева — на этом виде">габариты модулей</button><button id="dAll" title="Общая ширина снизу, общая высота справа — на этом виде">общий габарит</button></div>
+    <div class="drow"><span class="dl">концы</span><button data-e="tick">засечки</button><button data-e="arrow">стрелки</button></div>
+    <button id="dClr">стереть размеры этого вида</button>
+    <small>Размер: щелчок — ручки, тянуть за число или линию — отвести, правая кнопка — удалить. Ctrl+Z — отменить, Ctrl+Y — вернуть.</small>
+    <div class="dsec">кадр</div>
+    <input id="dName" placeholder="название кадра" value="вид спереди">
+    <button id="dSave" class="main" title="Рёбра и размеры листа — векторный файл">сохранить лист (SVG)</button>
+    <button id="dShot" class="main" title="Картинка листа, как на экране (размеры не входят)">сохранить снимок (PNG)</button>
+    <div class="dsec">в папках отчёта</div><div id="dList"></div>`;
+  d.querySelector('.dz').textContent = LOCAL ? 'зона: ' + LOCAL.zone : 'нет папки заказа — перевыгрузите проект из Базиса';
+  const sel = $('dScale');
+  sel.innerHTML = '<option value="0">масштаб по виду</option>' + SCALES.map(s => `<option value="${s}">закрепить 1:${s}</option>`).join('');
+  sel.value = String(drawFix);
+  sel.onchange = () => { drawFix = +sel.value; fitSheet(); };
+  $('dFit').onclick = fitSheet;
+  d.querySelectorAll('[data-l]').forEach(b => { b.onclick = () => { drawLines = b.dataset.l === '1'; applyLook(); if (drawLines && !view.strict) strictView(0, 0); need(); }; });
+  d.querySelectorAll('[data-v]').forEach(b => { b.onclick = () => {
+    const [y, p] = DVIEWS[b.dataset.v]; selDim = null; endTool(); strictView(y, p);
+    $('dName').value = DNAMES[b.dataset.v] + (hideFac ? ' без фасадов' : ''); syncPanel();
+  }; });
+  d.querySelectorAll('[data-t]').forEach(b => { b.onclick = () => setTool(drawTool === b.dataset.t ? null : b.dataset.t); });
+  d.querySelectorAll('[data-e]').forEach(b => { b.onclick = () => { dimEnd = b.dataset.e; try { localStorage.setItem('drawDimEnd', dimEnd); } catch (e) {} syncPanel(); drawOverlay(); }; });
+  $('dMod').onclick = () => { pushUndo(); const F = flags(); F.mod = !F.mod; autoDims(); syncPanel(); };
+  $('dAll').onclick = () => { pushUndo(); const F = flags(); F.all = !F.all; autoDims(); syncPanel(); };
+  $('dClr').onclick = () => { pushUndo(); for (const dm of dims.filter(dimHere)) removeDim(dm); const F = flags(); F.mod = F.all = false; selDim = null; syncPanel(); drawOverlay(); };
+  $('dSave').onclick = saveSheet; $('dShot').onclick = saveShot;
+  $('dName').onkeydown = e => { if (e.key === 'Enter') saveSheet(); };
+  syncPanel(); refreshList();
+}
+function syncPanel() {
+  const d = $('dpanel'); if (!d || !d.firstChild || !drawOn) return;
+  d.querySelectorAll('[data-l]').forEach(b => b.classList.toggle('on', (b.dataset.l === '1') === drawLines));
+  d.querySelectorAll('[data-t]').forEach(b => b.classList.toggle('on', b.dataset.t === drawTool));
+  d.querySelectorAll('[data-e]').forEach(b => b.classList.toggle('on', b.dataset.e === dimEnd));
+  d.querySelector('.iso').style.display = drawLines ? 'none' : '';
+  const F = flags(); $('dMod').classList.toggle('on', F.mod); $('dAll').classList.toggle('on', F.all);
+  drawInfo();
+}
+// ---------- лист SVG ----------
+function buildSVG() {
+  for (const p of parts) if (p.isF) drawEdgesFor(p);
+  root.updateMatrixWorld(true); cam.updateMatrixWorld();
+  // камера листа: тот же ракурс, кадр ровно по листу, глубина — по видимому
+  const camD = new THREE.OrthographicCamera();
+  camD.position.copy(cam.position); camD.quaternion.copy(cam.quaternion); camD.updateMatrixWorld();
+  const inv = camD.matrixWorldInverse, q0 = sheetC.clone().applyMatrix4(inv), hw = SHEET_W * drawN / 2, hh = SHEET_H * drawN / 2;
+  camD.left = q0.x - hw; camD.right = q0.x + hw; camD.top = q0.y + hh; camD.bottom = q0.y - hh;
+  const vb = visibleBox(false); let z0 = Infinity, z1 = -Infinity;
+  for (const x of [vb.min.x, vb.max.x]) for (const y of [vb.min.y, vb.max.y]) for (const z of [vb.min.z, vb.max.z]) {
+    const q = new THREE.Vector3(x, y, z).applyMatrix4(inv); z0 = Math.min(z0, q.z); z1 = Math.max(z1, q.z);
+  }
+  camD.near = -z1 - 50; camD.far = -z0 + 50; camD.updateProjectionMatrix();
+  // глубина кадра: только сами детали (рёбра, размеры, подсветки и стекло — не закрывают)
+  const RW = 4096, RH = Math.round(RW * SHEET_H / SHEET_W);
+  const rt = new THREE.WebGLRenderTarget(RW, RH), hid = [];
+  scene.traverse(o => {
+    if (!o.visible) return;
+    if (o.isLine || o.isPoints || (o.isMesh && (o.userData.idx === undefined || isGlassMesh(o)))) { o.visible = false; hid.push(o); }
+  });
+  const ov = scene.overrideMaterial, cc = rend.getClearColor(new THREE.Color()), ca = rend.getClearAlpha();
+  scene.overrideMaterial = DEPTH_MAT;
+  rend.setRenderTarget(rt); rend.setClearColor(0xffffff, 1); rend.clear(); rend.render(scene, camD);
+  const px = new Uint8Array(RW * RH * 4); rend.readRenderTargetPixels(rt, 0, 0, RW, RH, px);
+  rend.setRenderTarget(null); rend.setClearColor(cc, ca); scene.overrideMaterial = ov;
+  for (const o of hid) o.visible = true;
+  rt.dispose(); need();
+  const Z = new Float32Array(RW * RH);
+  for (let k = 0; k < RW * RH; k++) Z[k] = (px[4 * k] * 65536 + px[4 * k + 1] * 256 + px[4 * k + 2]) / 16777215;
+  // ребро видно в точке, если оно не глубже самой дальней из 4 ближайших точек кадра (+1,5 мм)
+  const eps = 1.5 / (camD.far - camD.near);
+  const zAt = (x, y) => (x < 0 || y < 0 || x >= RW || y >= RH) ? -1 : Z[(RH - 1 - y) * RW + x];
+  const visAt = (fx, fy, z) => {
+    const x = Math.floor(fx - 0.5), y = Math.floor(fy - 0.5); let mx = -1;
+    for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) { const v = zAt(x + dx, y + dy); if (v > mx) mx = v; }
+    return mx >= 0 && z <= mx + eps;
+  };
+  const out = [], kx = SHEET_W / RW, ky = SHEET_H / RH;
+  const seg = (a, b) => {
+    if ((a.z < -1 && b.z < -1) || (a.z > 1 && b.z > 1)) return;
+    const ax = (a.x + 1) / 2 * RW, ay = (1 - a.y) / 2 * RH, bx = (b.x + 1) / 2 * RW, by = (1 - b.y) / 2 * RH;
+    const az = (a.z + 1) / 2, bz = (b.z + 1) / 2, L = Math.hypot(bx - ax, by - ay);
+    if (L < 0.5 || Math.max(ax, bx) < 0 || Math.min(ax, bx) > RW || Math.max(ay, by) < 0 || Math.min(ay, by) > RH) return;
+    const n = Math.max(1, Math.ceil(L)), v = new Uint8Array(n + 1);
+    for (let s = 0; s <= n; s++) { const t = s / n; v[s] = visAt(ax + (bx - ax) * t, ay + (by - ay) * t, az + (bz - az) * t) ? 1 : 0; }
+    for (let s = 1; s < n; s++) if (v[s - 1] === v[s + 1] && v[s] !== v[s - 1]) v[s] = v[s - 1];   // одиночные выбросы
+    let s0 = -1;
+    for (let s = 0; s <= n + 1; s++) {
+      const on = s <= n && v[s] === 1;
+      if (on && s0 < 0) s0 = s;
+      else if (!on && s0 >= 0) {
+        if (s - 1 > s0) { const t0 = s0 / n, t1 = (s - 1) / n; out.push([(ax + (bx - ax) * t0) * kx, (ay + (by - ay) * t0) * ky, (ax + (bx - ax) * t1) * kx, (ay + (by - ay) * t1) * ky]); }
+        s0 = -1;
+      }
+    }
+  };
+  const A = new THREE.Vector3(), B = new THREE.Vector3();
+  const lines = ln => {
+    const pos = ln.geometry.attributes.position, mw = ln.matrixWorld;
+    for (let i = 0; i + 1 < pos.count; i += 2) { A.fromBufferAttribute(pos, i).applyMatrix4(mw).project(camD); B.fromBufferAttribute(pos, i + 1).applyMatrix4(mw).project(camD); seg(A, B); }
+  };
+  for (const p of parts) {
+    if (!p.g.visible) continue;
+    if (p.isL) { p.g.traverse(o => { if (o.isLineSegments) lines(o); }); continue; }
+    for (const ln of p.edges) lines(ln);
+    if (p.isF) for (const ln of p.dEdges) lines(ln);
+  }
+  // размеры: тем же рисунком, что на экране, в мм бумаги
+  const P2 = v => { const q = v.clone().project(camD); return [(q.x + 1) / 2 * SHEET_W, (1 - q.y) / 2 * SHEET_H]; };
+  let ds = '', nd = 0;
+  if (dimsShown) for (const dm of dims) { if (!dimHere(dm)) continue; const g = dimPrims(dm, P2, 1); if (g) { ds += dimSvg(g, 1, { exp: true }); nd++; } }
+  const f2 = v => String(Math.round(v * 100) / 100), paths = [];
+  for (let k = 0; k < out.length; k += 1500) paths.push(out.slice(k, k + 1500).map(q => 'M' + f2(q[0]) + ' ' + f2(q[1]) + 'L' + f2(q[2]) + ' ' + f2(q[3])).join(''));
+  console.log('лист: рёбер на листе ' + out.length + ', размеров ' + nd + ', масштаб 1:' + fmtN(drawN));
+  return '<?xml version="1.0" encoding="UTF-8"?>\n' +
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${SHEET_W}mm" height="${SHEET_H}mm" viewBox="0 0 ${SHEET_W} ${SHEET_H}">\n` +
+    '<g id="detali" fill="none" stroke="#000000" stroke-width="0.3" stroke-linecap="round">\n' + paths.map(d => `<path d="${d}"/>`).join('\n') + '\n</g>\n' +
+    (ds ? `<g id="razmery">${ds}</g>\n` : '') +
+    `<g id="masshtab"><text x="2" y="${SHEET_H - 2}" font-family="${DFONT}" font-size="3.5" fill="#000000">М 1:${fmtN(drawN)}</text></g>\n</svg>\n`;
+}
+// ---------- снимок PNG: лист целиком, в тройном разрешении экрана, без размеров и выделения ----------
+function shotPNG() {
+  const keep = { t: view.target.clone(), d: view.dist };
+  if (selSet.length) clearSel();
+  fitView();
+  const S = sheetRect(), k = 3, pr = rend.getPixelRatio();
+  rend.setPixelRatio(k); rend.setSize(innerWidth, innerHeight, false); rend.render(scene, cam);
+  const c = document.createElement('canvas'); c.width = Math.round(S.w * k); c.height = Math.round(S.h * k);
+  const g = c.getContext('2d'); g.fillStyle = '#ffffff'; g.fillRect(0, 0, c.width, c.height);
+  g.drawImage(rend.domElement, S.x0 * k, S.y0 * k, S.w * k, S.h * k, 0, 0, c.width, c.height);
+  rend.setPixelRatio(pr); rend.setSize(innerWidth, innerHeight, false);
+  view.target.copy(keep.t); view.dist = keep.d; place();
+  return c.toDataURL('image/png').split(',')[1];
+}
+// ---------- папки отчёта (через локальный сервер) ----------
+// тело — JSON простым текстом: такой запрос браузер шлёт без предварительного опроса сервера
+async function srv(path, body) {
+  const r = await fetch(SRV + path, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.ok) throw new Error(j.error || ('ответ сервера ' + r.status));
+  return j;
+}
+const filesOf = j => !j.files ? [] : Array.isArray(j.files) ? j.files : [j.files];
+async function refreshList() {
+  const el = $('dList'); if (!el || !LOCAL) return;
+  try { drawFiles.d = filesOf(await srv('/draw/list', { dir: DIR_DRAW })); drawFiles.s = filesOf(await srv('/draw/list', { dir: DIR_SHOT })); }
+  catch (e) { el.textContent = 'локальный сервер не отвечает'; return false; }
+  el.replaceChildren();
+  const sec = (t, arr) => {
+    const h = document.createElement('div'); h.className = 'dlh'; h.textContent = t + ': ' + (arr.length || 'пусто'); el.appendChild(h);
+    for (const f of arr) { const r = document.createElement('div'); r.className = 'dlf'; r.textContent = f.name; r.title = f.name + ' — ' + f.time; el.appendChild(r); }
+  };
+  sec('листы', drawFiles.d); sec('снимки', drawFiles.s);
+  return true;
+}
+function nextName(arr, title, ext) {
+  let n = 0; for (const f of arr) { const m = /^(\d+)/.exec(f.name); if (m) n = Math.max(n, +m[1]); }
+  return String(n + 1).padStart(2, '0') + ' — ' + ((title || '').trim() || 'вид').replace(/[\\/:*?"<>|]/g, '_') + ext;
+}
+// вход во вкладку: в папках уже что-то есть — удалить (в корзину) и начать с 01 или дописывать следующими номерами
+async function checkFolders() {
+  if (!LOCAL || !(await refreshList())) return;
+  const nd = drawFiles.d.length, ns = drawFiles.s.length;
+  if (!nd && !ns) return;
+  const kinds = a => { const c = {}; for (const f of a) { const e = ((/\.(\w+)$/.exec(f.name) || [])[1] || '?').toLowerCase(); c[e] = (c[e] || 0) + 1; } return Object.entries(c).map(([e, k]) => e + ' ' + k).join(', '); };
+  const msg = 'В папках отчёта для зоны «' + LOCAL.zone + '» уже есть файлы:\n' +
+    (nd ? '   листы — ' + nd + ' (' + kinds(drawFiles.d) + ')\n' : '') + (ns ? '   снимки — ' + ns + ' (' + kinds(drawFiles.s) + ')\n' : '') +
+    '\nУдалить их (в корзину Windows) и начать заново?\nОК — удалить.  Отмена — новые кадры пойдут следующими номерами.';
+  if (!confirm(msg)) return;
+  try { await srv('/draw/clear', { dir: DIR_DRAW }); await srv('/draw/clear', { dir: DIR_SHOT }); toast('старые файлы — в корзине'); }
+  catch (e) { toast('не удалось удалить: ' + e.message); }
+  refreshList();
+}
+async function saveSheet() {
+  if (!LOCAL) { toast('в этой странице нет папки заказа — перевыгрузите проект из Базиса'); return; }
+  if (view.persp) setPersp(false);
+  let svg; try { svg = buildSVG(); } catch (e) { console.error(e); toast('лист не собрался: ' + e.message); return; }
+  const name = nextName(drawFiles.d, $('dName').value, '.svg');
+  try { await srv('/draw/save', { dir: DIR_DRAW, name, svg }); toast('лист сохранён: ' + name); }
+  catch (e) { toast('не сохранилось: ' + e.message); return; }
+  refreshList();
+}
+async function saveShot() {
+  if (!LOCAL) { toast('в этой странице нет папки заказа — перевыгрузите проект из Базиса'); return; }
+  const b64 = shotPNG(), name = nextName(drawFiles.s, $('dName').value, '.png');
+  try { await srv('/draw/save', { dir: DIR_SHOT, name, b64 }); toast('снимок сохранён: ' + name); }
+  catch (e) { toast('не сохранилось: ' + e.message); return; }
+  refreshList();
 }
 
 // ---------------- раскладка экрана ----------------
@@ -2119,13 +2822,16 @@ function syncTools() {
   }
   if ($('bShowAll').style.display !== 'none') chip(ICON.eye, 'показати все приховане', showAll);
   placeTools();
+  if (drawOn) syncPanel();
 }
 // кубик видов — справа вверху; значки включённого — столбиком под ним
 function placeTools() {
   const box = $('tools'), c = $('vcube'), s = safe();
-  c.style.top = (6 + s.t) + 'px'; c.style.right = (6 + s.r) + 'px';
+  const pw = drawOn ? $('dpanel').offsetWidth + 8 : 0;     // креслення: панель кадров справа, кубик — левее неё
+  c.style.top = (6 + s.t) + 'px'; c.style.right = (6 + s.r + pw) + 'px';
   box.style.top = (6 + s.t + c.offsetHeight + 4) + 'px';
-  box.style.right = (6 + s.r + (c.offsetWidth - 46) / 2) + 'px';
+  box.style.right = (6 + s.r + pw + (c.offsetWidth - 46) / 2) + 'px';
+  if (drawOn) placeSheet();
 }
 // отступы под вырез камеры и полоску «домой» (у айфона — env(safe-area-inset-*), у остальных нули)
 function safe() {
@@ -2164,7 +2870,7 @@ function loop() {
   : fetch('./model.json?v=' + Date.now(), { cache: 'no-store' }).then(r => { if (!r.ok) throw new Error('файл модели не найден (' + r.status + ')'); return r.json(); }))
   .then(data => {
     M = data; build(); wire(); wireLayout(); applyVis(); layout(); fitVisible();
-    window.__viewer = { parts, animNode, M, dims, addDim, drawerDims, easyPick, easyCell, tubeDims, openTarget, pick, blockersOf, poseAll, toggleAt, scopeIds, boxOf, isTube, toWorld, clearDims, root, partsUnder, dragDim, THREE, snapAt, pointVisible, picks, nodes, NCNT, REP, rootKids, selectPart, toggleOne, shiftPick, stepSel, tapPick, asmChain, hideSel, showAll, upLevel, downLevel, effVisible, selGab, gabShow, gabDims, setRMode, frameNodeFor, get ruler() { return ruler; }, get selSet() { return selSet; }, get selMany() { return selMany; }, get selOne() { return selOne; }, get selNode() { return selNode; }, get cam() { return cam; }, get placing() { return placing; }, get rp() { return rp; } };   // для проверки из консоли
+    window.__viewer = { parts, animNode, M, dims, addDim, drawerDims, easyPick, easyCell, tubeDims, openTarget, pick, blockersOf, poseAll, toggleAt, scopeIds, boxOf, isTube, toWorld, clearDims, root, partsUnder, dragDim, THREE, snapAt, pointVisible, picks, nodes, NCNT, REP, rootKids, selectPart, toggleOne, shiftPick, stepSel, tapPick, asmChain, hideSel, showAll, upLevel, downLevel, effVisible, selGab, gabShow, gabDims, setRMode, frameNodeFor, setDraw, buildSVG, sheetRect, autoDims, fitSheet, fitView, setTool, toolClick, toolHover, drawUndo, drawRedo, gabCommit, dragDimTo, get drawN() { return drawN; }, get selDim() { return selDim; }, set selDim(v) { selDim = v; }, get drawOn() { return drawOn; }, get ruler() { return ruler; }, get selSet() { return selSet; }, get selMany() { return selMany; }, get selOne() { return selOne; }, get selNode() { return selNode; }, get cam() { return cam; }, get placing() { return placing; }, get rp() { return rp; } };   // для проверки из консоли
     $('load').remove(); loop();
   })
   .catch(err => { $('load').textContent = 'Не удалось открыть модель: ' + err.message; });
