@@ -200,6 +200,15 @@ function geom(pd) {
   return g;
 }
 
+// чем меньше форма фурнитуры, тем выше она в споре за общую плоскость (0…3)
+const rankMemo = {};
+function shapeRank(f) {
+  if (rankMemo[f] !== undefined) return rankMemo[f];
+  const b = new THREE.Box3();
+  for (const sd of M.shapes[f]) for (let i = 0; i < sd.v.length; i += 3) b.expandByPoint(new THREE.Vector3(sd.v[i], sd.v[i + 1], sd.v[i + 2]));
+  const dg = b.isEmpty() ? 1000 : b.getSize(new THREE.Vector3()).length();
+  return (rankMemo[f] = Math.max(0, Math.min(3, Math.floor(400 / Math.max(dg, 1)))));
+}
 function build() {
   upgradeV1();
   const SG = M.shapes.map(sh => sh.map(sd => ({ g: geom(sd), m: sd.m })));
@@ -217,7 +226,13 @@ function build() {
       const t = od.t;
       inst.matrix.set(t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7], t[8], t[9], t[10], t[11], 0, 0, 0, 1);
       for (const s of SG[od.f]) {
-        const m = new THREE.Mesh(s.g, materialFor(s.m)); m.userData.idx = i; inst.add(m); meshes.push(m); picks.push(m);
+        const mt = materialFor(s.m);
+        // грани фурнитуры, лежащие в одной плоскости с плитой или соседней фурнитурой (врезной подвес LIBRA в крышке и
+        // на планке), рисовались полосами вперемешку — фурнитура всегда поверх, из двух фурнитур — меньшая.
+        // Только постоянный сдвиг: наклонная часть (factor) на взгляде вскользь вырастала больше толщины плиты —
+        // направляющие за 18 мм ДСП просвечивали пунктиром (скрин 06.10)
+        mt.polygonOffset = true; mt.polygonOffsetFactor = 0; mt.polygonOffsetUnits = -1 - shapeRank(od.f);
+        const m = new THREE.Mesh(s.g, mt); m.userData.idx = i; inst.add(m); meshes.push(m); picks.push(m);
       }
       grp.add(inst);
     } else {
