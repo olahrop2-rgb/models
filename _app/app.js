@@ -55,6 +55,8 @@ const ICON = {
   gab: sv('<path d="M4 8l8-4 8 4v8l-8 4-8-4zM4 8l8 4 8-4M12 12v8"/>'),
   easy: sv('<rect x="3" y="3" width="18" height="18" rx="1.5"/><path d="M7 12h10M7 12l2-2M7 12l2 2M17 12l-2-2M17 12l-2 2"/>'),
   points: sv('<circle cx="5" cy="12" r="2.2" fill="currentColor"/><circle cx="19" cy="12" r="2.2" fill="currentColor"/><path d="M8 12h8" stroke-dasharray="2 2"/>'),
+  // до стін: угол комнаты (стена и пол) и полка с размерами до них
+  wall: sv('<path d="M4 3v18h17" stroke-width="2.2"/><path d="M11 9h8"/><path d="M15 9v9.5M13.5 16.5l1.5 2 1.5-2" stroke-dasharray="0"/><path d="M11 6.5H6.5M8 5l-1.5 1.5L8 8"/>'),
   sheet: sv('<path d="M5 3h10l4 4v14H5z"/><path d="M15 3v4h4M8 17h8M8 17v-6M16 17v-6M8 11h8"/>'),
 };
 // кнопка строки → значок и подпись
@@ -1189,6 +1191,113 @@ function edgeClick(e, mouse) {
   const dm = addDim(a, b);
   if (mouse && dm.axis) placing = { dm, base: a.clone().add(b).multiplyScalar(0.5) };
 }
+// ---------------- рулетка «до стін» ----------------
+// Способ «до стін» (Алексей 08.10): заказчик спрашивает, на какой высоте полка и сколько от неё до стены, а пола и
+// стен в модели нет — есть только линии помещения («Слой 0»: зелёная линия пола, чёрные рёбра стен). Указал
+// плоскость детали и линию помещения, в любом порядке, — размер поперёк плоскости до этой линии. Годятся только пары
+// «плоскость примерно параллельна линии»: низ полки — к линии пола (высота), бок полки — к ребру стены или к линии
+// пола вдоль стены (до стены). Указана плоскость — подсвечены все подходящие к ней линии; указана линия — под курсором
+// подсвечиваются только подходящие плоскости. Линия к плоскости наискосок (стена завалена) — размер до середины
+// линии, то есть средний; погрешность до 10 мм Алексея устраивает.
+const WPAR = Math.sin(THREE.MathUtils.degToRad(10));    // «примерно параллельно» — до 10°
+let wall1 = null, wallHov = null;
+const wallHints = [];
+const lineFits = (e, f) => Math.abs(e.dir.dot(f.n)) < WPAR;
+// линия помещения под курсором (fit — только подходящие); видимая — в первую очередь, но линия пола под шкафом
+// тоже берётся: за неё и меряют
+function roomLineAt(cx, cy, fit) {
+  root.updateMatrixWorld(true);
+  const R = TOUCH ? 24 : 12, A = new THREE.Vector3(), B = new THREE.Vector3(), sa = new THREE.Vector3(), sb = new THREE.Vector3();
+  const toPx = s => [(s.x + 1) / 2 * innerWidth, (1 - s.y) / 2 * innerHeight];
+  const cand = [];
+  for (const pr of parts) {
+    if (!pr.isL || !pr.g.visible) continue;
+    for (const ln of pr.g.children) {
+      if (!ln.isLineSegments) continue;
+      const pos = ln.geometry.attributes.position, mw = ln.matrixWorld;
+      for (let i = 0; i + 1 < pos.count; i += 2) {
+        A.fromBufferAttribute(pos, i).applyMatrix4(mw); B.fromBufferAttribute(pos, i + 1).applyMatrix4(mw);
+        if (A.distanceTo(B) < 1) continue;
+        const e = { a: A.clone(), b: B.clone(), dir: B.clone().sub(A).normalize() };
+        if (fit && !fit(e)) continue;
+        sa.copy(A).project(cam); sb.copy(B).project(cam);
+        if (sa.z > 1 || sb.z > 1) continue;
+        const [ax, ay] = toPx(sa), [bx, by] = toPx(sb), vx = bx - ax, vy = by - ay, L2 = vx * vx + vy * vy;
+        let d, t = 0;
+        if (L2 < 4) d = Math.hypot(ax - cx, ay - cy);              // ребро стены сверху — точка
+        else { t = Math.max(0, Math.min(1, ((cx - ax) * vx + (cy - ay) * vy) / L2)); d = Math.hypot(ax + vx * t - cx, ay + vy * t - cy); }
+        if (d <= R) { e.d = d; e.p = e.a.clone().lerp(e.b, t); cand.push(e); }
+      }
+    }
+  }
+  if (!cand.length) return null;
+  cand.sort((p, q) => p.d - q.d);
+  for (const k of cand.slice(0, 20)) if (pointVisible(k.p)) return k;
+  return cand[0];
+}
+// что под курсором: после плоскости — только подходящая линия (мимо — другая плоскость, ею заменить первую);
+// после линии — только плоскость; в начале — линия, если рядом, иначе плоскость
+function wallAt(cx, cy) {
+  if (wall1 && wall1.e) { const f = faceAt(cx, cy); return f ? { f } : null; }
+  const e = roomLineAt(cx, cy, wall1 ? (q => lineFits(q, wall1.f)) : null); if (e) return { e };
+  const f = faceAt(cx, cy); return f ? { f } : null;
+}
+const sameWall = (p, q) => !!p && !!q && (p.f ? !!q.f && sameFace(p.f, q.f) : !!q.e && sameEdge(p.e, q.e));
+function wallHL(w, color) { if (w.f) faceHL(w.f, color, 0.35); else edgeHL(w.e, color); }
+function wallDrop(w) { if (!w) return; if (w.f) dropHL(w.f); else dropEdge(w.e); }
+function wallHover(cx, cy) {
+  const w = wallAt(cx, cy);
+  const ok = !!w && !sameWall(w, wall1) && !(wall1 && wall1.e && !lineFits(wall1.e, w.f));
+  if (wallHov && !(ok && sameWall(wallHov, w))) { wallDrop(wallHov); wallHov = null; }
+  if (ok && !wallHov) { wallHov = w; wallHL(w, 0x2b6cb0); }
+  return w;
+}
+function wallHoverEnd() { wallDrop(wallHov); wallHov = null; }
+function dropWallHints() { while (wallHints.length) dropEdge(wallHints.pop()); }
+function clearWall1() { wallDrop(wall1); wall1 = null; dropWallHints(); showPending(); }
+// все линии помещения, до которых можно мерить от этой плоскости — бледной подсветкой
+function showWallHints(f) {
+  dropWallHints();
+  const A = new THREE.Vector3(), B = new THREE.Vector3();
+  for (const pr of parts) {
+    if (!pr.isL || !pr.g.visible) continue;
+    for (const ln of pr.g.children) {
+      if (!ln.isLineSegments) continue;
+      const pos = ln.geometry.attributes.position, mw = ln.matrixWorld;
+      for (let i = 0; i + 1 < pos.count && wallHints.length < 400; i += 2) {
+        A.fromBufferAttribute(pos, i).applyMatrix4(mw); B.fromBufferAttribute(pos, i + 1).applyMatrix4(mw);
+        if (A.distanceTo(B) < 1) continue;
+        const e = { a: A.clone(), b: B.clone(), dir: B.clone().sub(A).normalize() };
+        if (!lineFits(e, f)) continue;
+        edgeHL(e, 0x8fb8e8); wallHints.push(e);
+      }
+    }
+  }
+  return wallHints.length;
+}
+const WHINT = 'до стін: вкажіть площину деталі, потім лінію підлоги або межі приміщення (порядок будь-який)';
+function wallClick(w, mouse) {
+  if (!w) { if (wall1) { clearWall1(); $('st').textContent = WHINT; } return; }
+  if (sameWall(w, wall1)) return;
+  if (!wall1 || (wall1.f && w.f)) {                       // первое указание (или другая плоскость вместо первой)
+    clearWall1(); wall1 = w; wallHL(w, DIMC); showPending();
+    if (w.f) {
+      if (!showWallHints(w.f)) { toast('до цієї площини немає паралельної лінії приміщення — вкажіть іншу площину'); clearWall1(); $('st').textContent = WHINT; return; }
+      $('st').textContent = 'до стін: вкажіть підсвічену лінію підлоги або межі (порожнє місце — скинути)';
+    } else $('st').textContent = 'до стін: вкажіть площину деталі, паралельну лінії (порожнє місце — скинути)';
+    return;
+  }
+  const f = wall1.f || w.f, e = wall1.e || w.e;
+  if (!lineFits(e, f)) { toast('площина не паралельна лінії — вкажіть спочатку площину деталі, потім лінію підлоги або межі'); return; }
+  // поперёк плоскости до середины линии; размер — от точки, где указана плоскость
+  const n = f.n.clone(), mid = e.a.clone().add(e.b).multiplyScalar(0.5), d = mid.sub(f.p).dot(n);
+  clearWall1(); $('st').textContent = WHINT;
+  if (Math.abs(d) < 0.5) { toast('площина на самій лінії — 0 мм'); return; }
+  const a = f.p.clone(), b = a.clone().addScaledVector(n, d), down = b.y - a.y;
+  const label = Math.abs(n.y) > 0.9 ? (down < 0 ? 'від підлоги' : 'до стелі') : 'до стіни';
+  const dm = addDim(a, b, { label });
+  if (mouse && dm.axis) placing = { dm, base: a.clone().add(b).multiplyScalar(0.5) };
+}
 // ---------------- лёгкие размеры (для заказчика) ----------------
 // Способ по умолчанию (ТЗ-дополнение 28.09, раздел 3.2–3.3). Одно касание — один замер, новое гасит прежний.
 //  • кромка панели или фурнитура — размеры этой детали;
@@ -1199,12 +1308,14 @@ function edgeClick(e, mouse) {
 //    ближайшего, что нависает над ящиком (с его фасадом), минус 6 мм, до целого; считается закрытым.
 // Штанга и подсветка — позже (нужна отметка в выгрузке).
 const easyDims = [];
+let easyCollect = null;   // креслення: размеры ячейки не ставятся, а собираются сюда (щелчковая цепочка выбирает нужный)
 let easyOpen = [];   // детали, чьи звенья открыли лёгкие размеры: ящик и дверь перед ним держатся вместе (05.10)
 function dropEasy() { while (easyDims.length) { const dm = easyDims.pop(); if (dims.includes(dm)) removeDim(dm); } dropPartDims(); }
 function easyDim(a, b, label, text) {
   if (a.distanceTo(b) < 1) return;
   // креслення: размер вдоль взгляда (глубина на виде спереди) на листе — точка, не ставим
   if (drawOn && Math.abs(b.clone().sub(a).normalize().dot(cam.getWorldDirection(new THREE.Vector3()))) > 0.9) return;
+  if (easyCollect) { easyCollect.push({ a, b, label, text }); return; }   // креслення: только собрать, ставит цепочка
   easyDims.push(addDim(a, b, { label, text }));
 }
 function mainAxis(v) { const a = ['x', 'y', 'z'].map(k => Math.abs(v[k])); return ['x', 'y', 'z'][a.indexOf(Math.max(...a))]; }
@@ -1339,6 +1450,8 @@ function easyCell(pW, n, i) {
   const pt = (w, y, d) => { const q = { y }; q[wAx] = w; q[dAx] = d; return toWorld(vec(q)); };
   const dF = front - fs * 30;                                  // линии — у переднего края, внутри
   const topY = obst && (!tube || obst.min.y < tube.min.y) ? obst.min.y : y1;
+  // креслення: проём целиком, от полки до полки (на ручных листах 050 — так, штанга не в счёт)
+  if (easyCollect && y1 != null) easyDim(pt(w0 + 0.15 * W, y0, dF), pt(w0 + 0.15 * W, y1, dF), 'проём');
   easyDim(pt(w0, y0 + Math.min(0.25 * H, 250), dF), pt(w1, y0 + Math.min(0.25 * H, 250), dF), 'ширина');
   easyDim(pt(w0 + 0.5 * W, y0 + 0.12 * H, back), pt(w0 + 0.5 * W, y0 + 0.12 * H, front), 'глибина');
   if (tube && (!obst || tube.min.y < obst.min.y)) {
@@ -1506,7 +1619,7 @@ function easyStatic(h) {
   const k = mainAxis(n), s = geomBox(i).getSize(new THREE.Vector3());
   if (isTube(i)) { tubeDims(i); return; }
   // кромка: грань смотрит вдоль большого размера детали (не вдоль толщины) — размеры детали
-  if (pr.isF || pr.isB || s[k] > Math.min(s.x, s.y, s.z) + 0.01) { showPartDims(i); return; }
+  if (pr.isF || pr.isB || s[k] > Math.min(s.x, s.y, s.z) + 0.01) { if (!easyCollect) showPartDims(i); return; }
   easyCell(h.point, n, i);
 }
 function easyPick(x, y) {
@@ -1523,12 +1636,17 @@ function easyPick(x, y) {
 }
 
 const RHINT = { easy: 'легкі розміри: торкніться полиці, стінки, дверцят або шухляди', face: 'рулетка: коснитесь грани детали', edge: 'рулетка: коснитесь ребра детали', point: 'рулетка: укажи первую точку',
+  wall: WHINT,
   gab: matchMedia('(pointer: coarse)').matches ? 'габарит: торкніться деталі; ще раз — збірна одиниця, далі — вища'
     : 'габарит: виділіть деталь; Tab — вище, Shift+Tab — нижче, Ctrl — додати деталь, Shift — збірна одиниця (ще раз — вища)' };
 function setRMode(m) {
   rmode = m; try { localStorage.setItem('viewerRMode2', m); } catch (e) {}
-  rp = []; clearFace1(); faceHoverEnd(); clearEdge1(); edgeHoverEnd(); hideHover(); dropEasy();
+  rp = []; clearFace1(); faceHoverEnd(); clearEdge1(); edgeHoverEnd(); clearWall1(); wallHoverEnd(); hideHover(); dropEasy();
   $('st').textContent = RHINT[m];
+  if (m === 'wall') {                                      // мерить не до чего, если линии помещения спрятаны или их нет
+    if (!showL) { showL = true; applyVis(); renderTree(); }
+    if (!parts.some(p => p.isL)) toast('у моделі немає ліній приміщення — міряти немає до чого');
+  }
   syncTools();
   if (ruler) cv.style.cursor = m === 'gab' ? '' : 'none';
   if (m === 'gab') gabShow();
@@ -1539,6 +1657,7 @@ function rulerPick(x, y, mouse) {
   if (rmode === 'easy') { easyPick(x, y); return; }
   if (rmode === 'face') { faceHoverEnd(); faceClick(faceAt(x, y), mouse); }
   else if (rmode === 'edge') { edgeHoverEnd(); edgeClick(edgeAt(x, y), mouse); }
+  else if (rmode === 'wall') { wallHoverEnd(); wallClick(wallAt(x, y), mouse); }
   else { const p = snapAt(x, y); if (!p) toast('точка не поставлена: рядом нет угла детали'); else addPoint(p, mouse); }
 }
 // ---------------- размеры ----------------
@@ -1618,6 +1737,7 @@ function addDim(a, b, opt) {
   const dm = Object.assign({ a, b, axis: axisOf(a, b), off: new THREE.Vector3(), el: document.createElement('div') }, opt || {});
   dm.el.className = 'dim';
   if (drawOn && !dm.vdir) dm.vdir = viewDir();             // в кресленні размер принадлежит виду, на котором поставлен
+  if (drawOn && dm.fs === undefined) dm.fs = hideFac;      // …и листу с фасадами / без фасадов
   document.body.appendChild(dm.el);
   dims.push(dm); if (!dimsShown) setDimsShown(true); buildDim(dm); hookDim(dm); updRuler(); syncDimBtn(); need();
   const dv = b.clone().sub(a);
@@ -1709,9 +1829,9 @@ function addPoint(p, mouse) {
 }
 // первая точка и резиновая линия до курсора (на компьютере)
 let pend = null;
-function cancelPoint() { rp = []; clearFace1(); clearEdge1(); $('st').textContent = RHINT[rmode]; }
+function cancelPoint() { rp = []; clearFace1(); clearEdge1(); clearWall1(); $('st').textContent = RHINT[rmode]; }
 function showPending(hover) {
-  $('bUndo').style.display = ruler && (rp.length || face1 || edge1) ? '' : 'none';
+  $('bUndo').style.display = ruler && (rp.length || face1 || edge1 || wall1) ? '' : 'none';
   if (pend) { scene.remove(pend); pend = null; }
   if (!rp.length) { need(); return; }
   const pts = [rp[0], hover || rp[0]];
@@ -1726,7 +1846,7 @@ function showPending(hover) {
 }
 function clearDims() { while (dims.length) removeDim(dims[0]); rp = []; showPending(); }
 function stopRuler() {
-  ruler = false; rp = []; placing = null; dropEasy(); clearFace1(); faceHoverEnd(); clearEdge1(); edgeHoverEnd(); showPending(); hideHover(); syncTools();
+  ruler = false; rp = []; placing = null; dropEasy(); clearFace1(); faceHoverEnd(); clearEdge1(); edgeHoverEnd(); clearWall1(); wallHoverEnd(); showPending(); hideHover(); syncTools();
   cv.style.cursor = '';
   setOn('bRuler', false); $('st').textContent = ''; need();
   // рулетку погасили — размеры спрятаны до следующего включения (29.09); в кресленні размеры — часть листа, остаются
@@ -1749,7 +1869,7 @@ function hover(cx, cy) {
   }
   if (rmode !== 'point') {                                 // грани/рёбра: крестик на курсоре, под ним подсветка
     mk.classList.remove('snapped'); mk.style.left = cx + 'px'; mk.style.top = cy + 'px';
-    if (rmode === 'face') faceHover(cx, cy); else if (rmode === 'edge') edgeHover(cx, cy);
+    if (rmode === 'face') faceHover(cx, cy); else if (rmode === 'edge') edgeHover(cx, cy); else if (rmode === 'wall') wallHover(cx, cy);
     return;
   }
   const p = snapAt(cx, cy);
@@ -1825,7 +1945,8 @@ const loupe = $('loupe'), lctx = loupe.getContext('2d');
 let aim = null;
 function aimAt(x, y) {
   aim = rmode === 'face' ? { x, y, kind: 'face', f: faceHover(x, y) }
-      : rmode === 'edge' ? { x, y, kind: 'edge', e: edgeHover(x, y) } : { x, y, p: snapAt(x, y) };
+      : rmode === 'edge' ? { x, y, kind: 'edge', e: edgeHover(x, y) }
+      : rmode === 'wall' ? { x, y, kind: 'wall', w: wallHover(x, y) } : { x, y, p: snapAt(x, y) };
   rend.render(scene, cam);                                  // свежий кадр — сразу копируем из него кусок
   // круг 120 точек экрана (внутри 240 — для чёткости), увеличение 2,5
   const cw = rend.domElement.width / innerWidth, Z = 2.5, S = loupe.width, C = 120, k = S / C;
@@ -1855,9 +1976,10 @@ function isLand() { return innerWidth > innerHeight; }
 // отпустили палец: точка ставится; не поставилась — сказать почему (замечание 27.09: «ставятся не всегда»)
 function aimEnd(place, cancelled) {
   loupe.style.display = 'none';
-  const a = aim; aim = null; faceHoverEnd(); edgeHoverEnd();
+  const a = aim; aim = null; faceHoverEnd(); edgeHoverEnd(); wallHoverEnd();
   if (cancelled) toast('не поставлено: телефон прервал касание — попробуйте ещё раз, чуть дальше от края экрана');
   else if (place && a && a.kind === 'face') faceClick(a.f);
+  else if (place && a && a.kind === 'wall') wallClick(a.w);
   else if (place && a && a.kind === 'edge') edgeClick(a.e);
   else if (place && a && !a.p) toast('точка не поставлена: рядом с пальцем нет угла детали');
   else if (place && a) addPoint(a.p);
@@ -1934,13 +2056,15 @@ cv.addEventListener('pointerdown', e => {
   if (e.pointerType === 'touch') { touchDown(e); return; }
   try { cv.setPointerCapture(e.pointerId); } catch (err) {}
   drag = { b: e.button, x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY };
+  // креслення, щелчковая цепочка: нажали на модуль/фасад/проём — это размер, а не сдвиг листа
+  if (drawOn && e.button === 0 && PRESS.has(drawTool)) { const t = pressTarget(e.clientX, e.clientY); if (t) drag.press = { t, ax: null, line: 0 }; }
   if (e.button === 1) {
     e.preventDefault();
     const h = pick(e.clientX, e.clientY);
     if (h && !toggleAt(h.object.userData.idx)) $('st').textContent = 'эта деталь неподвижна';
   }
 });
-cv.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse') { hideHover(); faceHoverEnd(); edgeHoverEnd(); } });
+cv.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse') { hideHover(); faceHoverEnd(); edgeHoverEnd(); wallHoverEnd(); } });
 cv.addEventListener('pointercancel', e => { if (e.pointerType === 'touch') touchUp(e); });
 cv.addEventListener('pointermove', e => {
   if (e.pointerType === 'touch') { touchMove(e); return; }
@@ -1956,6 +2080,7 @@ cv.addEventListener('pointermove', e => {
     }
     return;
   }
+  if (drag.press) { pressMove(drag, e.clientX, e.clientY); return; }
   const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY;
   if (drag.b === 0 && drawOn && drawLines) { panBy(dx, dy); place(); cv.style.cursor = 'grabbing'; }   // креслення: лист двигается, не вращается
   else if (drag.b === 0) {
@@ -1974,12 +2099,14 @@ cv.addEventListener('pointermove', e => {
 cv.addEventListener('pointerup', e => {
   if (e.pointerType === 'touch') { touchUp(e); return; }
   const d = drag; drag = null;
-  if (drawOn) cv.style.cursor = drawTool && drawTool !== 'gab' ? 'none' : 'default';
+  if (drawOn) cv.style.cursor = snapTool() ? 'none' : 'default';
+  if (d && d.press && drawOn) { pressUp(d); return; }
   if (!d || Math.abs(e.clientX - d.x0) > 4 || Math.abs(e.clientY - d.y0) > 4) return;
   // креслення с инструментом: левая — точка, правая — закончить цепочку (габаритный и «без инструмента» — выделение, как обычно)
-  if (drawOn && drawTool && drawTool !== 'gab') { if (d.b === 2) endTool(); else if (d.b === 0) toolClick(e.clientX, e.clientY); return; }
+  if (drawOn && snapTool()) { if (d.b === 2) endTool(); else if (d.b === 0) toolClick(e.clientX, e.clientY); return; }
   if (drawOn && d.b === 0 && selDim) { selDim = null; drawOverlay(); }
-  if (d.b === 2) { if (ruler && (rp.length || face1 || edge1)) cancelPoint(); return; }   // правая кнопка без сдвига — убрать первую точку
+  if (drawOn && PRESS.has(drawTool)) return;                // щелчок мимо модуля/проёма — ничего не выделяем
+  if (d.b === 2) { if (ruler && (rp.length || face1 || edge1 || wall1)) cancelPoint(); return; }   // правая кнопка без сдвига — убрать первую точку
   if (d.b !== 0) return;
   if (ruler && rmode !== 'gab') {                           // «габарит» — щелчок выделяет, как без рулетки (с Ctrl)
     if (placing) { finishPlacing(); return; }
@@ -2022,7 +2149,7 @@ addEventListener('keydown', e => {
   if (e.key === 'Delete') hideSel();
   if (e.key === 'Escape') {
     if (placing) { placing.dm.off.set(0, 0, 0); buildDim(placing.dm); updRuler(); finishPlacing(); need(); return; }
-    if (ruler && (rp.length || face1 || edge1)) { cancelPoint(); return; }
+    if (ruler && (rp.length || face1 || edge1 || wall1)) { cancelPoint(); return; }
     stopRuler(); clearSel();
   }
 });
@@ -2260,6 +2387,8 @@ function viewKey() { const d = viewDir(); return [d.x, d.y, d.z].map(v => Math.r
 function flags() { const k = viewKey(); return autoFlags[k] || (autoFlags[k] = { mod: false, all: false }); }
 // размер принадлежит виду, на котором поставлен; старые (без вида) — если лежат в плоскости вида
 function dimHere(dm) {
+  // лист «с фасадами» и лист «без фасадов» — у каждого свои размеры (габариты на листе без фасадов не повторяются)
+  if (dm.fs !== undefined && dm.fs !== hideFac) return false;
   const d = viewDir();
   if (dm.vdir) return dm.vdir.dot(d) > 0.99;
   return !!dm.axis && Math.abs(AX[dm.axis].dot(d)) < 0.1;
@@ -2371,7 +2500,8 @@ function dimPrims(dm, toP, k) {
   }
   const ang = Math.atan2(ey, ex) * 180 / Math.PI, r = ang * Math.PI / 180;
   const tp = [(pa2[0] + pb2[0]) / 2, (pa2[1] + pb2[1]) / 2];
-  return { L, T, F, txt: dm.text != null ? String(dm.text) : fmt(val), x: tp[0] + Math.sin(r) * k, y: tp[1] - Math.cos(r) * k, ang, pa, pb, tp };
+  // на листе — до целого (Алексей 06.10: сотые заказчика путают; цепочка может не сойтись с общим на мм — так и оставить)
+  return { L, T, F, txt: dm.text != null ? String(dm.text) : String(Math.round(Math.abs(val))), x: tp[0] + Math.sin(r) * k, y: tp[1] - Math.cos(r) * k, ang, pa, pb, tp };
 }
 function dimSvg(g, k, o) {
   const col = o.sel ? '#e0301e' : o.prev ? '#7aa7e0' : '#1f5fbf', f = v => String(Math.round(v * 100) / 100);
@@ -2417,7 +2547,16 @@ function showSnap(s) {
 function dragDimTo(dm, kind, x, y) {
   if (!dm.axis) return;
   const w = perpAxis(dm.axis);
-  if (kind === 'm') { const P = onTargetPlane(x, y); if (!P) return; dm.off.copy(w).multiplyScalar(P.sub(dm.a).dot(w)); }
+  if (kind === 'm') {
+    const P = onTargetPlane(x, y); if (!P) return;
+    const old = dm.off.clone(); dm.off.copy(w).multiplyScalar(P.sub(dm.a).dot(w));
+    // размер из цепочки — едет вся цепочка на то же расстояние (Алексей 06.10)
+    if (dm.chain) {
+      const dv = dm.off.clone().sub(old);
+      for (const o of dims) if (o !== dm && o.chain === dm.chain && o.axis === dm.axis) { o.off.add(dv); buildDim(o); }
+      if (mc && mc.id === dm.chain) mc.line += dv.dot(w);
+    }
+  }
   else {
     const s = snapDraw(x, y); showSnap(s);
     if (kind === 'a') { const a2 = dm.a.clone().add(dm.off); dm.a.copy(s.p); dm.off.copy(w).multiplyScalar(a2.sub(dm.a).dot(w)); }
@@ -2451,15 +2590,25 @@ const THINT = {
   chain: 'цепочка: две точки и место, дальше — следующие точки; Esc или правая кнопка — закончить',
   base: 'от базы: база (точка или линия), вторая точка и место, дальше — следующие точки; Esc — закончить',
   gab: 'габаритный: выделите модули (Shift — несколько) и нажмите Enter',
-  easy: 'полезные: щелчок по ячейке, полке, ящику',
+  mod: 'габариты модулей: нажмите на модуль и потяните (вверх-вниз — ширина, вправо-влево — высота), отпустите на месте линии; дальше — щелчки по модулям',
+  fac: 'размеры фасадов: нажмите на фасад и потяните (вверх-вниз — ширина, вправо-влево — высота), отпустите на месте линии; дальше — щелчки по фасадам',
+  easy: 'полезные: нажмите в проём и потяните (вправо-влево — высота, вверх-вниз — ширина), отпустите на месте линии; дальше — щелчки по проёмам',
 };
+// инструменты «нажал и потянул» — без прицела по углам
+const PRESS = new Set(['mod', 'fac', 'easy']);
+const snapTool = () => !!drawTool && drawTool !== 'gab' && !PRESS.has(drawTool);
 function setTool(t) {
   drawTool = t; tpts = []; tAxis = null; chainPrev = null; preview = null; hideHover();
-  cv.style.cursor = t && t !== 'gab' ? 'none' : '';
+  if (PRESS.has(t)) mcReset(); else mc = null;
+  cv.style.cursor = snapTool() ? 'none' : '';
   $('st').textContent = t ? THINT[t] : '';
   syncPanel(); drawOverlay();
 }
-function endTool() { tpts = []; tAxis = null; chainPrev = null; preview = null; if (drawTool) $('st').textContent = THINT[drawTool]; drawOverlay(); }
+function endTool() {
+  tpts = []; tAxis = null; chainPrev = null; preview = null;
+  if (PRESS.has(drawTool)) mcReset();                       // другой вид / Esc — следующая цепочка своя
+  if (drawTool) $('st').textContent = THINT[drawTool]; drawOverlay();
+}
 // горизонтально или вертикально — по тому, куда увели мышь от двух точек (как в Базисе)
 function orient(p1, p2, x, y) {
   const { R, U } = viewAxes(), a = toScr(p1), b = toScr(p2);
@@ -2485,7 +2634,7 @@ function toolHover(x, y) {
 function toolDim(a, b) {
   if (Math.abs(b.clone().sub(a).dot(AX[tAxis])) < 0.5) { toast('точки на одной линии — 0 мм'); return; }
   const dm = addDim(a.clone(), b.clone()), w = perpAxis(tAxis);
-  dm.axis = tAxis; dm.off = w.multiplyScalar(tLine - a.dot(w)); buildDim(dm);
+  dm.axis = tAxis; dm.off = w.multiplyScalar(tLine - a.dot(w)); if (drawTool !== 'lin') dm.chain = tChain; buildDim(dm);
 }
 function toolClick(x, y) {
   if (drawTool === 'easy') { pushUndo(); easyPick(x, y); drawOverlay(); return; }
@@ -2494,7 +2643,7 @@ function toolClick(x, y) {
     if (tpts.length < 2) { tpts.push(s.p.clone()); toolHover(x, y); return; }
     const o = orient(tpts[0], tpts[1], x, y), P = onTargetPlane(x, y); if (!P) return;
     const w = perpAxis(o);
-    tAxis = o; tLine = P.dot(w); tSide = Math.sign(tLine - tpts[0].dot(w)) || 1;
+    tAxis = o; tLine = P.dot(w); tSide = Math.sign(tLine - tpts[0].dot(w)) || 1; tChain = ++chainSeq;
     pushUndo(); toolDim(tpts[0], tpts[1]); chainPrev = tpts[1];
     if (drawTool === 'lin') endTool(); else { preview = null; $('st').textContent = 'следующая точка; Esc или правая кнопка — закончить'; drawOverlay(); }
     return;
@@ -2505,9 +2654,131 @@ function toolClick(x, y) {
   toolDim(from, s.p); chainPrev = s.p.clone(); drawOverlay();
 }
 function drawHover(x, y) {
-  if (drawTool && drawTool !== 'gab') { toolHover(x, y); return; }
+  if (snapTool()) { toolHover(x, y); return; }
   hideHover();
-  cv.style.cursor = pick(x, y) ? 'pointer' : 'default';
+  cv.style.cursor = pick(x, y) ? (PRESS.has(drawTool) ? 'crosshair' : 'pointer') : 'default';
+}
+// ---------- щелчковые цепочки (Алексей 06.10): габариты модулей, размеры фасадов, полезные в проёме ----------
+// Первый раз — нажать на модуль / фасад / в проём и, не отпуская, потянуть: повёл вверх-вниз — горизонтальный размер
+// (ширина), вправо-влево — вертикальный (высота); где отпустил — там линия. Дальше — просто щелчки: размер встаёт на ту
+// же линию (брать можно через один). Кнопку выключил и включил (или сменил вид) — новая цепочка.
+// Модуль меряется по габаритной рамке из Базиса (рамки стоят встык — компенсационный зазор в размер не попадает);
+// нет рамки или она не сходится с деталями — по деталям. Фасад — по своим деталям, без петель и ручек.
+let mc = null, chainSeq = 0, tChain = 0;                    // { id, axis, line } — нынешняя цепочка
+function mcReset() { mc = { id: ++chainSeq, axis: null, line: 0 }; }
+function frameBoxOf(i, u) {
+  if (!M.nfbox) return null;
+  const h = parts[i].h;
+  for (let k = h.length - 1; k >= 0; k--) {
+    const id = h[k]; if (id !== u && REP[id] !== u) continue;
+    const f = M.nfbox[id]; if (!f) continue;
+    const b = new THREE.Box3();
+    for (const x of [f[0], f[3]]) for (const y of [f[1], f[4]]) for (const z of [f[2], f[5]]) b.expandByPoint(root.localToWorld(new THREE.Vector3(x, y, z)));
+    return b;
+  }
+  return null;
+}
+// модуль — самая нижняя сборочная единица детали, у которой есть неподвижные стенки (корпус): антресоль, нижний
+// блок, шкаф целиком; ящик (TANDEM — стенки едут) пропускается, группа «Шкафы слева» — только если ниже ничего нет
+// (050_8: группа > шкаф > антресоль / нижний блок > ящики; на ручных листах цепочки — по антресолям и нижним блокам)
+function moduleOf(i) {
+  for (const u of asmChain(i)) if (partsUnder(u).some(j => isWall(j))) return u;
+  const v = parts[i].v; return v.length ? v[v.length - 1] : null;
+}
+function moduleBox(i) {
+  const u = moduleOf(i);
+  if (u === null) return null;
+  root.updateMatrixWorld(true);
+  const mb = new THREE.Box3();
+  for (const j of partsUnder(u)) { const p = parts[j]; if (p.isL || !p.g.visible) continue; for (const m of p.meshes) mb.expandByObject(m); }
+  if (mb.isEmpty()) return null;
+  const fb = frameBoxOf(i, u);
+  const name = M.names[u] || 'модуль';
+  if (fb && ['x', 'y', 'z'].every(k => Math.abs(fb.min[k] - mb.min[k]) < 60 && Math.abs(fb.max[k] - mb.max[k]) < 60)) return { b: fb, src: 'по рамке', name };
+  return { b: mb, src: 'по деталям', name };
+}
+function facadeBox(i) {
+  if (!M.door) return null;
+  const D = new Set(M.door), id = parts[i].h.find(q => D.has(q));
+  if (id === undefined) return null;
+  root.updateMatrixWorld(true);
+  const b = new THREE.Box3();
+  for (const j of partsUnder(id)) { const p = parts[j]; if (p.isF || p.isL || !p.g.visible) continue; for (const m of p.meshes) b.expandByObject(m); }
+  return b.isEmpty() ? null : { b, src: '', name: M.names[id] || 'фасад' };
+}
+// что под курсором: рамка модуля / фасада или размеры проёма (как у «полезных», только собранные)
+function pressTarget(x, y) {
+  if (drawTool === 'easy') {
+    easyCollect = [];
+    let L; try { easyPick(x, y); } finally { L = easyCollect; easyCollect = null; }
+    return L.length ? { list: L } : null;
+  }
+  const h = pick(x, y); if (!h) return null;
+  const i = h.object.userData.idx; if (parts[i].isL) return null;
+  if (drawTool === 'fac') {
+    if (hideFac) { toast('фасады спрятаны'); return null; }
+    const r = facadeBox(i); if (!r) toast('это не фасад'); return r;
+  }
+  return moduleBox(i);
+}
+// размеры цели вдоль оси ax на линии line (координата поперёк размера); выносные — от ближней к линии стороны,
+// линия внутри цели — размер прямо на ней, без выносных
+function pressDims(t, ax, line) {
+  const wk = mainAxis(perpAxis(ax));
+  if (t.b) {
+    const b = t.b, { D } = viewAxes(), zF = viewDir()[D] < 0 ? b.max[D] : b.min[D];
+    const near = Math.min(Math.max(line, b.min[wk]), b.max[wk]);
+    const P = v => { const p = V3(); p[ax] = v; p[wk] = near; p[D] = zF; return p; };
+    return [{ a: P(b.min[ax]), b: P(b.max[ax]), text: null }];
+  }
+  const ok = q => q.label !== 'штанга від підлоги';
+  const q = t.list.find(z => z.label === 'проём' && axisOf(z.a, z.b) === ax) || t.list.find(z => ok(z) && axisOf(z.a, z.b) === ax);
+  if (!q) return [];
+  const cr = t.list.find(z => ok(z) && axisOf(z.a, z.b) === wk);
+  const lo = cr ? Math.min(cr.a[wk], cr.b[wk]) : -Infinity, hi = cr ? Math.max(cr.a[wk], cr.b[wk]) : Infinity;
+  const near = Math.min(Math.max(line, lo), hi), a = q.a.clone(), b = q.b.clone();
+  if (isFinite(near)) { a[wk] = near; b[wk] = near; }
+  return [{ a, b, text: q.text != null ? q.text : null }];
+}
+function pressPrev(t, ax, line) {
+  const out = pressDims(t, ax, line); if (!out.length) return null;
+  const w = perpAxis(ax);
+  return { a: out[0].a, b: out[0].b, axis: ax, off: w.multiplyScalar(line - out[0].a.dot(w)), text: out[0].text };
+}
+function pressCommit(t, ax, line) {
+  const out = pressDims(t, ax, line);
+  if (!out.length) { toast(ax === viewAxes().U ? 'тут нечего мерить по высоте' : 'тут нечего мерить по ширине'); return false; }
+  // тот же модуль ещё раз — второй размер поверх первого не ставим
+  const same = (d, q) => d.chain === mc.id && ((d.a.distanceTo(q.a) < 0.5 && d.b.distanceTo(q.b) < 0.5) || (d.a.distanceTo(q.b) < 0.5 && d.b.distanceTo(q.a) < 0.5));
+  const add = out.filter(q => !dims.some(d => same(d, q)));
+  const what = t.name ? t.name + ' — ' : '', len = Math.round(Math.abs(out[0].b.clone().sub(out[0].a).dot(AX[ax])));
+  if (!add.length) { $('st').textContent = what + len + ' — уже стоит'; return true; }
+  pushUndo();
+  for (const q of add) {
+    const dm = addDim(q.a, q.b, q.text != null ? { text: q.text } : null), w = perpAxis(ax);
+    dm.axis = ax; dm.off = w.multiplyScalar(line - q.a.dot(w)); dm.chain = mc.id; buildDim(dm);
+  }
+  $('st').textContent = what + (q0 => q0.text != null ? q0.text : len)(out[0]) + (t.src ? ' (' + t.src + ')' : '');
+  return true;
+}
+function pressMove(d, x, y) {
+  const p = d.press;
+  if (mc.axis !== null) return;                             // линия уже задана первым размером
+  if (!p.ax) {
+    const dx = x - d.x0, dy = y - d.y0; if (Math.hypot(dx, dy) < 6) return;
+    const { R, U } = viewAxes(); p.ax = Math.abs(dy) >= Math.abs(dx) ? R : U;
+  }
+  const P = onTargetPlane(x, y); if (!P) return;
+  p.line = P.dot(perpAxis(p.ax));
+  preview = pressPrev(p.t, p.ax, p.line); drawOverlay();
+}
+function pressUp(d) {
+  const p = d.press; preview = null;
+  if (mc.axis === null) {
+    if (!p.ax) { $('st').textContent = 'нажмите и, не отпуская, потяните: вверх-вниз — ширина, вправо-влево — высота'; drawOverlay(); return; }
+    if (pressCommit(p.t, p.ax, p.line)) { mc.axis = p.ax; mc.line = p.line; $('st').textContent += '. Дальше — щелчки: встанут на эту линию; новая цепочка — выключить и включить кнопку'; }
+  } else pressCommit(p.t, mc.axis, mc.line);
+  drawOverlay();
 }
 // ---------- габариты: модули (сборочные единицы) видимого, выделенное по Enter ----------
 // Модули — самые верхние сборочные единицы видимых деталей (галочки Базиса; нет галочек — верхний блок).
@@ -2570,7 +2841,7 @@ function gabCommit() {
 // ---------- Ctrl+Z / Ctrl+Y: размеры, спрятанное, фасады ----------
 const undoS = [], redoS = [];
 function stateNow() {
-  return { dims: dims.map(d => ({ a: d.a.toArray(), b: d.b.toArray(), axis: d.axis, off: d.off.toArray(), label: d.label, text: d.text, vdir: d.vdir ? d.vdir.toArray() : null, auto: d.auto })),
+  return { dims: dims.map(d => ({ a: d.a.toArray(), b: d.b.toArray(), axis: d.axis, off: d.off.toArray(), label: d.label, text: d.text, vdir: d.vdir ? d.vdir.toArray() : null, auto: d.auto, chain: d.chain, fs: d.fs })),
            ph: parts.map(p => p.hidden ? '1' : '0').join(''), nh: Object.keys(nodes).filter(k => nodes[k].hidden), fac: hideFac, af: JSON.stringify(autoFlags) };
 }
 function pushUndo() { if (!drawOn) return; undoS.push(stateNow()); if (undoS.length > 80) undoS.shift(); redoS.length = 0; }
@@ -2579,8 +2850,8 @@ function restoreState(s) {
   while (dims.length) removeDim(dims[0]);
   easyDims.length = 0; partDims.length = 0; gabDims.length = 0;
   for (const q of s.dims) {
-    const dm = addDim(new THREE.Vector3().fromArray(q.a), new THREE.Vector3().fromArray(q.b), { label: q.label, text: q.text });
-    dm.axis = q.axis; dm.off = new THREE.Vector3().fromArray(q.off); dm.vdir = q.vdir ? new THREE.Vector3().fromArray(q.vdir) : null; dm.auto = q.auto;
+    const dm = addDim(new THREE.Vector3().fromArray(q.a), new THREE.Vector3().fromArray(q.b), { label: q.label, text: q.text, fs: q.fs });
+    dm.axis = q.axis; dm.off = new THREE.Vector3().fromArray(q.off); dm.vdir = q.vdir ? new THREE.Vector3().fromArray(q.vdir) : null; dm.auto = q.auto; dm.chain = q.chain;
     buildDim(dm);
   }
   parts.forEach((p, i) => { p.hidden = s.ph[i] === '1'; });
@@ -2606,7 +2877,7 @@ function renderPanel() {
     <small id="dScaleNow"></small>
     <div class="dsec">размеры</div>
     <div class="drow"><button data-t="lin">линейный</button><button data-t="chain">цепочка</button><button data-t="base">от базы</button><button data-t="gab">габаритный</button><button data-t="easy">полезные</button></div>
-    <div class="drow"><button id="dMod" title="Ширина каждого модуля снизу, высоты слева — на этом виде">габариты модулей</button><button id="dAll" title="Общая ширина снизу, общая высота справа — на этом виде">общий габарит</button></div>
+    <div class="drow"><button data-t="mod" title="Нажать на модуль и потянуть — линия цепочки; дальше щелчки по модулям. Выключить и включить — новая цепочка">габариты модулей</button><button data-t="fac" title="Нажать на фасад и потянуть — линия цепочки; дальше щелчки по фасадам. Выключить и включить — новая цепочка">размеры фасадов</button><button id="dAll" title="Общая ширина снизу, общая высота справа — на этом виде">общий габарит</button></div>
     <div class="drow"><span class="dl">концы</span><button data-e="tick">засечки</button><button data-e="arrow">стрелки</button></div>
     <button id="dClr">стереть размеры этого вида</button>
     <small>Размер: щелчок — ручки, тянуть за число или линию — отвести, правая кнопка — удалить. Ctrl+Z — отменить, Ctrl+Y — вернуть.</small>
@@ -2628,7 +2899,6 @@ function renderPanel() {
   }; });
   d.querySelectorAll('[data-t]').forEach(b => { b.onclick = () => setTool(drawTool === b.dataset.t ? null : b.dataset.t); });
   d.querySelectorAll('[data-e]').forEach(b => { b.onclick = () => { dimEnd = b.dataset.e; try { localStorage.setItem('drawDimEnd', dimEnd); } catch (e) {} syncPanel(); drawOverlay(); }; });
-  $('dMod').onclick = () => { pushUndo(); const F = flags(); F.mod = !F.mod; autoDims(); syncPanel(); };
   $('dAll').onclick = () => { pushUndo(); const F = flags(); F.all = !F.all; autoDims(); syncPanel(); };
   $('dClr').onclick = () => { pushUndo(); for (const dm of dims.filter(dimHere)) removeDim(dm); const F = flags(); F.mod = F.all = false; selDim = null; syncPanel(); drawOverlay(); };
   $('dSave').onclick = saveSheet; $('dShot').onclick = saveShot;
@@ -2641,7 +2911,7 @@ function syncPanel() {
   d.querySelectorAll('[data-t]').forEach(b => b.classList.toggle('on', b.dataset.t === drawTool));
   d.querySelectorAll('[data-e]').forEach(b => b.classList.toggle('on', b.dataset.e === dimEnd));
   d.querySelector('.iso').style.display = drawLines ? 'none' : '';
-  const F = flags(); $('dMod').classList.toggle('on', F.mod); $('dAll').classList.toggle('on', F.all);
+  const F = flags(); $('dAll').classList.toggle('on', F.all);
   drawInfo();
 }
 // ---------- лист SVG ----------
@@ -2832,6 +3102,7 @@ function syncTools() {
     chip(ICON.faces, 'міряти від грані до грані', () => setRMode('face'), 'mini' + (rmode === 'face' ? ' on' : ''));
     chip(ICON.edges, 'міряти від ребра до ребра', () => setRMode('edge'), 'mini' + (rmode === 'edge' ? ' on' : ''));
     chip(ICON.points, 'міряти від кута до кута', () => setRMode('point'), 'mini' + (rmode === 'point' ? ' on' : ''));
+    chip(ICON.wall, 'до стін: від площини деталі до лінії підлоги або стіни', () => setRMode('wall'), 'mini' + (rmode === 'wall' ? ' on' : ''));
     chip(ICON.gab, 'габарит виділеного: ширина, висота, глибина', () => setRMode('gab'), 'mini' + (rmode === 'gab' ? ' on' : ''));
     if (dims.length) chip(ICON.trash, 'стерти всі розміри', () => { clearDims(); partDims.length = 0; easyDims.length = 0; gabDims.length = 0; }, 'mini');
   }
