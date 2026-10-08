@@ -202,6 +202,45 @@ function geom(pd) {
   return g;
 }
 
+// рёбра детали как у EdgesGeometry, но без «сгиба на 180°»: Базис у деталей с вырезами/отверстиями отдаёт часть
+// длинных узких треугольников ровной пласти перевёрнутыми (узкий лежит поверх соседа) — нормали противоположны, а
+// оба в одной плоскости. EdgesGeometry считала это сгибом на 180° и проводила косую черту (скрины 08.10: планка
+// WingLine 051_3, бок шкафа под стиралку 051_4). У объёмной детали противоположные нормали соседей ребром не бывают.
+function partEdges(g, deg) {
+  const pos = g.attributes.position.array, cosT = Math.cos(deg * Math.PI / 180);
+  const key = i => Math.round(pos[i] * 1e4) + ',' + Math.round(pos[i + 1] * 1e4) + ',' + Math.round(pos[i + 2] * 1e4);
+  const E = new Map(), out = [];
+  const v = i => [pos[i], pos[i + 1], pos[i + 2]];
+  const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+  const crs = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  for (let t = 0; t < pos.length; t += 9) {
+    const P = [t, t + 3, t + 6], n = crs(sub(v(P[1]), v(P[0])), sub(v(P[2]), v(P[0]))), l = Math.hypot(n[0], n[1], n[2]);
+    if (l < 1e-9) continue;
+    n[0] /= l; n[1] /= l; n[2] /= l;
+    const K = P.map(key);
+    for (let a = 0; a < 3; a++) {
+      const b = (a + 1) % 3, c = (a + 2) % 3;
+      if (K[a] === K[b]) continue;
+      const h = K[a] < K[b] ? K[a] + '|' + K[b] : K[b] + '|' + K[a];
+      const r = E.get(h), f = { n, a: P[a], b: P[b], c: P[c] };
+      if (r) r.push(f); else E.set(h, [f]);
+    }
+  }
+  for (const fs of E.values()) {
+    const f = fs[0];
+    let draw = fs.length !== 2;
+    if (fs.length === 2) {
+      const d = dot(f.n, fs[1].n);
+      draw = d <= cosT && d >= -cosT;   // d < -cosT: перевёрнутый сосед в той же плоскости — не ребро
+    }
+    if (draw) out.push(pos[f.a], pos[f.a + 1], pos[f.a + 2], pos[f.b], pos[f.b + 1], pos[f.b + 2]);
+  }
+  const eg = new THREE.BufferGeometry();
+  eg.setAttribute('position', new THREE.Float32BufferAttribute(out, 3));
+  return eg;
+}
+
 // чем меньше форма фурнитуры, тем выше она в споре за общую плоскость (0…3)
 const rankMemo = {};
 function shapeRank(f) {
@@ -241,7 +280,7 @@ function build() {
       for (const pd of od.p) {
         const g = geom(pd); g.computeBoundingBox(); box.union(g.boundingBox);
         const m = new THREE.Mesh(g, materialFor(pd.m)); m.userData.idx = i; grp.add(m); meshes.push(m); picks.push(m);
-        const ln = new THREE.LineSegments(new THREE.EdgesGeometry(g, 25), EDGE); grp.add(ln); edges.push(ln);
+        const ln = new THREE.LineSegments(partEdges(g, 25), EDGE); grp.add(ln); edges.push(ln);
         const lh = new THREE.LineSegments(ln.geometry, EDGE_HID); lh.visible = false; lh.renderOrder = 1; grp.add(lh); hidEdges.push(lh);
       }
     }
