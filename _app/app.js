@@ -1993,7 +1993,7 @@ function panBy(dx, dy) {
   view.target.addScaledVector(right, -dx * k).addScaledVector(up, dy * k);
 }
 function zoomAt(k, cx, cy) {
-  const nd = Math.max(rad * 0.08, Math.min(rad * 5, view.dist * k));   // не пролететь сквозь и не улететь
+  const nd = Math.max(50, Math.min(rad * 5, view.dist * k));   // ближе 50 мм не подойти (одинаково для любого изделия), дальше 5 габаритов не улететь
   k = nd / view.dist;
   const p = onTargetPlane(cx, cy); if (p) view.target.lerp(p, 1 - k);
   view.dist = nd;
@@ -2195,7 +2195,16 @@ cv.addEventListener('pointerup', e => {
 });
 cv.addEventListener('wheel', e => {
   e.preventDefault();
-  const k = e.deltaY > 0 ? 1.12 : 1 / 1.12;
+  let k = e.deltaY > 0 ? 1.12 : 1 / 1.12;
+  if (k < 1 && view.persp) {                               // приближение — к детали под курсором, а не к середине модели
+    const h = pick(e.clientX, e.clientY);
+    if (h && !parts[h.object.userData.idx].isL) {
+      const fwd = cam.getWorldDirection(new THREE.Vector3());
+      const d = h.point.clone().sub(cam.position).dot(fwd);   // глубина детали по направлению взгляда
+      if (d > 0) { view.target.copy(cam.position).addScaledVector(fwd, d); view.dist = d; }
+    }
+    k = Math.min(1, Math.max(50, view.dist * k) / view.dist);   // ближе 50 мм к детали не подойти
+  }
   const p = onTargetPlane(e.clientX, e.clientY);          // масштаб к курсору
   if (p) view.target.lerp(p, 1 - k);
   view.dist *= k; place();
@@ -2243,6 +2252,7 @@ function mode(m) {
     mt.depthWrite = m === 3 || (m !== 2 && b.depthWrite); mt.needsUpdate = true;
   }
   for (const l of hidEdges) l.visible = m === 3 && !l.userData.mark;
+  for (const p of parts) if (p.dHid) for (const l of p.dHid) l.visible = m === 3;
   setIcon('bMode', ['solid', 'ghost', 'wire'][m - 1]);
   need();
 }
@@ -2495,7 +2505,8 @@ function applyLook() {
         m.material = m.userData.glass ? DRAW_GLASS : DRAW_MAT;
       } else if (m.userData.mat) { m.material = m.userData.mat; delete m.userData.mat; }
     }
-    if (p.isF && (L || p.dEdges)) { for (const l of drawEdgesFor(p)) l.visible = L; for (const l of p.dHid) l.visible = L && drawHid; }
+    // рёбра фурнитуры: в 3D всегда (иначе в «линиях» она пропадает), в кресленні — только в режиме «линии»
+    if (p.isF) { for (const l of drawEdgesFor(p)) l.visible = L || !drawOn; for (const l of p.dHid) l.visible = (L && drawHid) || (!drawOn && curMode === 3); }
   }
   for (const o of markObjs) o.visible = !drawOn;
   // невидимые линии (Алексей 08.10: «мне нужно понимание и передавать в чертёж»): светлые, там где линию закрывает деталь
@@ -3925,7 +3936,8 @@ function loop() {
 (window.__MODEL ? Promise.resolve(window.__MODEL)
   : fetch('./model.json?v=' + Date.now(), { cache: 'no-store' }).then(r => { if (!r.ok) throw new Error('файл моделі не знайдено (' + r.status + ')'); return r.json(); }))
   .then(data => {
-    M = data; build(); wire(); wireLayout(); applyVis(); layout(); fitVisible();
+    M = data; build(); for (const p of parts) if (p.isF) for (const l of drawEdgesFor(p)) l.visible = true;   // рёбра фурнитуры видны в 3D сразу
+    wire(); wireLayout(); applyVis(); layout(); fitVisible();
     window.__viewer = { parts, animNode, M, dims, addDim, drawerDims, easyPick, easyCell, tubeDims, openTarget, pick, blockersOf, poseAll, toggleAt, scopeIds, boxOf, isTube, toWorld, clearDims, root, partsUnder, dragDim, THREE, snapAt, pointVisible, picks, nodes, NCNT, REP, rootKids, selectPart, toggleOne, shiftPick, stepSel, tapPick, asmChain, hideSel, showAll, upLevel, downLevel, effVisible, selGab, gabShow, gabDims, setRMode, frameNodeFor, setDraw, buildSVG, sheetRect, autoDims, fitSheet, fitView, setTool, toolClick, toolHover, drawUndo, drawRedo, gabCommit, dragDimTo, get drawN() { return drawN; }, get selDim() { return selDim; }, set selDim(v) { selDim = v; }, get drawOn() { return drawOn; }, get ruler() { return ruler; }, get selSet() { return selSet; }, get selMany() { return selMany; }, get selOne() { return selOne; }, get selNode() { return selNode; }, get cam() { return cam; }, get placing() { return placing; }, get rp() { return rp; } };   // для проверки из консоли
     $('load').remove(); loop();
   })
