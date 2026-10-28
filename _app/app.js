@@ -1986,7 +1986,8 @@ function orbit(dx, dy) {
   view.yaw -= dx * 0.006;
   // на телефоне снизу не заглянуть (чтобы пальцем случайно не перевернуть модель); пока включено «до стін» — можно,
   // иначе низ полки не указать (Алексей 28.10). Выключил, глядя снизу, — подняться можно, ниже нельзя, без рывка.
-  const lo = !TOUCH || rmode === 'wall' ? -Math.PI / 2 : Math.min(0, view.pitch);
+  // считается только при включённой рулетке: «до стін» запоминается и при выключенных размерах (бой 28.10)
+  const lo = !TOUCH || (ruler && rmode === 'wall') ? -Math.PI / 2 : Math.min(0, view.pitch);
   view.pitch = Math.max(lo, Math.min(Math.PI / 2, view.pitch + dy * 0.006));
 }
 function panBy(dx, dy) {
