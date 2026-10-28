@@ -244,6 +244,9 @@ html.draw body, html.draw.dlines body { background: transparent; color: var(--rb
 #dsvg .dh { fill: none; stroke: transparent; stroke-width: 10px; pointer-events: stroke; cursor: move; }
 #dsvg .ch { fill: none; stroke: transparent; stroke-width: 12px; pointer-events: stroke; cursor: ew-resize; }
 #dsvg .sh { fill: transparent; stroke: none; pointer-events: all; cursor: move; }
+#dsvg .bh { fill: transparent; stroke: none; pointer-events: all; cursor: move; }
+#dsvg .bh:hover { stroke: #7aa7e0; stroke-width: 1px; stroke-dasharray: 4 3; }
+#dsvg .grip.bg { cursor: nwse-resize; stroke: #7aa7e0; }
 #dctx button.on { background: var(--rb-on); color: #fff; }
 #dsvg .grip { fill: #fff; stroke: #e0301e; stroke-width: 1.5px; pointer-events: all; cursor: move; }
 #snapmk.edge::before, #snapmk.edge::after { background: #1f5fbf; }
