@@ -2672,6 +2672,15 @@ function pdBuild() {
   PD.marks = pdGroups(mk).map(g => { let a0 = 1e9, a1 = -1e9, b0 = 1e9, b1 = -1e9;
     for (let k = 0; k < g.length; k += 2) { a0 = Math.min(a0, g[k]); a1 = Math.max(a1, g[k]); b0 = Math.min(b0, g[k + 1]); b1 = Math.max(b1, g[k + 1]); }
     return a1 - a0 <= 30 && b1 - b0 <= 30 ? { x: (a0 + a1) / 2, y: (b0 + b1) / 2, d: Math.max(a1 - a0, b1 - b0) } : null; }).filter(Boolean);
+  // Выгрузка кладёт значок на деталь, к пласти которой подходит отверстие, даже если оно уходит в соседнюю (минификсы передней
+  // стенки ящика — на фасаде; тумба 030_6, Алексей 30.10). Есть список отверстий — значок только над отверстием, входящим в эту
+  // деталь; нет (выгрузки до 27.10) — все значки, отличить не по чему
+  if ((M.holes || []).length) {
+    const near = m => PD.circs.some(c => Math.hypot(c.x - m.x, c.y - m.y) <= Math.max(2, m.d / 2 + 1));
+    const drop = PD.marks.filter(m => !near(m));
+    PD.marks = PD.marks.filter(near);
+    if (drop.length) PD.segs = PD.segs.filter(s => s.k !== 'mk' || !drop.some(m => Math.hypot((s.a[0] + s.b[0]) / 2 - m.x, (s.a[1] + s.b[1]) / 2 - m.y) <= m.d / 2 + 1));
+  }
   // цели прилипания: точки (центры, точки установки, углы) и линии (рёбра, оси каналов)
   const pk = new Set(); PD.pts = []; PD.lines = [];
   const addP = (x, y, what, pri) => { const key = Math.round(x * 5) + ',' + Math.round(y * 5); if (pk.has(key)) return; pk.add(key); PD.pts.push({ x, y, what, pri }); };
@@ -2713,7 +2722,8 @@ function pdCircle(g) {
   let r0 = 1e9, r1 = 0, rs = 0;
   for (let k = 0; k < g.length; k += 2) { const r = Math.hypot(g[k] - cx, g[k + 1] - cy); r0 = Math.min(r0, r); r1 = Math.max(r1, r); rs += r; }
   const r = rs / n;
-  return r >= 0.8 && r1 - r0 <= Math.max(0.3, r * 0.08) ? { x: cx, y: cy, r } : null;
+  // допуск 15 %: отверстия крепления замка TANDEM — неровный многоугольник (r 3,65…4,15; тумба 030_6, Алексей 30.10)
+  return r >= 0.8 && r1 - r0 <= Math.max(0.3, r * 0.15) ? { x: cx, y: cy, r } : null;
 }
 // расстояние от точки до материала детали на виде (0 — на пласти), по треугольникам ближней пласти
 function pdGap(x, y) {
