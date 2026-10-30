@@ -301,7 +301,9 @@ html.draw body, html.draw.dlines body { background: transparent; color: var(--rb
 #card .cbtn button svg { width: 17px; height: 17px; }
 
 /* значки включённого — строкой под кубиком, телефон стоя (30.10) */
-#tools.row { flex-direction: row; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+#tools.row { flex-direction: row; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
+.touch #tools.row button, .touch #tools.row button.mini { width: 34px; height: 34px; }
+#tools.row button svg { width: 19px; height: 19px; }
 /* подсказка рулетки лёжа — тонкой строкой у верхнего края, гаснет (30.10) */
 #bar #st.thin { width: auto; max-width: none; margin: 0; font-size: 12px; padding: 3px 8px; background: rgba(255,255,255,.7);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; transition: opacity .6s; }

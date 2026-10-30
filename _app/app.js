@@ -6084,7 +6084,8 @@ function syncTools() {
     box.appendChild(b);
   };
   if (ruler) {
-    chip(ICON.ruler, 'вимкнути рулетку', stopRuler);
+    // вимкнути — кнопкой рулетки внизу (Алексей 30.10: кружок-дубль лишний); в кресленні строки внизу нет — там остаётся
+    if (drawOn) chip(ICON.ruler, 'вимкнути рулетку', stopRuler);
     // способ рулетки: лёгкие размеры (для заказчика, по умолчанию), грани, рёбра, точки
     chip(ICON.easy, 'легкі розміри: комірка, дверцята, шухляда', () => setRMode('easy'), 'mini' + (rmode === 'easy' ? ' on' : ''));
     chip(ICON.faces, 'міряти від грані до грані', () => setRMode('face'), 'mini' + (rmode === 'face' ? ' on' : ''));
@@ -6108,14 +6109,15 @@ function placeTools() {
     placeSheet(); return;
   }
   c.style.top = (6 + s.t) + 'px'; c.style.right = (6 + s.r) + 'px';
-  // телефон стоя (30.10): экран узкий — значки строкой под кубиком, а не столбиком справа (столбик съедал ширину);
-  // открыта карточка — строка под ней. Лёжа и на компьютере — столбиком, как было.
+  // телефон стоя (30.10): экран узкий — значки мелкой строкой в пустом месте слева от кубика (скрин Алексея), а не столбиком
+  // справа (столбик съедал ширину); открыта карточка — строка под ней. Лёжа и на компьютере — столбиком, как было.
   const row = TOUCH && !isLand();
   box.classList.toggle('row', row);
   if (row) {
-    const cd = $('card'), cb = cd.style.display === 'block' ? cd.getBoundingClientRect().bottom : 0;
-    box.style.top = (Math.max(6 + s.t + c.offsetHeight, cb) + 4) + 'px';
-    box.style.right = (6 + s.r) + 'px'; box.style.left = (6 + s.l) + 'px'; box.style.maxHeight = '';
+    const cd = $('card'), open = cd.style.display === 'block';
+    box.style.left = (6 + s.l) + 'px'; box.style.maxHeight = '';
+    if (open) { box.style.top = (Math.max(6 + s.t + c.offsetHeight, cd.getBoundingClientRect().bottom) + 4) + 'px'; box.style.right = (6 + s.r) + 'px'; }
+    else { box.style.right = (10 + s.r + c.offsetWidth) + 'px'; box.style.top = (6 + s.t + Math.max(0, (c.offsetHeight - box.offsetHeight) / 2)) + 'px'; }
   } else {
     // лёжа столбик не влезал по высоте — нижние значки (до стін, габарит, корзина) уходили за край: переносится вторым столбиком влево
     box.style.left = '';
