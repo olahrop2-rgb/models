@@ -811,7 +811,7 @@ function paint() {
   // одна деталь: ссылка поставщика (фурнитура / профиль) и чертёж панели во весь экран (монтажники 30.10)
   const one = !selMany.length && !selOne.length ? (selNode === null ? selSet[0] : -1) : -1;
   const url = one >= 0 ? linkOf(one) : (selNode !== null && !selMany.length && !selOne.length ? nodeLink(selNode) : '');
-  const canPd = one >= 0 && parts[one].kind === 'p';
+  const canPd = one >= 0 && (parts[one].kind === 'p' || parts[one].kind === 'b');   // панель и профиль (вырезы в профиле, 30.10)
   d.innerHTML = '<b></b><small></small><div class="chain"></div><div class="cbtn"><button>сховати</button><button>тільки це</button>' +
     (TOUCH ? '<button class="add' + (addMode ? ' on' : '') + '">＋ додати</button>' : '') +
     (canPd ? '<button class="pd">' + ICON.sheet + '<span>креслення</span></button>' : '') +
@@ -2461,6 +2461,213 @@ function wire() {
   if (DRAW_OK) { $('bDraw').style.display = ''; $('bDraw').onclick = () => setDraw(!drawOn); wireOverlay(); wireDraw(); }
 }
 
+// ---------------- настоящие вырезы отверстий на компьютере (Алексей 30.10) ----------------
+// Телефон — как было (правило 07.10: крепёж значком, дыры под него не прорезаны — вес и пестрота). На компьютере после
+// открытия модели проигрыватель сам прорезает в панелях и профилях отверстия крепежа из выгрузки: круглые — цилиндром,
+// с изменённым контуром (паз, замочная скважина, карман) — по контуру; понемногу, смотреть не мешает. «Отв.…» без крепежа
+// выгрузка прорезала сама — их не трогаем. Режет библиотека three-bvh-csg (MIT, lib/csg.module.js; в файл-странице — __CSG).
+const CUT = { done: 0, all: 0 };
+const v3a = (h, o) => new THREE.Vector3(h[o], h[o + 1], h[o + 2]);
+function rawBox(p) {
+  const b = new THREE.Box3();
+  for (const m of p.meshes) { if (m.userData.mark) continue; if (!m.geometry.boundingBox) m.geometry.computeBoundingBox(); b.union(m.geometry.boundingBox); }
+  return b.isEmpty() ? null : b;
+}
+// длина куска отрезка A→E внутри габарита b, ужатого на s (метод плит)
+function segIn(A, E, b, s) {
+  let t0 = 0, t1 = 1;
+  for (const k of ['x', 'y', 'z']) {
+    const lo = b.min[k] + s, hi = b.max[k] - s, a = A[k], d = E[k] - a;
+    if (Math.abs(d) < 1e-9) { if (a < lo || a > hi) return 0; continue; }
+    let u = (lo - a) / d, v = (hi - a) / d; if (u > v) [u, v] = [v, u];
+    t0 = Math.max(t0, u); t1 = Math.min(t1, v); if (t0 >= t1) return 0;
+  }
+  return (t1 - t0) * A.distanceTo(E);
+}
+// контур отверстия (выгрузка) → замкнутые обходы точек в осях контура
+function contourLoops(c) {
+  const segs = [];
+  for (const e of c.e) {
+    const [t, x1, y1, x2, y2, cx, cy, r0] = e, ccw = e[8] === true;
+    if (t === 1 && x1 !== null) segs.push([[x1, y1], [x2, y2]]);
+    else if ((t === 2 || t === 3) && cx !== null) {
+      const r = t === 3 ? r0 : Math.hypot(x1 - cx, y1 - cy); if (!(r > 0)) continue;
+      const a1 = t === 3 ? 0 : Math.atan2(y1 - cy, x1 - cx); let sw;
+      if (t === 3) sw = Math.PI * 2;
+      else { const a2 = Math.atan2(y2 - cy, x2 - cx); sw = ccw ? a2 - a1 : a1 - a2; while (sw <= 1e-9) sw += Math.PI * 2; if (!ccw) sw = -sw; }
+      const n = Math.max(6, Math.ceil(Math.abs(sw) / (Math.PI / 16))), pts = [];
+      for (let k = 0; k <= n; k++) { const u = a1 + sw * k / n; pts.push([cx + r * Math.cos(u), cy + r * Math.sin(u)]); }
+      if (t !== 3) { pts[0] = [x1, y1]; pts[n] = [x2, y2]; }
+      for (let k = 0; k < n; k++) segs.push([pts[k], pts[k + 1]]);
+    }
+  }
+  // сцепить отрезки в обходы по общим концам (элементы в выгрузке идут вперемешку)
+  const near = (p, q) => Math.abs(p[0] - q[0]) < 0.02 && Math.abs(p[1] - q[1]) < 0.02, loops = [], used = new Array(segs.length).fill(false);
+  for (let s = 0; s < segs.length; s++) {
+    if (used[s]) continue;
+    used[s] = true; const loop = [segs[s][0], segs[s][1]];
+    for (let guard = 0; guard < segs.length; guard++) {
+      const end = loop[loop.length - 1]; if (near(end, loop[0]) && loop.length > 2) break;
+      let f = -1, rev = false;
+      for (let q = 0; q < segs.length && f < 0; q++) { if (used[q]) continue; if (near(segs[q][0], end)) f = q; else if (near(segs[q][1], end)) { f = q; rev = true; } }
+      if (f < 0) break;
+      used[f] = true; loop.push(rev ? segs[f][0] : segs[f][1]);
+    }
+    if (loop.length > 3 && near(loop[0], loop[loop.length - 1])) { loop.pop(); loops.push(loop); }
+  }
+  return loops;
+}
+// инструмент-«сверло» для отверстия: цилиндр или призма по контуру; дно — ровно на глубине, снаружи запас 0,3 мм
+function holeTool(h, c) {
+  const A = v3a(h, 0), E = v3a(h, 3), d = E.clone().sub(A), L = d.length(); d.normalize();
+  let g, rim;   // rim — обвод края отверстия: обходы точек в плоскости входа (мир = A + x·X + y·Y)
+  if (c) {
+    const X = new THREE.Vector3(...c.x).normalize(), Y = new THREE.Vector3(...c.y).normalize(), Z = X.clone().cross(Y);
+    const loops = contourLoops(c); if (!loops.length) return null;
+    rim = { X, Y, loops };
+    const shapes = loops.map(l => new THREE.Shape(l.map(p => new THREE.Vector2(p[0], p[1]))));
+    // глубина — как в Базисе: дно ровно на глубине отверстия; 0,3 мм запаса только наружу, со стороны входа
+    g = new THREE.ExtrudeGeometry(shapes, { depth: L + 0.3, bevelEnabled: false, curveSegments: 1 });
+    g.translate(0, 0, Z.dot(d) > 0 ? -0.3 : -L);
+    g.applyMatrix4(new THREE.Matrix4().makeBasis(X, Y, Z).setPosition(A));
+  } else {
+    const sg = h[6] <= 5 ? 10 : h[6] <= 12 ? 16 : 24;   // мелкие — меньше граней: на глаз круглые, режутся в разы быстрее
+    g = new THREE.CylinderGeometry(h[6] / 2, h[6] / 2, L + 0.3, sg);
+    g.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), d));
+    const m = (L - 0.3) / 2; g.translate(A.x + d.x * m, A.y + d.y * m, A.z + d.z * m);
+    const X = Math.abs(d.x) < 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+    X.addScaledVector(d, -X.dot(d)).normalize();
+    const r = h[6] / 2, loop = [];
+    for (let k = 0; k < sg; k++) loop.push([r * Math.cos(k * 2 * Math.PI / sg), r * Math.sin(k * 2 * Math.PI / sg)]);
+    rim = { X, Y: d.clone().cross(X), loops: [loop] };
+  }
+  g = g.index ? g.toNonIndexed() : g;
+  g.deleteAttribute('uv'); g.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2));
+  g.computeVertexNormals(); g.computeBoundingBox();
+  g.userData.cut = { A, d, L, rim };
+  return g;
+}
+// обвод краёв отверстий детали: на входе и, если насквозь, на выходе (рёбра самого разреза — косая сетка треугольников,
+// их не рисуем: у детали остаются её прежние рёбра)
+function rimLines(tools, box) {
+  const out = [], cs = [];
+  for (const x of [box.min.x, box.max.x]) for (const y of [box.min.y, box.max.y]) for (const z of [box.min.z, box.max.z]) cs.push(new THREE.Vector3(x, y, z));
+  for (const g of tools) {
+    const { A, d, L, rim } = g.userData.cut; if (!rim) continue;
+    let tmax = -1e9; for (const c of cs) tmax = Math.max(tmax, c.clone().sub(A).dot(d));
+    const at = [A]; if (L >= tmax - 0.3) at.push(A.clone().addScaledVector(d, tmax));
+    for (const O of at) for (const loop of rim.loops) for (let k = 0; k < loop.length; k++) {
+      const p = loop[k], q = loop[(k + 1) % loop.length];
+      out.push(O.x + p[0] * rim.X.x + p[1] * rim.Y.x, O.y + p[0] * rim.X.y + p[1] * rim.Y.y, O.z + p[0] * rim.X.z + p[1] * rim.Y.z,
+               O.x + q[0] * rim.X.x + q[1] * rim.Y.x, O.y + q[0] * rim.X.y + q[1] * rim.Y.y, O.z + q[0] * rim.X.z + q[1] * rim.Y.z);
+    }
+  }
+  const eg = new THREE.BufferGeometry(); eg.setAttribute('position', new THREE.Float32BufferAttribute(out, 3)); return eg;
+}
+// склеить геометрии (без индексов) в одну; groups — по одной на геометрию с её номером материала
+function mergeGeoms(list, mats) {
+  let n = 0; for (const g of list) n += g.attributes.position.count;
+  const P = new Float32Array(n * 3), N = new Float32Array(n * 3), U = new Float32Array(n * 2), out = new THREE.BufferGeometry();
+  let o = 0;
+  list.forEach((g, k) => {
+    const c = g.attributes.position.count;
+    P.set(g.attributes.position.array, o * 3);
+    if (g.attributes.normal) N.set(g.attributes.normal.array, o * 3);
+    if (g.attributes.uv) U.set(g.attributes.uv.array, o * 2);
+    if (mats) out.addGroup(o, c, mats[k]);
+    o += c;
+  });
+  out.setAttribute('position', new THREE.BufferAttribute(P, 3)); out.setAttribute('normal', new THREE.BufferAttribute(N, 3)); out.setAttribute('uv', new THREE.BufferAttribute(U, 2));
+  return out;
+}
+async function cutHolesSoon() {
+  if (TOUCH || !(M.holes || []).length) return;
+  let lib;
+  try { lib = await import(window.__CSG || new URL('./lib/csg.module.js', import.meta.url).href); }
+  catch (e) { console.warn('вырезы: библиотека не загрузилась —', e && e.message); return; }
+  const { Brush, Evaluator, SUBTRACTION, ADDITION } = lib;
+  const ev = new Evaluator(); ev.useGroups = true; ev.attributes = ['position', 'uv', 'normal'];
+  const hcont = new Map(); for (const c of M.hcont || []) hcont.set(c.h, c);
+  const boxes = parts.map(p => (p.kind === 'p' || p.kind === 'b') ? rawBox(p) : null);
+  const jobs = new Map();
+  M.holes.forEach((h, hk) => {
+    if (/^Отв/i.test((M.hnames || [])[h[8]] || '') || !(h[6] > 0)) return;
+    const A = v3a(h, 0), E = v3a(h, 3); if (A.distanceTo(E) < 0.05) return;
+    const c = hcont.get(hk); let R = h[6] / 2;
+    if (c) for (const e of c.e) for (const k of [1, 3, 5]) if (e[k] !== null) R = Math.max(R, Math.hypot(e[k], e[k + 1]) + (e[7] || 0));
+    const tb = new THREE.Box3().setFromPoints([A, E]).expandByScalar(R);
+    // деталь — только та, в тело которой отверстие уходит (ось внутри габарита, ужатого на 0,2 мм, длиной больше 0,3 мм);
+    // касание торцом (шкант соседней перегородки у края полки) — мимо
+    boxes.forEach((b, i) => { if (b && b.intersectsBox(tb) && segIn(A, E, b, 0.2) > 0.3) { if (!jobs.has(i)) jobs.set(i, []); jobs.get(i).push(hk); } });
+  });
+  const list = [...jobs]; CUT.all = list.length; let k = 0;
+  const step = () => {
+    const t0 = performance.now();
+    while (k < list.length && !drawOn && performance.now() - t0 < 30) {
+      const t1 = performance.now();
+      try { cutPart(list[k][0], list[k][1], hcont, Brush, ev, SUBTRACTION, ADDITION); } catch (e) { console.warn('вырезы: деталь', list[k][0], e && e.message); }
+      const dt = performance.now() - t1; CUT.ms = (CUT.ms || 0) + dt; if (!CUT.max || dt > CUT.max[0]) CUT.max = [Math.round(dt), list[k][0], list[k][1].length];
+      k++; CUT.done = k;
+    }
+    need();
+    if (k < list.length) setTimeout(step, drawOn ? 800 : 0);
+  };
+  setTimeout(step, 300);
+}
+function cutPart(i, hks, hcont, Brush, ev, SUBTRACTION, ADDITION) {
+  const p = parts[i], ms = p.meshes.filter(m => !m.userData.mark); if (!ms.length) return;
+  const tools = hks.map(hk => holeTool(M.holes[hk], hcont.get(hk))).filter(Boolean); if (!tools.length) return;
+  const mats = ms.map(m => m.material);
+  // пересекающиеся свёрла (карман Cabineo — три ⌀15 внахлёст) сначала сливаются, иначе вырез считается неверно
+  const groups = [];
+  for (const g of tools) {
+    const hit = groups.filter(G => G.box.intersectsBox(g.boundingBox));
+    const G = { geoms: [g], box: g.boundingBox.clone() };
+    for (const H of hit) { G.geoms.push(...H.geoms); G.box.union(H.box); groups.splice(groups.indexOf(H), 1); }
+    groups.push(G);
+  }
+  const toolGeoms = groups.map(G => {
+    if (G.geoms.length === 1) return G.geoms[0];
+    let b = new Brush(G.geoms[0], mats[0]); b.updateMatrixWorld();
+    for (let q = 1; q < G.geoms.length; q++) { const t = new Brush(G.geoms[q], mats[0]); t.updateMatrixWorld(); b = ev.evaluate(b, t, ADDITION); }
+    const g = b.geometry.index ? b.geometry.toNonIndexed() : b.geometry; return g;
+  });
+  const A = new Brush(mergeGeoms(ms.map(m => m.geometry), ms.map((m, k) => k)), mats);
+  const B = new Brush(mergeGeoms(toolGeoms), mats[0]);
+  A.updateMatrixWorld(); B.updateMatrixWorld();
+  const res = ev.evaluate(A, B, SUBTRACTION), rg = res.geometry, rm = Array.isArray(res.material) ? res.material : [res.material];
+  if (!rg.attributes.position.count) return;
+  // результат — снова по детали на материал (остальной проигрыватель ждёт у детали один материал на кусок)
+  const byMat = new Map();
+  for (const gr of rg.groups.length ? rg.groups : [{ start: 0, count: rg.attributes.position.count, materialIndex: 0 }]) {
+    const mt = rm[gr.materialIndex] || mats[0];
+    if (!byMat.has(mt)) byMat.set(mt, []);
+    byMat.get(mt).push([gr.start, gr.count]);
+  }
+  const old = new Set(ms);
+  for (const m of ms) { p.g.remove(m); const k2 = picks.indexOf(m); if (k2 >= 0) picks.splice(k2, 1); }
+  const keep = p.meshes.filter(m => !old.has(m)); p.meshes.length = 0; p.meshes.push(...keep);
+  { const box = rawBox({ meshes: ms }), rg2 = rimLines(tools, box);
+    const ln = new THREE.LineSegments(rg2, EDGE); p.g.add(ln); p.edges.push(ln);
+    const lh = new THREE.LineSegments(rg2, EDGE_HID); lh.visible = curMode === 3; lh.renderOrder = 1; p.g.add(lh); hidEdges.push(lh); }
+  for (const [mt, ranges] of byMat) {
+    let n = 0; for (const [, c] of ranges) n += c;
+    const P = new Float32Array(n * 3), N = new Float32Array(n * 3), U = new Float32Array(n * 2); let o = 0;
+    for (const [s, c] of ranges) {
+      P.set(rg.attributes.position.array.subarray(s * 3, (s + c) * 3), o * 3);
+      N.set(rg.attributes.normal.array.subarray(s * 3, (s + c) * 3), o * 3);
+      if (rg.attributes.uv) U.set(rg.attributes.uv.array.subarray(s * 2, (s + c) * 2), o * 2);
+      o += c;
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(P, 3)); g.setAttribute('normal', new THREE.BufferAttribute(N, 3)); g.setAttribute('uv', new THREE.BufferAttribute(U, 2));
+    g.computeBoundingBox();
+    const m = new THREE.Mesh(g, mt); m.userData.idx = i; p.g.add(m); p.meshes.push(m); picks.push(m);
+  }
+  for (const m of old) m.geometry.dispose();
+  pdHwMemo.delete(i); pdHwEdgeMemo.delete(i);
+}
+
 // ---------------- на весь экран (30.10) ----------------
 // Телефон лёжа: строка адреса и вкладки браузера съедают полэкрана (скрин Алексея). Android-браузер умеет их убрать —
 // кнопка в строке значков; айфон (Safari) не умеет — кнопки нет, в «Як дивитися» строка про «на экран Додому».
@@ -2554,7 +2761,7 @@ function wireFind() {
 // Край + точка — размер поперёк края; две точки — по ширине и по высоте. Всё в осях проекта при закрытых дверях.
 const PD = { on: false, i: -1, side: 1, segs: [], circs: [], slots: [], hw: [], pts: [], lines: [], dims: [], first: null, sc: 1, ox: 0, oy: 0, bb: null };
 const pdC = () => $('pdc');
-function pdFrame(i) {
+function pdFrame(i, eye) {
   const p = parts[i], od = M.objs[i], pos = [];
   for (const m of p.meshes) { if (m.userData.mark) continue; const a = m.geometry.attributes.position.array; for (let k = 0; k < a.length; k++) pos.push(a[k]); }
   let n = null;
@@ -2571,14 +2778,19 @@ function pdFrame(i) {
       const r = acc.get(key); if (r) { r.a += ar; r.v.addScaledVector(nn, ar); } else acc.set(key, { a: ar, v: nn.clone().multiplyScalar(ar) });
     }
     let best = null; for (const r of acc.values()) if (!best || r.a > best.a) best = r;
-    n = best ? best.v.normalize() : new THREE.Vector3(0, 0, 1);
+    // у квадратного профиля грани равны — из почти таких же (≥ 60 % площади) берётся та, на которую смотрят (вырез в профиле, 30.10)
+    if (best && eye) {
+      let bd = -1;
+      for (const r of acc.values()) if (r.a >= best.a * 0.6) { const d = Math.abs(r.v.clone().normalize().dot(eye)); if (d > bd) { bd = d; best = r; } }
+    }
+    n = best ? best.v.clone().normalize() : new THREE.Vector3(0, 0, 1);
   }
   const c = new THREE.Vector3(); for (let k = 0; k < pos.length; k += 3) c.x += pos[k], c.y += pos[k + 1], c.z += pos[k + 2];
   c.divideScalar(Math.max(1, pos.length / 3));
   return { n, c, pos };
 }
 function pdBuild() {
-  const i = PD.i, p = parts[i], od = M.objs[i], { n, c, pos } = pdFrame(i);
+  const i = PD.i, p = parts[i], od = M.objs[i], { n, c, pos } = pdFrame(i, PD.eye);
   const s = n.clone().multiplyScalar(PD.side);
   const v = Math.abs(s.y) < 0.7 ? new THREE.Vector3(0, 1, 0).addScaledVector(s, -s.y).normalize()     // стоит — верх вверху
                                 : new THREE.Vector3(0, 0, -1).addScaledVector(s, s.z).normalize();    // лежит — зад вверху, перёд внизу
@@ -2618,23 +2830,37 @@ function pdBuild() {
     const key = Math.round(x * 10) + ',' + Math.round(y * 10) + ',' + Math.round(r * 20);
     if (ck.has(key)) return; ck.add(key); PD.circs.push({ x, y, r, solid, name, thr });
   };
-  for (const h of M.holes || []) {
+  // отверстия с изменённым контуром (выгрузка с 30.10): форма вокруг точки отверстия в осях X/Y крепежа
+  const hcont = new Map(); for (const c of M.hcont || []) hcont.set(c.h, c);
+  PD.conts = [];
+  (M.holes || []).forEach((h, hk) => {
     const A = P(h[0], h[1], h[2]), E = P(h[3], h[4], h[5]), L = Math.hypot(E[0] - A[0], E[1] - A[1], E[2] - A[2]);
-    if (L < 0.01 || !(h[6] > 0)) continue;
+    if (L < 0.01 || !(h[6] > 0)) return;
     const along = Math.abs(E[2] - A[2]) / L, name = (M.hnames || [])[h[8]] || '';
+    const hc = hcont.get(hk);
+    if (hc && along > 0.9) {
+      const lo = Math.min(A[2], E[2]), hi = Math.max(A[2], E[2]);
+      if (hi < d0 + 0.2 || lo > d1 - 0.2) return;
+      const cont = pdContour(hc, h, P); if (!cont.segs.length) return;
+      const mid = cont.pts.reduce((s, q) => [s[0] + q[0] / cont.pts.length, s[1] + q[1] / cont.pts.length], [0, 0]);
+      if (pdGap(mid[0], mid[1]) > 60) return;
+      const key = 'c' + Math.round(A[0]) + ',' + Math.round(A[1]); if (ck.has(key)) return; ck.add(key);
+      PD.conts.push({ segs: cont.segs, cen: cont.cen, solid: hi >= d1 - 0.3, name, depth: h[7] });
+      return;
+    }
     if (along > 0.9) {
       const lo = Math.min(A[2], E[2]), hi = Math.max(A[2], E[2]);
-      if (hi < d0 + 0.2 || lo > d1 - 0.2 || !inBox(A[0], A[1], 0.5)) continue;
+      if (hi < d0 + 0.2 || lo > d1 - 0.2 || !inBox(A[0], A[1], 0.5)) return;
       const thr = lo <= d0 + 0.3 && hi >= d1 - 0.3, near = hi >= d1 - 0.3;
       addC((A[0] + E[0]) / 2, (A[1] + E[1]) / 2, h[6] / 2, thr || near, name, thr);
     } else if (along < 0.2) {
-      if (Math.min(A[2], E[2]) < d0 - 0.5 || Math.max(A[2], E[2]) > d1 + 0.5) continue;
-      if (!inBox(A[0], A[1], 1) || !inBox(E[0], E[1], 1) || pdGap((A[0] + E[0]) / 2, (A[1] + E[1]) / 2) > 1) continue;
+      if (Math.min(A[2], E[2]) < d0 - 0.5 || Math.max(A[2], E[2]) > d1 + 0.5) return;
+      if (!inBox(A[0], A[1], 1) || !inBox(E[0], E[1], 1) || pdGap((A[0] + E[0]) / 2, (A[1] + E[1]) / 2) > 1) return;
       const kk = Math.round(A[0]) + ',' + Math.round(A[1]) + ',' + Math.round(E[0]) + ',' + Math.round(E[1]);
-      if (ck.has(kk)) continue; ck.add(kk);
+      if (ck.has(kk)) return; ck.add(kk);
       PD.slots.push({ a: [A[0], A[1]], b: [E[0], E[1]], w: h[6], name });
     }
-  }
+  });
   // круглые вырезы контура панели (hc, в осях панели) — центр для прилипания
   if (od.hc && od.ax) {
     const ax = od.ax;
@@ -2692,6 +2918,12 @@ function pdBuild() {
     if (!h.circ.length && h.ip) addP(h.ip[0], h.ip[1], 'точка встановлення · ' + h.name, 0);
   }
   for (const m of PD.marks) addP(m.x, m.y, 'центр кріплення (значок)', 0);
+  // вырезы по контуру: центры дуг — точки, стороны — линии (от края до стороны паза — поперёк)
+  for (const c2 of PD.conts) {
+    for (const q of c2.cen) addP(q.x, q.y, 'центр дуги R' + fmtN(q.r) + ' · ' + (c2.name || 'виріз'), 0);
+    const s = c2.segs;
+    for (let k = 0; k + 3 < s.length; k += 4) PD.lines.push({ a: [s[k], s[k + 1]], b: [s[k + 2], s[k + 3]], what: 'край вирізу · ' + (c2.name || '') });
+  }
   for (const sl of PD.slots) { addP(sl.a[0], sl.a[1], 'отвір у торець ⌀' + fmtN(sl.w) + (sl.name ? ' · ' + sl.name : ''), 0); PD.lines.push({ a: sl.a, b: sl.b, what: 'вісь отвору ⌀' + fmtN(sl.w) }); }
   for (const sg of PD.segs) if (sg.k !== 'mk') { addP(sg.a[0], sg.a[1], 'кут', 1); addP(sg.b[0], sg.b[1], 'кут', 1); PD.lines.push({ a: sg.a, b: sg.b, what: sg.k === 'v' ? 'край' : 'край (з того боку)' }); }
 }
@@ -2706,6 +2938,30 @@ function pdHwEdges(j) {
     for (let k = 0; k + 2 < a.length; k += 3) { v.set(a[k], a[k + 1], a[k + 2]); if (mx) v.applyMatrix4(mx); out.push(v.x, v.y, v.z); }
   }
   pdHwEdgeMemo.set(j, out); return out;
+}
+// контур отверстия → отрезки на виде детали [ax,ay,bx,by,…] и центры дуг. Элемент выгрузки: [тип, x1,y1, x2,y2, cx,cy, r, ArcDir];
+// тип 1 — отрезок, 2 — дуга (ArcDir false — по часовой, diag_25), 3 — круг. Точка (x, y) → мир: начало отверстия + x·X + y·Y крепежа
+function pdContour(hc, h, P) {
+  const W = (x, y) => P(h[0] + x * hc.x[0] + y * hc.y[0], h[1] + x * hc.x[1] + y * hc.y[1], h[2] + x * hc.x[2] + y * hc.y[2]);
+  const segs = [], cen = [], pts = [];
+  const add = (a, b) => { const A = W(a[0], a[1]), B = W(b[0], b[1]); segs.push(A[0], A[1], B[0], B[1]); pts.push([A[0], A[1]]); };
+  for (const e of hc.e) {
+    const [t, x1, y1, x2, y2, cx, cy, r0] = e, ccw = e[8] === true;
+    if (t === 1 && x1 !== null) add([x1, y1], [x2, y2]);
+    else if ((t === 2 || t === 3) && cx !== null) {
+      const r = t === 3 ? r0 : Math.hypot(x1 - cx, y1 - cy); if (!(r > 0)) continue;
+      let a1 = t === 3 ? 0 : Math.atan2(y1 - cy, x1 - cx), sw;
+      if (t === 3) sw = Math.PI * 2;
+      else { const a2 = Math.atan2(y2 - cy, x2 - cx); sw = ccw ? a2 - a1 : a1 - a2; while (sw <= 1e-9) sw += Math.PI * 2; if (!ccw) sw = -sw; }
+      const n = Math.max(6, Math.ceil(Math.abs(sw) / (Math.PI / 16)));
+      for (let k = 0; k < n; k++) {
+        const u = a1 + sw * k / n, v = a1 + sw * (k + 1) / n;
+        add([cx + r * Math.cos(u), cy + r * Math.sin(u)], [cx + r * Math.cos(v), cy + r * Math.sin(v)]);
+      }
+      const C = W(cx, cy); cen.push({ x: C[0], y: C[1], r });
+    }
+  }
+  return { segs, cen, pts };
 }
 // отрезки [ax,ay,bx,by,…] → связные группы (по общим концам); каждая группа — плоский список точек концов
 function pdGroups(s) {
@@ -2755,11 +3011,12 @@ function pdHwBox(j) {
 }
 function pdOpen(i) {
   PD.on = true; PD.i = i; PD.dims = []; PD.first = null;
-  const { n, c } = pdFrame(i);
   // сторона — та, что сейчас к смотрящему
   root.updateMatrixWorld(true);
-  const eye = cam.position.clone().sub(root.position);
-  PD.side = n.dot(eye.sub(c)) >= 0 ? 1 : -1;
+  const c0 = pdFrame(i).c, eyeP = cam.position.clone().sub(root.position);
+  PD.eye = eyeP.clone().sub(c0).normalize();
+  const { n, c } = pdFrame(i, PD.eye);
+  PD.side = n.dot(eyeP.sub(c)) >= 0 ? 1 : -1;
   pdBuild();
   const w = $('pdw'), p = parts[i], bb = PD.bb;
   w.classList.add('show');
@@ -2829,6 +3086,12 @@ function pdDraw(snap) {
     g.strokeStyle = '#16427f'; g.lineWidth = 1; g.setLineDash([4, 3]); g.beginPath();
     g.moveTo(A[0] + nx, A[1] + ny); g.lineTo(B[0] + nx, B[1] + ny); g.lineTo(B[0] - nx, B[1] - ny); g.lineTo(A[0] - nx, A[1] - ny); g.stroke();
     g.setLineDash([8, 3, 2, 3]); g.lineWidth = 0.7; g.beginPath(); g.moveTo(A[0], A[1]); g.lineTo(B[0], B[1]); g.stroke(); g.setLineDash([]);
+  }
+  // вырезы по контуру (паз, замочная скважина) — тем же синим, с той стороны — пунктиром
+  for (const c2 of PD.conts) {
+    const s = c2.segs; g.strokeStyle = '#16427f'; g.lineWidth = 1.2; g.setLineDash(c2.solid ? [] : [3, 2]); g.beginPath();
+    for (let k = 0; k + 3 < s.length; k += 4) { const A = pdS(s[k], s[k + 1]), B = pdS(s[k + 2], s[k + 3]); g.moveTo(A[0], A[1]); g.lineTo(B[0], B[1]); }
+    g.stroke(); g.setLineDash([]);
   }
   // отверстия поперёк: сплошной кружок — со стороны взгляда / насквозь, пунктир — с той стороны; ⌀ — когда кружок заметен
   g.font = '600 12px system-ui, sans-serif'; g.textBaseline = 'middle';
@@ -6309,8 +6572,8 @@ function loop() {
   : fetch('./model.json?v=' + Date.now(), { cache: 'no-store' }).then(r => { if (!r.ok) throw new Error('файл моделі не знайдено (' + r.status + ')'); return r.json(); }))
   .then(data => {
     M = data; build(); for (const p of parts) if (p.isF) for (const l of drawEdgesFor(p)) l.visible = true;   // рёбра фурнитуры видны в 3D сразу
-    wire(); wireLayout(); applyVis(); layout(); fitVisible();
-    window.__viewer = { parts, animNode, M, dims, addDim, drawerDims, easyPick, easyCell, tubeDims, openTarget, pick, blockersOf, poseAll, toggleAt, scopeIds, boxOf, isTube, toWorld, clearDims, root, partsUnder, dragDim, THREE, snapAt, pointVisible, picks, nodes, NCNT, REP, rootKids, selectPart, toggleOne, shiftPick, stepSel, tapPick, asmChain, hideSel, showAll, upLevel, downLevel, effVisible, selGab, gabShow, gabDims, setRMode, frameNodeFor, setDraw, buildSVG, sheetRect, autoDims, fitSheet, fitView, setTool, toolClick, toolHover, drawUndo, drawRedo, gabCommit, dragDimTo, wallHover, wallClick, wallAt, roomLineAt, get wall1() { return wall1; }, get wallHov() { return wallHov; }, pdOpen, pdClose, pdPick, pdS, findByNum, goPart, linkOf, get PD() { return PD; }, get drawN() { return drawN; }, get selDim() { return selDim; }, set selDim(v) { selDim = v; }, get drawOn() { return drawOn; }, get ruler() { return ruler; }, get selSet() { return selSet; }, get selMany() { return selMany; }, get selOne() { return selOne; }, get selNode() { return selNode; }, get cam() { return cam; }, get placing() { return placing; }, get rp() { return rp; } };   // для проверки из консоли
+    wire(); wireLayout(); applyVis(); layout(); fitVisible(); cutHolesSoon();
+    window.__viewer = { parts, animNode, M, dims, addDim, drawerDims, easyPick, easyCell, tubeDims, openTarget, pick, blockersOf, poseAll, toggleAt, scopeIds, boxOf, isTube, toWorld, clearDims, root, partsUnder, dragDim, THREE, snapAt, pointVisible, picks, nodes, NCNT, REP, rootKids, selectPart, toggleOne, shiftPick, stepSel, tapPick, asmChain, hideSel, showAll, upLevel, downLevel, effVisible, selGab, gabShow, gabDims, setRMode, frameNodeFor, setDraw, buildSVG, sheetRect, autoDims, fitSheet, fitView, setTool, toolClick, toolHover, drawUndo, drawRedo, gabCommit, dragDimTo, CUT, wallHover, wallClick, wallAt, roomLineAt, get wall1() { return wall1; }, get wallHov() { return wallHov; }, pdOpen, pdClose, pdPick, pdS, findByNum, goPart, linkOf, get PD() { return PD; }, get drawN() { return drawN; }, get selDim() { return selDim; }, set selDim(v) { selDim = v; }, get drawOn() { return drawOn; }, get ruler() { return ruler; }, get selSet() { return selSet; }, get selMany() { return selMany; }, get selOne() { return selOne; }, get selNode() { return selNode; }, get cam() { return cam; }, get placing() { return placing; }, get rp() { return rp; } };   // для проверки из консоли
     $('load').remove(); loop();
   })
   .catch(err => { $('load').textContent = 'Не вдалося відкрити модель: ' + err.message; });
