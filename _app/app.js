@@ -784,10 +784,12 @@ function stepSel(i) {
   if (k >= 0) selectPart(i, k); else selectNode(c);
 }
 function paint() {
+  if (findHi >= 0 && !(selNode === null && selSet.length === 1 && selSet[0] === findHi && !selMany.length && !selOne.length)) findOff();
   const on = new Set(selSet);
   parts.forEach((p, i) => {
     for (const m of p.meshes) {
       if (drawOn && m.userData.mat) { if (!m.userData.glass) m.material = on.has(i) ? DRAW_SEL : DRAW_MAT; continue; }
+      if (i === findHi) continue;                          // найденная поиском — свой сплошной цвет (findLook)
       m.material.emissive.setHex(on.has(i) ? 0x2b6cb0 : 0x000000);
       m.material.emissiveIntensity = on.has(i) ? 0.45 : 0;
     }
@@ -2271,7 +2273,7 @@ addEventListener('resize', () => { rend.setSize(innerWidth, innerHeight); layout
 function mode(m) {
   if (drawOn) return;                                       // в кресленні материалы свои, показ не переключается
   curMode = m;
-  for (const p of parts) for (const x of p.meshes) {
+  for (const p of parts) if (p !== parts[findHi]) for (const x of p.meshes) {
     const mt = x.material, b = mt.userData.base || mt;   // стекло остаётся прозрачным и в обычном режиме
     // «линии»: детали не рисуются, но закрывают собой то, что за ними (для светлых скрытых линий);
     // чуть отодвинуты вглубь, чтобы рёбра на их же поверхности считались видимыми
@@ -2285,6 +2287,24 @@ function mode(m) {
   for (const p of parts) if (p.dHid) for (const l of p.dHid) l.visible = m === 3;
   setIcon('bMode', ['solid', 'ghost', 'wire'][m - 1]);
   need();
+}
+// Найденная поиском деталь (Алексей 30.10: «блеклая, непонятно где»): модель — полупрозрачно, деталь — сплошной оранжевой,
+// без света (свет у сцены яркий — светлая деталь и так почти белая, подкраска в ней тонула) и видна сквозь остальные.
+// Сняли выделение / выбрали другое — прежний вид и материалы возвращаются.
+let findHi = -1, findPrev = 1;
+// «прозрачная» с непрозрачностью 1 — чтобы рисовалась последней, поверх полупрозрачных (иначе они её выбеливали)
+const FIND_MAT = new THREE.MeshBasicMaterial({ color: 0xff5a00, side: THREE.DoubleSide, depthTest: false, depthWrite: false, transparent: true, opacity: 1 });
+function findLook(on) {
+  const p = parts[findHi]; if (!p) return;
+  for (const x of p.meshes) {
+    if (on) { if (!x.userData.findMat) x.userData.findMat = x.material; x.material = FIND_MAT; x.renderOrder = 20; }
+    else if (x.userData.findMat) { x.material = x.userData.findMat; delete x.userData.findMat; x.renderOrder = 0; }
+  }
+  need();
+}
+function findOff() {
+  if (findHi < 0) return;
+  findLook(false); findHi = -1; mode(findPrev);
 }
 function setIcon(id, key) { const b = $(id); if (b) b.innerHTML = ICON[key]; }
 
@@ -2481,6 +2501,10 @@ function goPart(i) {
   const p = parts[i];
   if (hideFac && p.isDoor) { hideFac = false; setOn('bFac', false); applyVis(); }
   if (!effVisible(p)) showAll();
+  if (findHi >= 0 && findHi !== i) findOff();
+  if (findHi < 0) findPrev = curMode;
+  findHi = i;
+  mode(2); findLook(true);
   selectPart(i, -1);
   // подлететь, но оставить вокруг детали обстановку — видно, где она лежит и как стоит
   const b = new THREE.Box3().expandByObject(p.g), sz = b.getSize(V3());
@@ -2811,10 +2835,27 @@ function pdDraw(snap) {
     g.moveTo(Q[0] - 11, Q[1]); g.lineTo(Q[0] + 11, Q[1]); g.moveTo(Q[0], Q[1] - 11); g.lineTo(Q[0], Q[1] + 11); g.stroke();
   }
 }
+// размер можно отодвинуть пальцем поперёк (Алексей 30.10: два размера на одной линии — непонятно, что от чего): концы остаются
+// на своих точках, к ним — тонкие выносные линии. dm.off — сдвиг в мм модели поперёк размера
+function pdDimEnds(dm) {
+  const dx = dm.b[0] - dm.a[0], dy = dm.b[1] - dm.a[1], L = Math.hypot(dx, dy) || 1, nx = -dy / L, ny = dx / L, o = dm.off || 0;
+  return [[dm.a[0] + nx * o, dm.a[1] + ny * o], [dm.b[0] + nx * o, dm.b[1] + ny * o], [nx, ny]];
+}
+function pdDimAt(sx, sy) {
+  const R = TOUCH ? 18 : 9;
+  for (let k = PD.dims.length - 1; k >= 0; k--) {
+    const [a, b] = pdDimEnds(PD.dims[k]), A = pdS(a[0], a[1]), B = pdS(b[0], b[1]), dx = B[0] - A[0], dy = B[1] - A[1], L2 = dx * dx + dy * dy || 1;
+    const t = Math.max(0, Math.min(1, ((sx - A[0]) * dx + (sy - A[1]) * dy) / L2));
+    if (Math.hypot(A[0] + t * dx - sx, A[1] + t * dy - sy) <= R) return PD.dims[k];
+  }
+  return null;
+}
 function pdDimDraw(g, dm) {
-  const A = pdS(dm.a[0], dm.a[1]), B = pdS(dm.b[0], dm.b[1]), L = Math.hypot(B[0] - A[0], B[1] - A[1]);
+  const [a, b] = pdDimEnds(dm), A0 = pdS(dm.a[0], dm.a[1]), B0 = pdS(dm.b[0], dm.b[1]);
+  const A = pdS(a[0], a[1]), B = pdS(b[0], b[1]), L = Math.hypot(B[0] - A[0], B[1] - A[1]);
   if (L < 1) return;
   const ux = (B[0] - A[0]) / L, uy = (B[1] - A[1]) / L;
+  if (dm.off) { g.strokeStyle = '#1f5fbf'; g.lineWidth = 0.7; g.beginPath(); g.moveTo(A0[0], A0[1]); g.lineTo(A[0], A[1]); g.moveTo(B0[0], B0[1]); g.lineTo(B[0], B[1]); g.stroke(); }
   g.strokeStyle = '#1f5fbf'; g.fillStyle = '#1f5fbf'; g.lineWidth = 1.4; g.beginPath(); g.moveTo(A[0], A[1]); g.lineTo(B[0], B[1]); g.stroke();
   for (const [P0, s] of [[A, 1], [B, -1]]) {
     g.beginPath(); g.moveTo(P0[0], P0[1]);
@@ -2890,7 +2931,7 @@ function wirePd() {
   cv2.addEventListener('pointerdown', e => {
     try { cv2.setPointerCapture(e.pointerId); } catch (er) {}
     ptr.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (ptr.size === 1) st = { x: e.clientX, y: e.clientY, ox: PD.ox, oy: PD.oy, moved: false };
+    if (ptr.size === 1) st = { x: e.clientX, y: e.clientY, ox: PD.ox, oy: PD.oy, moved: false, dim: pdDimAt(e.clientX, e.clientY) };
     else if (ptr.size === 2) { const [p1, p2] = [...ptr.values()]; st = { pinch: true, d: Math.hypot(p2.x - p1.x, p2.y - p1.y), mx: (p1.x + p2.x) / 2, my: (p1.y + p2.y) / 2, sc: PD.sc, ox: PD.ox, oy: PD.oy, moved: true }; }
   });
   cv2.addEventListener('pointermove', e => {
@@ -2904,7 +2945,12 @@ function wirePd() {
     }
     if (!st.pinch) {
       if (!st.moved && Math.hypot(e.clientX - st.x, e.clientY - st.y) < 8) return;
-      st.moved = true; PD.ox = st.ox + e.clientX - st.x; PD.oy = st.oy + e.clientY - st.y; pdDraw();
+      st.moved = true;
+      if (st.dim) {                                          // потянули размер — отодвигается поперёк, концы на месте
+        const dm = st.dim, n = pdDimEnds(dm)[2], p = pdM(e.clientX, e.clientY);
+        dm.off = (p[0] - dm.a[0]) * n[0] + (p[1] - dm.a[1]) * n[1];
+      } else { PD.ox = st.ox + e.clientX - st.x; PD.oy = st.oy + e.clientY - st.y; }
+      pdDraw();
     }
   });
   const up = e => {
@@ -3000,7 +3046,7 @@ function dimHere(dm) {
 
 function setDraw(on) {
   if (on === drawOn) return;
-  if (on) { closePop(); mode(1); if (ruler) stopRuler(); }
+  if (on) { closePop(); findOff(); mode(1); if (ruler) stopRuler(); }
   else metalOff();                                          // из листа металла — вернуть спрятанное
   drawOn = on;
   clipApply();                                              // разрез вида — только в кресленні
