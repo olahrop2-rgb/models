@@ -818,9 +818,19 @@ function paint() {
     (url ? '<button class="url">' + ICON.link + '<span>сайт</span></button>' : '') + '</div>';
   d.children[0].textContent = title || '(без назви)';
   d.children[1].textContent = sub || '';
+  // облицована по пласти (сэндвич, сращивание): толщина по слоям и их материалы (выгрузка с 30.10, od.ly снизу вверх)
+  const ly = one >= 0 && M.objs[one].ly;
+  if (ly && ly.length > 1) {
+    const sum = ly.reduce((s, x) => s + x[0], 0), el = document.createElement('div'); el.className = 'ly';
+    el.innerHTML = '<span></span><small></small>';
+    el.children[0].textContent = 'шари: ' + ly.map(x => fmtN(x[0])).join(' + ') + ' = ' + fmtN(sum) + ' мм';
+    el.children[1].textContent = ly.map(x => fmtN(x[0]) + ' — ' + (x[1] || '?').replace(/\s*\|.*$/, '')).join(' · ');
+    el.title = ly.map(x => fmtN(x[0]) + ' мм — ' + x[1] + (x[2] ? ' (основа)' : '')).join('\n');
+    d.insertBefore(el, d.children[2]);
+  }
   // цепочка «изделие ▸ модуль ▸ ящик ▸ фасад»: щелчок по звену выделяет весь этот узел,
   // «скрыть» / «только это» работают для выделенного звена; цепочка остаётся, можно ходить вверх-вниз
-  const ch = d.children[2];
+  const ch = d.querySelector('.chain');
   const add = (text, on, cur) => {
     if (ch.childNodes.length) ch.appendChild(document.createTextNode(' ▸ '));
     const a = document.createElement('span'); a.className = 'lnk' + (cur ? ' cur' : ''); a.textContent = text || '(без назви)';

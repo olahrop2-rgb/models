@@ -298,6 +298,9 @@ html.draw body, html.draw.dlines body { background: transparent; color: var(--rb
 .touch #card .cbtn { gap: 5px; margin-top: 5px; }
 .touch #card .cbtn button { padding: 5px 9px; font-size: 14px; background: rgba(255,255,255,.85); flex: none; }
 #card .cbtn button.pd, #card .cbtn button.url { display: inline-flex; align-items: center; gap: 5px; }
+/* слои облицованной детали: толщины и материалы одной-двумя строками */
+#card .ly { margin-top: 3px; display: flex; flex-direction: column; }
+#card .ly small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #card .cbtn button svg { width: 17px; height: 17px; }
 
 /* значки включённого — строкой под кубиком, телефон стоя (30.10) */
