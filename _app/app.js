@@ -644,7 +644,7 @@ function applyVis() {
   for (const p of parts) { p.g.visible = effVisible(p); if (p.hidden) any = true; }
   for (const k in nodes) if (nodes[k].hidden) any = true;
   const b = $('bShowAll'); if (b) b.style.display = any ? '' : 'none';   // «показать всё» — только когда что-то скрыто
-  syncTools(); need();
+  syncRoom(); syncTools(); need();
 }
 function showAll() {
   pushUndo();                                               // в кресленні — для Ctrl+Z
@@ -1346,16 +1346,38 @@ function roomLineAt(cx, cy, fit) {
 }
 // что под курсором: после плоскости — линия (любая: неподходящая горит красным), мимо линий — другая плоскость, ею
 // заменить первую; после линии — только плоскость; в начале — линия, если рядом, иначе плоскость
+// Поверхность помещения (стена, пол, потолок, плитка, стекло — 30.10) — большая мишень вместо тонкой линии: берётся, если она
+// ближе к смотрящему, чем грань детали под пальцем
 function wallAt(cx, cy) {
-  if (wall1 && wall1.e) { const f = faceAt(cx, cy); return f ? { f } : null; }
+  if (wall1 && (wall1.e || wall1.s)) {                      // после стены — деталь, другая стена или линия вдоль неё (проём двери, 30.10)
+    if (wall1.s) { const e = roomLineAt(cx, cy, null); if (e) return { e }; }   // после линии — деталь или стена
+    const f = faceAt(cx, cy), r = roomSurfAt(cx, cy);
+    if (r && (!f || r.dist < f.p.distanceTo(cam.position) - 1)) return { s: r };
+    return f ? { f } : null;
+  }
   const e = roomLineAt(cx, cy, null); if (e) return { e };
-  const f = faceAt(cx, cy); return f ? { f } : null;
+  const f = faceAt(cx, cy), r = roomSurfAt(cx, cy);
+  if (r && (!f || r.dist < f.p.distanceTo(cam.position) - 1)) return { s: r };
+  return f ? { f } : r ? { s: r } : null;
 }
-const sameWall = (p, q) => !!p && !!q && (p.f ? !!q.f && sameFace(p.f, q.f) : !!q.e && sameEdge(p.e, q.e));
-function wallHL(w, color) { if (w.f) faceHL(w.f, color, 0.35); else edgeHL(w.e, color); }
-function wallDrop(w) { if (!w) return; if (w.f) dropHL(w.f); else dropEdge(w.e); }
+const sameWall = (p, q) => !!p && !!q && (p.f ? !!q.f && sameFace(p.f, q.f) : p.e ? !!q.e && sameEdge(p.e, q.e) : !!q.s && p.s.s === q.s.s);
+function wallHL(w, color) {
+  if (w.f) faceHL(w.f, color, 0.35);
+  else if (w.e) edgeHL(w.e, color);
+  else { const m = w.s.s.m, hl = new THREE.Mesh(m.geometry, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.5, depthWrite: false, side: THREE.DoubleSide }));
+    hl.renderOrder = 6; m.parent.add(hl); w.hl = hl; need(); }
+}
+function wallDrop(w) { if (!w) return; if (w.f) dropHL(w.f); else if (w.e) dropEdge(w.e); else if (w.hl) { w.hl.parent.remove(w.hl); w.hl.material.dispose(); w.hl = null; need(); } }
+// плоскость детали и поверхность помещения — параллельны (до 10°)
+const surfFits = (s, f) => Math.abs(s.n.dot(f.n)) > Math.cos(THREE.MathUtils.degToRad(10));
 // пара с первым указанием: годится (зелёный) / нет (красный); без первого — просто синим
-const wallFits = w => !wall1 || (wall1.f && w.f) || lineFits(wall1.e || w.e, wall1.f || w.f);
+const wallFits = w => {
+  if (!wall1 || (wall1.f && w.f)) return true;
+  if (wall1.s && w.s) return surfFits(w.s, wall1.s);       // стена — стена: параллельны (до 10°)
+  if (!wall1.f && !w.f) return lineFits(wall1.e || w.e, wall1.s || w.s);   // стена — линия: линия вдоль стены (до 10°)
+  const f = wall1.f || w.f, o = wall1.f ? w : wall1;
+  return o.s ? surfFits(o.s, f) : lineFits(o.e, f);
+};
 function wallHover(cx, cy) {
   const w = wallAt(cx, cy);
   const ok = !!w && !sameWall(w, wall1);
@@ -1385,19 +1407,56 @@ function wallLinesFor(f) {
 }
 // неподходящее второе указание — мигнуть им красным
 function wallFlashBad(w) { wallHL(w, WBAD); setTimeout(() => wallDrop(w), 900); }
-const WHINT = 'до стін: вкажіть площину деталі, потім лінію підлоги або межі приміщення (порядок будь-який)';
+const WHINT = 'до стін: вкажіть площину деталі, потім стіну, підлогу, стелю або лінію приміщення (порядок будь-який)';
 function wallClick(w, mouse) {
   if (!w) { if (wall1) { clearWall1(); $('st').textContent = WHINT; } return; }
   if (sameWall(w, wall1)) return;
   if (!wall1 || (wall1.f && w.f)) {                       // первое указание (или другая плоскость вместо первой)
     clearWall1(); wall1 = w; wallHL(w, DIMC); showPending();
     if (w.f) {
-      if (!wallLinesFor(w.f)) { toast('до цієї площини немає паралельної лінії приміщення — вкажіть іншу площину'); clearWall1(); $('st').textContent = WHINT; return; }
-      $('st').textContent = 'до стін: вкажіть лінію підлоги або межі — зелена підходить, червона ні (порожнє місце — скинути)';
-    } else $('st').textContent = 'до стін: вкажіть площину деталі — зелена підходить, червона ні (порожнє місце — скинути)';
+      const anySurf = ROOM.surfs.some(s => s.g.visible && surfFits(s, w.f));
+      if (!anySurf && !wallLinesFor(w.f)) { toast('до цієї площини немає паралельної стіни чи лінії приміщення — вкажіть іншу площину'); clearWall1(); $('st').textContent = WHINT; return; }
+      $('st').textContent = 'до стін: вкажіть стіну, підлогу, стелю або лінію — зелена підходить, червона ні (порожнє місце — скинути)';
+    } else $('st').textContent = w.s ? 'до стін: вкажіть площину деталі, іншу стіну або лінію прорізу — зелена підходить, червона ні'
+                                     : 'до стін: вкажіть площину деталі або стіну — зелена підходить, червона ні (порожнє місце — скинути)';
     return;
   }
-  const f = wall1.f || w.f, e = wall1.e || w.e;
+  if (wall1.s && w.s) {                                      // стена — стена: ширина проёма; с перекосом — среднее по обеим стенам
+    if (!surfFits(w.s, wall1.s)) { if (w !== wallHov) wallFlashBad(w); toast('стіни не паралельні — ширини між ними немає, виберіть зелену'); return; }
+    const cen = s => { const a = s.m.geometry.attributes.position, c = new THREE.Vector3(), v = new THREE.Vector3();
+      for (let k = 0; k < a.count; k++) c.add(s.m.localToWorld(v.fromBufferAttribute(a, k)));
+      return c.divideScalar(Math.max(1, a.count)); };
+    const s1 = wall1.s, s2 = w.s, n1 = s1.n.clone(), n2 = s2.n.clone();
+    const d1 = cen(s2.s).sub(s1.p).dot(n1), d2 = cen(s1.s).sub(s2.p).dot(n2), avg = (Math.abs(d1) + Math.abs(d2)) / 2;
+    clearWall1(); $('st').textContent = WHINT;
+    if (avg < 0.5) { toast('стіни на одній площині — 0 мм'); return; }
+    const a = s1.p.clone(), b = a.clone().addScaledVector(n1, Math.sign(d1) * avg);
+    const dm = addDim(a, b, { label: 'між стінами' });
+    if (mouse && dm.axis) placing = { dm, base: a.clone().add(b).multiplyScalar(0.5) };
+    return;
+  }
+  if (!wall1.f && !w.f) {                                    // стена — линия (второй стены нет — проём двери): от стены поперёк неё до середины линии
+    const sw = wall1.s || w.s, e = wall1.e || w.e;
+    if (!lineFits(e, sw)) { if (w !== wallHov) wallFlashBad(w); toast('ця лінія не йде вздовж стіни — розміру до неї немає, виберіть зелену'); return; }
+    const n = sw.n.clone(), mid = e.a.clone().add(e.b).multiplyScalar(0.5), d = mid.sub(sw.p).dot(n);
+    clearWall1(); $('st').textContent = WHINT;
+    if (Math.abs(d) < 0.5) { toast('лінія на самій стіні — 0 мм'); return; }
+    const a = sw.p.clone(), b = a.clone().addScaledVector(n, d);
+    const dm = addDim(a, b, { label: 'між стінами' });
+    if (mouse && dm.axis) placing = { dm, base: a.clone().add(b).multiplyScalar(0.5) };
+    return;
+  }
+  const f = wall1.f || w.f, e = wall1.e || w.e, sw = wall1.s || w.s;
+  if (sw) {                                                  // до поверхности помещения: поперёк плоскости детали до её плоскости
+    if (!surfFits(sw, f)) { if (w !== wallHov) wallFlashBad(w); toast('ця поверхня не паралельна площині деталі — розміру до неї немає, виберіть зелену'); return; }
+    const n = f.n.clone(), den = n.dot(sw.n), t = sw.p.clone().sub(f.p).dot(sw.n) / (Math.abs(den) < 1e-6 ? 1 : den);
+    clearWall1(); $('st').textContent = WHINT;
+    if (Math.abs(t) < 0.5) { toast('площина на самій поверхні — 0 мм'); return; }
+    const a = f.p.clone(), b = a.clone().addScaledVector(n, t);
+    const dm = addDim(a, b, { label: ROOM_LABEL[sw.s.kind] || 'до стіни' });
+    if (mouse && dm.axis) placing = { dm, base: a.clone().add(b).multiplyScalar(0.5) };
+    return;
+  }
   if (!lineFits(e, f)) { if (w !== wallHov) wallFlashBad(w); toast('ця лінія не паралельна площині — розміру до неї немає, виберіть зелену'); return; }
   // поперёк плоскости до середины линии; размер — от точки, где указана плоскость
   const n = f.n.clone(), mid = e.a.clone().add(e.b).multiplyScalar(0.5), d = mid.sub(f.p).dot(n);
@@ -1408,6 +1467,249 @@ function wallClick(w, mouse) {
   const dm = addDim(a, b, { label });
   if (mouse && dm.axis) placing = { dm, base: a.clone().add(b).multiplyScalar(0.5) };
 }
+// ---------------- помещение: стены, пол, потолок из линий «Слоя 0» (Алексей 30.10) ----------------
+// Цвет линии — смысл (Проектирование\База знаний\reference_room_lines_colors.md): зелёный низ — чистовой пол, красный низ —
+// черновой (берётся, только если чистового нет), чёрный верх — чистовой потолок (нет — красный верх, черновой), жёлтый — плитка,
+// синий — стекло, фиолетовый — переход материала в той же плоскости (только линия). Стены встают на каждый отрезок пола до
+// чёрной верхней линии над ним (ниша под дверь — до своей), пол и потолок — по контуру пола. Бледные, полупрозрачные, видны
+// только дальние (ближняя стена между смотрящим и мебелью не рисуется — смотрит «изнутри»). Погасили «Слой 0» — пропали.
+// «До стін» мерит до поверхности целиком: стена, пол, потолок, плитка, стекло.
+const ROOM = { groups: [], surfs: [] };
+const ROOM_MAT = {
+  wall: new THREE.MeshBasicMaterial({ color: 0xc9d0d8, transparent: true, opacity: 0.32, depthWrite: false, side: THREE.FrontSide }),
+  reveal: new THREE.MeshBasicMaterial({ color: 0xc3cad3, transparent: true, opacity: 0.4, depthWrite: false, side: THREE.DoubleSide }),   // откосы окна
+  floor: new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, side: THREE.FrontSide }),   // прозрачность — по краю (тает)
+  pick: new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, colorWrite: false, side: THREE.FrontSide }),   // потолок — только мишень
+  tile: new THREE.MeshBasicMaterial({ color: 0xe8d77a, transparent: true, opacity: 0.45, depthWrite: false, side: THREE.DoubleSide }),
+  glass: new THREE.MeshBasicMaterial({ color: 0x8ec3ee, transparent: true, opacity: 0.35, depthWrite: false, side: THREE.DoubleSide }),
+};
+const ROOM_LABEL = { wall: 'до стіни', floor: 'від підлоги', ceil: 'до стелі', tile: 'до плитки', glass: 'до скла' };
+function lineKind(c) {
+  const [r, g, b] = c || [0, 0, 0];
+  if (g > 180 && r < 120 && b < 120) return 'green';
+  if (r > 180 && g < 100 && b < 100) return 'red';
+  if (r > 180 && g > 180 && b < 120) return 'yellow';
+  if (b > 180 && r < 120) return 'blue';
+  if (r > 90 && b > 90 && g < 60) return 'purple';
+  return 'black';
+}
+function buildRoom() {
+  // линии по слоям помещения («Слой 0», «Слой 0_1»…)
+  const byLayer = new Map();
+  parts.forEach((p, i) => {
+    if (!p.isL) return;
+    const top = p.h[p.h.length - 1]; if (!/^слой\s*0/i.test(M.names[top] || '')) return;
+    const od = M.objs[i], kind = lineKind(od.c), a = od.l;
+    if (!byLayer.has(top)) byLayer.set(top, []);
+    for (let k = 0; k + 5 < a.length; k += 6) {
+      const A = new THREE.Vector3(a[k], a[k + 1], a[k + 2]), B = new THREE.Vector3(a[k + 3], a[k + 4], a[k + 5]);
+      if (A.distanceTo(B) < 15) continue;
+      // горизонталь — перепад до 2 % длины (низ окна 030_6 нарисован 480 → 486 на 725 мм; при допуске 6 мм окно не вырезалось)
+      byLayer.get(top).push({ A, B, kind, i, hor: Math.abs(B.y - A.y) <= Math.max(6, 0.02 * A.distanceTo(B)) });
+    }
+  });
+  for (const [layerId, segs] of byLayer) {
+    const grp = new THREE.Group(); grp.userData.layer = layerId; root.add(grp);
+    ROOM.groups.push({ g: grp, layer: layerId, lines: [...new Set(segs.map(s => s.i))] });
+    const ys = segs.map(s => Math.min(s.A.y, s.B.y)); if (!ys.length) continue;
+    // пол: зелёные нижние, нет — красные нижние
+    const lowOf = kind => { const hs = segs.filter(s => s.kind === kind && s.hor); if (!hs.length) return null;
+      const y0 = Math.min(...hs.map(s => s.A.y)); const fl = hs.filter(s => s.A.y < y0 + 60); return fl.length ? fl : null; };
+    const floor = lowOf('green') || lowOf('red'); if (!floor) continue;
+    const fy = floor.reduce((s, x) => s + (x.A.y + x.B.y) / 2, 0) / floor.length;
+    // середина помещения в плане — по отрезкам пола (для «внутрь»)
+    const cen = new THREE.Vector3(); let wsum = 0;
+    for (const s of floor) { const L = s.A.distanceTo(s.B); cen.addScaledVector(s.A.clone().add(s.B).multiplyScalar(0.5), L); wsum += L; }
+    cen.divideScalar(wsum || 1);
+    const addQuad = (P0, P1, P2, P3, kind, inward) => {   // четырёхугольник, нормаль — к inward
+      const n = P1.clone().sub(P0).cross(P3.clone().sub(P0)).normalize();
+      let q = [P0, P1, P2, P3]; if (inward && n.dot(inward) < 0) q = [P0, P3, P2, P1];
+      const g = new THREE.BufferGeometry().setFromPoints([q[0], q[1], q[2], q[0], q[2], q[3]]); g.computeVertexNormals();
+      const m = new THREE.Mesh(g, ROOM_MAT[kind]); m.renderOrder = -1; grp.add(m);
+      const nn = q[1].clone().sub(q[0]).cross(q[3].clone().sub(q[0])).normalize();
+      ROOM.surfs.push({ m, kind, n: nn, p: q[0].clone(), g: grp });
+    };
+    // Стены — по плоскостям, в которых лежат линии пола (030_6, 30.10: стена по одному отрезку пола не доходила до потолка —
+    // высоту брала по верху откоса окна — и обрывалась у проёма двери). В плоскость собираются все горизонтальные линии
+    // (пол, потолок, верх двери, низ / верх окна). Стена режется на полосы по концам линий; в каждой полосе:
+    //  · под полосой есть пол — стена от пола до самой верхней линии (потолок; есть чёрный чистовой не ниже 250 мм от
+    //    чернового — до него); две линии между полом и потолком — низ и верх окна, между ними вырез;
+    //  · пола нет (проём двери) — стена от нижней линии (верх двери) до потолка.
+    const planes = [];
+    const offOf = (P, q) => { const v = q.clone().setY(0).sub(P.o); return Math.abs(v.x * P.d.z - v.z * P.d.x); };
+    for (const s of floor) {
+      const d = s.B.clone().sub(s.A).setY(0), L = d.length(); if (L < 20) continue; d.divideScalar(L);
+      if (planes.some(P => Math.abs(P.d.dot(d)) > 0.995 && offOf(P, s.A) < 40)) continue;
+      planes.push({ o: s.A.clone().setY(0), d, lines: [], wins: [], verts: [] });
+    }
+    // вертикали в плоскостях стен (чёрные) — для проверки, что низ и верх проёма — одна рамка
+    for (const s of segs) {
+      if (s.kind !== 'black' || Math.abs(s.B.y - s.A.y) < 100) continue;
+      for (const P of planes) {
+        if (offOf(P, s.A) > 40 || offOf(P, s.B) > 40) continue;
+        P.verts.push({ u: (s.A.clone().setY(0).sub(P.o).dot(P.d) + s.B.clone().setY(0).sub(P.o).dot(P.d)) / 2, y0: Math.min(s.A.y, s.B.y), y1: Math.max(s.A.y, s.B.y) });
+      }
+    }
+    for (const s of segs) {
+      if (!s.hor || !(s.kind === 'black' || s.kind === 'red' || s.kind === 'green')) continue;
+      const d = s.B.clone().sub(s.A).setY(0), L = d.length(); if (L < 20) continue; d.divideScalar(L);
+      for (const P of planes) {
+        if (Math.abs(P.d.dot(d)) < 0.995 || offOf(P, s.A) > 40 || offOf(P, s.B) > 40) continue;
+        const u0 = s.A.clone().setY(0).sub(P.o).dot(P.d), u1 = s.B.clone().setY(0).sub(P.o).dot(P.d);
+        P.lines.push({ u0: Math.min(u0, u1), u1: Math.max(u0, u1), y: (s.A.y + s.B.y) / 2, floor: floor.includes(s), kind: s.kind });
+      }
+    }
+    let cyAll = fy + 2500, gotTop = false;
+    const pb = new THREE.Box3();
+    for (const P of planes) {
+      const us = [...new Set(P.lines.flatMap(l => [Math.round(l.u0), Math.round(l.u1)]))].sort((a, b) => a - b);
+      const mid = P.o.clone().addScaledVector(P.d, ((us[0] || 0) + (us[us.length - 1] || 0)) / 2).setY(fy), nIn = cen.clone().setY(fy).sub(mid);
+      const perp = new THREE.Vector3(-P.d.z, 0, P.d.x), inward = perp.multiplyScalar(Math.sign(perp.dot(nIn)) || 1);
+      const tri = [];
+      const quad = (ua, ub, y0, y1) => {
+        const A = P.o.clone().addScaledVector(P.d, ua), B = P.o.clone().addScaledVector(P.d, ub);
+        let q = [A.clone().setY(y0), B.clone().setY(y0), B.clone().setY(y1), A.clone().setY(y1)];
+        if (q[1].clone().sub(q[0]).cross(q[3].clone().sub(q[0])).dot(inward) < 0) q = [q[0], q[3], q[2], q[1]];
+        tri.push(q[0], q[1], q[2], q[0], q[2], q[3]);
+        pb.expandByPoint(A); pb.expandByPoint(B);
+      };
+      // полосы: сначала высота каждой (потолок), полосе без своей линии потолка — высота соседней (030_6: 13 мм у угла между
+      // концами потолков 2610 и 2689 — стены там не было, белая полоса на всю высоту)
+      const cells = [];
+      for (let k = 0; k + 1 < us.length; k++) {
+        const ua = us[k], ub = us[k + 1]; if (ub - ua < 1) continue;
+        const um = (ua + ub) / 2, cov = P.lines.filter(l => l.u0 <= um + 1 && l.u1 >= um - 1);
+        const hl = cov.filter(l => !l.floor && l.y > fy + 20).sort((a, b) => a.y - b.y);
+        const hs = []; for (const l of hl) if (!hs.length || l.y - hs[hs.length - 1].y > 5) hs.push(l);
+        let top = hs.length ? hs[hs.length - 1].y : null;
+        if (top !== null) {
+          const clean = hs.filter(l => l.kind === 'black' && l.y > top - 250 && l.y < top - 5);   // чистовой потолок под черновым
+          if (hs[hs.length - 1].kind === 'red' && clean.length) top = clean[clean.length - 1].y;
+        }
+        cells.push({ ua, ub, onFloor: cov.some(l => l.floor), hs, top });
+      }
+      cells.forEach((c, k) => {
+        if (c.top !== null) return;
+        const L = cells.slice(0, k).reverse().find(x => x.top !== null), R = cells.slice(k + 1).find(x => x.top !== null);
+        c.top = Math.max(L ? L.top : -1e9, R ? R.top : -1e9); if (c.top < -1e8) c.top = null;
+      });
+      for (const c of cells) {
+        if (c.top === null) continue;
+        // проёмы — только по чёрным линиям: красная коробочка коммуникаций под окном (030_6, 72…116 мм) давала «проём» вместо окна
+        const { ua, ub, top } = c, mids = c.hs.filter(l => l.y < top - 5 && l.kind === 'black');
+        // окно — только настоящая рамка: низ и верх соединены хотя бы одной вертикалью в плоскости стены (Алексей 30.10)
+        const framed = mids.length >= 2 && P.verts.some(v => v.y0 <= mids[0].y + 30 && v.y1 >= mids[1].y - 30 &&
+          v.u >= Math.min(mids[0].u0, mids[1].u0) - 30 && v.u <= Math.max(mids[0].u1, mids[1].u1) + 30);
+        if (c.onFloor) {
+          if (framed) { quad(ua, ub, fy, mids[0].y); quad(ua, ub, mids[1].y, top); P.wins.push({ ua, ub, y0: mids[0].y, y1: mids[1].y }); }   // окно
+          else quad(ua, ub, fy, top);
+        } else if (mids.length) quad(ua, ub, mids[0].y, top);                                     // над проёмом двери
+        if (top > cyAll || !gotTop) { cyAll = gotTop ? Math.max(cyAll, top) : top; gotTop = true; }
+      }
+      if (!tri.length) continue;
+      const g = new THREE.BufferGeometry().setFromPoints(tri); g.computeVertexNormals();
+      const m = new THREE.Mesh(g, ROOM_MAT.wall); m.renderOrder = -1; grp.add(m);
+      ROOM.surfs.push({ m, kind: 'wall', n: inward.clone().normalize(), p: P.o.clone().setY(fy), g: grp });
+      // откосы окна (Алексей 30.10: «откосы тоже создают свою плоскость»): глубина — по линиям ниши поперёк стены, начатым у
+      // стены в пределах проёма (030_6: 195 мм до окна); низ, верх и бок, у которого есть такая линия (окно в угол — без бока)
+      const wins = [];
+      for (const w of P.wins.sort((a, b) => a.ua - b.ua)) {
+        const last = wins[wins.length - 1];
+        if (last && Math.abs(last.ub - w.ua) < 2 && Math.abs(last.y0 - w.y0) < 5 && Math.abs(last.y1 - w.y1) < 5) last.ub = w.ub; else wins.push({ ...w });
+      }
+      const out = inward.clone().normalize().negate();
+      for (const w of wins) {
+        const deep = [];
+        for (const s of segs) {
+          const dd = s.B.clone().sub(s.A).setY(0), L = dd.length(); if (L < 30 || Math.abs(dd.normalize().dot(P.d)) > 0.15) continue;
+          const [nA, fA] = offOf(P, s.A) <= offOf(P, s.B) ? [s.A, s.B] : [s.B, s.A]; if (offOf(P, nA) > 40) continue;
+          const u = nA.clone().setY(0).sub(P.o).dot(P.d), y = (nA.y + fA.y) / 2;
+          if (u < w.ua - 40 || u > w.ub + 40 || y < w.y0 - 30 || y > w.y1 + 30) continue;
+          const t = fA.clone().setY(0).sub(P.o).dot(out); if (t > 20) deep.push({ u, t });
+        }
+        if (!deep.length) continue;
+        const D = Math.max(...deep.map(x => x.t));
+        const at = (u, t, y) => P.o.clone().addScaledVector(P.d, u).addScaledVector(out, t).setY(y);
+        const rv = (q, n) => {
+          const gq = new THREE.BufferGeometry().setFromPoints([q[0], q[1], q[2], q[0], q[2], q[3]]); gq.computeVertexNormals();
+          const mq = new THREE.Mesh(gq, ROOM_MAT.reveal); mq.renderOrder = -1; grp.add(mq);
+          ROOM.surfs.push({ m: mq, kind: 'wall', n, p: q[0].clone(), g: grp });
+        };
+        rv([at(w.ua, 0, w.y0), at(w.ub, 0, w.y0), at(w.ub, D, w.y0), at(w.ua, D, w.y0)], new THREE.Vector3(0, 1, 0));    // низ (подоконник)
+        rv([at(w.ua, 0, w.y1), at(w.ub, 0, w.y1), at(w.ub, D, w.y1), at(w.ua, D, w.y1)], new THREE.Vector3(0, -1, 0));   // верх
+        for (const [ue, sgn] of [[w.ua, 1], [w.ub, -1]]) {
+          if (!deep.some(x => Math.abs(x.u - ue) < 40)) continue;                                                       // бок — только с линией
+          rv([at(ue, 0, w.y0), at(ue, D, w.y0), at(ue, D, w.y1), at(ue, 0, w.y1)], P.d.clone().multiplyScalar(sgn));
+        }
+      }
+    }
+    for (const s of floor) { pb.expandByPoint(s.A); pb.expandByPoint(s.B); }
+    // пол — прямоугольник на всю комнату; у краёв, где стены нет, плавно тает (Алексей 30.10: «видно, что пол есть и где
+    // обрывается»); он же мишень «від підлоги». Потолок — невидимая мишень «до стелі»
+    {
+      const x0 = pb.min.x, x1 = pb.max.x, z0 = pb.min.z, z1 = pb.max.z, W = x1 - x0, D = z1 - z0;
+      const walled = side => planes.some(P => {   // вдоль этого края стоит стена
+        const along = side === 'x0' || side === 'x1' ? Math.abs(P.d.z) > 0.99 : Math.abs(P.d.x) > 0.99;
+        if (!along) return false;
+        const c = side === 'x0' ? x0 : side === 'x1' ? x1 : side === 'z0' ? z0 : z1, v = side[0] === 'x' ? P.o.x : P.o.z;
+        return Math.abs(v - c) < 120;
+      });
+      const open = { x0: !walled('x0'), x1: !walled('x1'), z0: !walled('z0'), z1: !walled('z1') };
+      const fx = Math.min(1000, W * 0.35) || 1, fz = Math.min(1000, D * 0.35) || 1, N = 16, pos = [], col = [];
+      const sm = t => { t = Math.max(0, Math.min(1, t)); return t * t * (3 - 2 * t); };
+      const alpha = (x, z) => 0.36 * (open.x0 ? sm((x - x0) / fx) : 1) * (open.x1 ? sm((x1 - x) / fx) : 1) * (open.z0 ? sm((z - z0) / fz) : 1) * (open.z1 ? sm((z1 - z) / fz) : 1);
+      const P = (i, j) => [x0 + W * i / N, z0 + D * j / N];
+      const c3 = new THREE.Color(0xb9c0c8);
+      for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+        const q = [P(i, j), P(i + 1, j), P(i + 1, j + 1), P(i, j + 1)];
+        for (const k of [0, 2, 1, 0, 3, 2]) { pos.push(q[k][0], fy, q[k][1]); col.push(c3.r, c3.g, c3.b, alpha(q[k][0], q[k][1])); }   // лицом вверх
+      }
+      const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(col, 4));
+      const m = new THREE.Mesh(g, ROOM_MAT.floor); m.renderOrder = -2; grp.add(m);
+      ROOM.surfs.push({ m, kind: 'floor', n: new THREE.Vector3(0, 1, 0), p: new THREE.Vector3(x0, fy, z0), g: grp });
+      const q = [[x0, z0], [x1, z0], [x1, z1], [x0, z1]].map(([x, z]) => new THREE.Vector3(x, cyAll, z));
+      const gc = new THREE.BufferGeometry().setFromPoints([q[0], q[1], q[2], q[0], q[2], q[3]]); gc.computeVertexNormals();   // лицом вниз
+      const mc = new THREE.Mesh(gc, ROOM_MAT.pick); grp.add(mc);
+      ROOM.surfs.push({ m: mc, kind: 'ceil', n: new THREE.Vector3(0, -1, 0), p: q[0].clone(), g: grp });
+    }
+    // плитка и стекло — замкнутые четырёхугольники своего цвета
+    for (const [col, kind] of [['yellow', 'tile'], ['blue', 'glass']]) {
+      for (const loop of loops4(segs.filter(s => s.kind === col))) addQuad(loop[0], loop[1], loop[2], loop[3], kind, cen.clone().sub(loop[0]));
+    }
+  }
+  syncRoom();
+}
+// замкнутые четырёхугольники из отрезков (плитка, стекло): 4 отрезка, концы сходятся в пределах 15 мм
+function loops4(segs) {
+  const res = [], used = new Set(), near = (p, q) => p.distanceTo(q) < 15;
+  for (let a = 0; a < segs.length; a++) {
+    if (used.has(a)) continue;
+    const chain = [a], pts = [segs[a].A, segs[a].B];
+    for (let step = 0; step < 3; step++) {
+      const end = pts[pts.length - 1]; let f = -1, rev = false;
+      for (let k = 0; k < segs.length; k++) { if (used.has(k) || chain.includes(k)) continue; if (near(segs[k].A, end)) { f = k; break; } if (near(segs[k].B, end)) { f = k; rev = true; break; } }
+      if (f < 0) break;
+      chain.push(f); pts.push(rev ? segs[f].A : segs[f].B);
+    }
+    if (chain.length === 4 && near(pts[4], pts[0])) { chain.forEach(k => used.add(k)); res.push(pts.slice(0, 4)); }
+  }
+  return res;
+}
+// видимость помещения — вместе с линиями своего слоя (погасили «Слой 0» в структуре — пропали и стены); в кресленні — нет
+function syncRoom() {
+  for (const R of ROOM.groups) R.g.visible = !drawOn && R.lines.some(i => effVisible(parts[i]));
+  need();
+}
+// поверхность помещения под курсором (стена, пол, потолок, плитка, стекло) — только видимая и «лицом» к смотрящему
+const roomRay = new THREE.Raycaster();
+function roomSurfAt(cx, cy) {
+  const ms = ROOM.surfs.filter(s => s.g.visible).map(s => s.m); if (!ms.length) return null;
+  roomRay.setFromCamera(new THREE.Vector2((cx / innerWidth) * 2 - 1, -(cy / innerHeight) * 2 + 1), cam);
+  const h = roomRay.intersectObjects(ms, false)[0]; if (!h) return null;
+  const s = ROOM.surfs.find(q => q.m === h.object);
+  return { s, p: h.point.clone(), n: s.n.clone(), dist: h.distance };
+}
+
 // ---------------- лёгкие размеры (для заказчика) ----------------
 // Способ по умолчанию (ТЗ-дополнение 28.09, раздел 3.2–3.3). Одно касание — один замер, новое гасит прежний.
 //  • кромка панели или фурнитура — размеры этой детали;
@@ -3342,6 +3644,7 @@ function setDraw(on) {
   const st = $('st'); if (on) $('dstat').insertBefore(st, $('dstat').querySelector('.sr')); else $('bar').appendChild(st);
   setTool(null);
   for (const dm of dims) if (dm.g) dm.g.visible = dimsShown && !on;
+  syncRoom();                                               // стены помещения — в кресленні не рисуются
   if (on) { frameName = L('n_front'); renderPanel(); applyLook(); layout(); strictView(0, 0); checkFolders(); }
   else { selDim = null; closeFly(); applyLook(); $('dpanel').replaceChildren(); $('dsvg').replaceChildren(); placeCtx(); layout(); updRuler(); }
   syncTools(); need();
@@ -6581,9 +6884,9 @@ function loop() {
 (window.__MODEL ? Promise.resolve(window.__MODEL)
   : fetch('./model.json?v=' + Date.now(), { cache: 'no-store' }).then(r => { if (!r.ok) throw new Error('файл моделі не знайдено (' + r.status + ')'); return r.json(); }))
   .then(data => {
-    M = data; build(); for (const p of parts) if (p.isF) for (const l of drawEdgesFor(p)) l.visible = true;   // рёбра фурнитуры видны в 3D сразу
+    M = data; build(); try { buildRoom(); } catch (e) { console.warn('помещение не построилось:', e && e.message); } for (const p of parts) if (p.isF) for (const l of drawEdgesFor(p)) l.visible = true;   // рёбра фурнитуры видны в 3D сразу
     wire(); wireLayout(); applyVis(); layout(); fitVisible(); cutHolesSoon();
-    window.__viewer = { parts, animNode, M, dims, addDim, drawerDims, easyPick, easyCell, tubeDims, openTarget, pick, blockersOf, poseAll, toggleAt, scopeIds, boxOf, isTube, toWorld, clearDims, root, partsUnder, dragDim, THREE, snapAt, pointVisible, picks, nodes, NCNT, REP, rootKids, selectPart, toggleOne, shiftPick, stepSel, tapPick, asmChain, hideSel, showAll, upLevel, downLevel, effVisible, selGab, gabShow, gabDims, setRMode, frameNodeFor, setDraw, buildSVG, sheetRect, autoDims, fitSheet, fitView, setTool, toolClick, toolHover, drawUndo, drawRedo, gabCommit, dragDimTo, CUT, wallHover, wallClick, wallAt, roomLineAt, get wall1() { return wall1; }, get wallHov() { return wallHov; }, pdOpen, pdClose, pdPick, pdS, findByNum, goPart, linkOf, get PD() { return PD; }, get drawN() { return drawN; }, get selDim() { return selDim; }, set selDim(v) { selDim = v; }, get drawOn() { return drawOn; }, get ruler() { return ruler; }, get selSet() { return selSet; }, get selMany() { return selMany; }, get selOne() { return selOne; }, get selNode() { return selNode; }, get cam() { return cam; }, get placing() { return placing; }, get rp() { return rp; } };   // для проверки из консоли
+    window.__viewer = { parts, animNode, M, dims, addDim, drawerDims, easyPick, easyCell, tubeDims, openTarget, pick, blockersOf, poseAll, toggleAt, scopeIds, boxOf, isTube, toWorld, clearDims, root, partsUnder, dragDim, THREE, snapAt, pointVisible, picks, nodes, NCNT, REP, rootKids, selectPart, toggleOne, shiftPick, stepSel, tapPick, asmChain, hideSel, showAll, upLevel, downLevel, effVisible, selGab, gabShow, gabDims, setRMode, frameNodeFor, setDraw, buildSVG, sheetRect, autoDims, fitSheet, fitView, setTool, toolClick, toolHover, drawUndo, drawRedo, gabCommit, dragDimTo, CUT, ROOM, roomSurfAt, wallHover, wallClick, wallAt, roomLineAt, get wall1() { return wall1; }, get wallHov() { return wallHov; }, pdOpen, pdClose, pdPick, pdS, findByNum, goPart, linkOf, get PD() { return PD; }, get drawN() { return drawN; }, get selDim() { return selDim; }, set selDim(v) { selDim = v; }, get drawOn() { return drawOn; }, get ruler() { return ruler; }, get selSet() { return selSet; }, get selMany() { return selMany; }, get selOne() { return selOne; }, get selNode() { return selNode; }, get cam() { return cam; }, get placing() { return placing; }, get rp() { return rp; } };   // для проверки из консоли
     $('load').remove(); loop();
   })
   .catch(err => { $('load').textContent = 'Не вдалося відкрити модель: ' + err.message; });
