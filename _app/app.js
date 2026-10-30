@@ -87,6 +87,7 @@ document.body.insertAdjacentHTML('beforeend', `
 <div id="load">завантаження моделі…</div>
 <div id="tree" class="hidden">
   <div class="head">
+    <div class="minfo" id="minfo"></div>
     <div class="row top"><input type="search" id="q" placeholder="пошук за назвою"></div>
     <div class="row">
       <button id="tOnly" title="Сховати все, крім виділеного">тільки це</button>
@@ -2431,6 +2432,10 @@ function wire() {
     b.addEventListener('contextmenu', e => { e.preventDefault(); clearTimeout(t); clearDims(); }); }
   $('bShowAll').onclick = showAll;
   wireHintFade(); wireFind(); wirePd(); wireFull();
+  // какая это модель и когда выгружена — одной строкой вверху структуры (на экране места не занимает; Алексей 30.10)
+  { const t = /^\d{4}-\d\d-\d\d \d\d:\d\d/.test(M.date || '') ? new Date(M.date.replace(' ', 'T') + 'Z') : null;   // выгрузка пишет время по Гринвичу
+    const z = n => String(n).padStart(2, '0');
+    $('minfo').textContent = (M.title || '') + (t && !isNaN(t) ? ' · вигрузка ' + z(t.getDate()) + '.' + z(t.getMonth() + 1) + '.' + t.getFullYear() + ' ' + z(t.getHours()) + ':' + z(t.getMinutes()) : ''); }
   if (DRAW_OK) { $('bDraw').style.display = ''; $('bDraw').onclick = () => setDraw(!drawOn); wireOverlay(); wireDraw(); }
 }
 
@@ -2627,15 +2632,64 @@ function pdBuild() {
     if (ou <= 0.5 || ov <= 0.5 || ou * ov > area * 0.5) return;
     const t = M.objs[j].t, ip = t ? P(t[3], t[7], t[11]) : null;
     if (pdGap((a0 + a1) / 2, (b0 + b1) / 2) > 2 && (!ip || pdGap(ip[0], ip[1]) > 2)) return;
-    PD.hw.push({ x0: a0, x1: a1, y0: b0, y1: b1, back: (e0 + e1) / 2 < (d0 + d1) / 2, ip: ip && ip[0] >= a0 - 1 && ip[0] <= a1 + 1 && ip[1] >= b0 - 1 && ip[1] <= b1 + 1 ? [ip[0], ip[1]] : [(a0 + a1) / 2, (b0 + b1) / 2], exact: !!ip, name: q.n || '' });
+    // фурнитура — своим контуром (рёбра формы на виде), не рамкой (Алексей 30.10: «квадратик — непонятно»);
+    // круги контура (отверстия планки, штырь полкодержателя) — центры для прилипания
+    const sg = [], w = pdHwEdges(j);
+    for (let k = 0; k + 5 < w.length; k += 6) {
+      const A = P(w[k], w[k + 1], w[k + 2]), B = P(w[k + 3], w[k + 4], w[k + 5]);
+      if (Math.hypot(B[0] - A[0], B[1] - A[1]) >= 0.2) sg.push(A[0], A[1], B[0], B[1]);
+    }
+    const circ = pdGroups(sg).map(pdCircle).filter(c => c && c.r <= 30 && pdGap(c.x, c.y) <= c.r + 1);
+    PD.hw.push({ segs: sg, circ, back: (e0 + e1) / 2 < (d0 + d1) / 2, ip: ip && ip[0] >= a0 - 1 && ip[0] <= a1 + 1 && ip[1] >= b0 - 1 && ip[1] <= b1 + 1 ? [ip[0], ip[1]] : null, name: q.n || '' });
   });
-  // цели прилипания: точки (углы, центры, точки установки) и линии (рёбра, оси каналов)
+  // значки крепежа на пласти (конфирмат, шкант, эксцентрик) — центр значка; в старых выгрузках (до 27.10) отверстий в данных
+  // нет, и только по значку конфирмат / шкант можно померить (кухня 038_1, Алексей 30.10)
+  const mk = []; for (const s of PD.segs) if (s.k === 'mk') mk.push(s.a[0], s.a[1], s.b[0], s.b[1]);
+  PD.marks = pdGroups(mk).map(g => { let a0 = 1e9, a1 = -1e9, b0 = 1e9, b1 = -1e9;
+    for (let k = 0; k < g.length; k += 2) { a0 = Math.min(a0, g[k]); a1 = Math.max(a1, g[k]); b0 = Math.min(b0, g[k + 1]); b1 = Math.max(b1, g[k + 1]); }
+    return a1 - a0 <= 30 && b1 - b0 <= 30 ? { x: (a0 + a1) / 2, y: (b0 + b1) / 2, d: Math.max(a1 - a0, b1 - b0) } : null; }).filter(Boolean);
+  // цели прилипания: точки (центры, точки установки, углы) и линии (рёбра, оси каналов)
   const pk = new Set(); PD.pts = []; PD.lines = [];
-  const addP = (x, y, what, pri) => { const key = Math.round(x * 10) + ',' + Math.round(y * 10); if (pk.has(key)) return; pk.add(key); PD.pts.push({ x, y, what, pri }); };
+  const addP = (x, y, what, pri) => { const key = Math.round(x * 5) + ',' + Math.round(y * 5); if (pk.has(key)) return; pk.add(key); PD.pts.push({ x, y, what, pri }); };
   for (const c2 of PD.circs) addP(c2.x, c2.y, 'отвір ⌀' + fmtN(c2.r * 2) + (c2.thr ? ' наскрізь' : '') + (c2.name ? ' · ' + c2.name : ''), 0);
-  for (const h of PD.hw) addP(h.ip[0], h.ip[1], (h.exact ? 'точка встановлення · ' : 'середина · ') + h.name, 0);
+  for (const h of PD.hw) {
+    for (const c2 of h.circ) addP(c2.x, c2.y, 'отвір ⌀' + fmtN(c2.r * 2) + ' · ' + h.name, 0);
+    if (!h.circ.length && h.ip) addP(h.ip[0], h.ip[1], 'точка встановлення · ' + h.name, 0);
+  }
+  for (const m of PD.marks) addP(m.x, m.y, 'центр кріплення (значок)', 0);
   for (const sl of PD.slots) { addP(sl.a[0], sl.a[1], 'отвір у торець ⌀' + fmtN(sl.w) + (sl.name ? ' · ' + sl.name : ''), 0); PD.lines.push({ a: sl.a, b: sl.b, what: 'вісь отвору ⌀' + fmtN(sl.w) }); }
   for (const sg of PD.segs) if (sg.k !== 'mk') { addP(sg.a[0], sg.a[1], 'кут', 1); addP(sg.b[0], sg.b[1], 'кут', 1); PD.lines.push({ a: sg.a, b: sg.b, what: sg.k === 'v' ? 'край' : 'край (з того боку)' }); }
+}
+// рёбра формы фурнитуры в осях проекта (закрытые двери), один раз на деталь
+const pdHwEdgeMemo = new Map();
+function pdHwEdges(j) {
+  if (pdHwEdgeMemo.has(j)) return pdHwEdgeMemo.get(j);
+  const out = [], v = new THREE.Vector3();
+  for (const m of parts[j].meshes) {
+    let g = fEdges.get(m.geometry); if (!g) { g = new THREE.EdgesGeometry(m.geometry, 30); fEdges.set(m.geometry, g); }
+    const a = g.attributes.position.array, mx = m.parent && m.parent !== parts[j].g ? m.parent.matrix : null;
+    for (let k = 0; k + 2 < a.length; k += 3) { v.set(a[k], a[k + 1], a[k + 2]); if (mx) v.applyMatrix4(mx); out.push(v.x, v.y, v.z); }
+  }
+  pdHwEdgeMemo.set(j, out); return out;
+}
+// отрезки [ax,ay,bx,by,…] → связные группы (по общим концам); каждая группа — плоский список точек концов
+function pdGroups(s) {
+  const id = new Map(), par = [], pts = [];
+  const key = (x, y) => { const k = Math.round(x * 20) + ',' + Math.round(y * 20); let n = id.get(k); if (n === undefined) { n = par.length; id.set(k, n); par.push(n); pts.push(x, y); } return n; };
+  const top = n => { while (par[n] !== n) n = par[n] = par[par[n]]; return n; };
+  for (let k = 0; k + 3 < s.length; k += 4) { const a = top(key(s[k], s[k + 1])), b = top(key(s[k + 2], s[k + 3])); if (a !== b) par[a] = b; }
+  const gr = new Map();
+  for (let n = 0; n < par.length; n++) { const r = top(n); if (!gr.has(r)) gr.set(r, []); gr.get(r).push(pts[2 * n], pts[2 * n + 1]); }
+  return [...gr.values()];
+}
+// группа — окружность? (точки на равном расстоянии от середины): центр и радиус
+function pdCircle(g) {
+  const n = g.length / 2; if (n < 6) return null;
+  let cx = 0, cy = 0; for (let k = 0; k < g.length; k += 2) { cx += g[k]; cy += g[k + 1]; } cx /= n; cy /= n;
+  let r0 = 1e9, r1 = 0, rs = 0;
+  for (let k = 0; k < g.length; k += 2) { const r = Math.hypot(g[k] - cx, g[k + 1] - cy); r0 = Math.min(r0, r); r1 = Math.max(r1, r); rs += r; }
+  const r = rs / n;
+  return r >= 0.8 && r1 - r0 <= Math.max(0.3, r * 0.08) ? { x: cx, y: cy, r } : null;
 }
 // расстояние от точки до материала детали на виде (0 — на пласти), по треугольникам ближней пласти
 function pdGap(x, y) {
@@ -2674,10 +2728,14 @@ function pdOpen(i) {
   const w = $('pdw'), p = parts[i], bb = PD.bb;
   w.classList.add('show');
   w.querySelector('.pdn b').textContent = (p.n || '(без назви)') + (p.d ? ' · № ' + p.d : '');
-  w.querySelector('.pdn small').textContent = fmtN(bb.W) + ' × ' + fmtN(bb.H) + ' × ' + fmtN(bb.T);
+  PD.flip = false; pdSub();
   pdHint();
   try { history.pushState({ pd: 1 }, ''); } catch (e) {}   // «назад» на телефоне закрывает чертёж, а не страницу
   pdResize(); pdFit(); pdDraw();
+}
+function pdSub() {   // под названием: размеры детали и с какой стороны смотрим
+  const bb = PD.bb;
+  $('pdw').querySelector('.pdn small').textContent = fmtN(bb.W) + ' × ' + fmtN(bb.H) + ' × ' + fmtN(bb.T) + (PD.flip ? ' · інший бік' : '');
 }
 function pdClose(fromHistory) {
   if (!PD.on) return;
@@ -2714,14 +2772,15 @@ function pdDraw(snap) {
   { const f = PD.fill; g.fillStyle = '#fff'; g.strokeStyle = '#fff'; g.lineWidth = 0.6; g.lineJoin = 'round'; g.beginPath();
     for (let k = 0; k + 5 < f.length; k += 6) { const A = pdS(f[k], f[k + 1]), B = pdS(f[k + 2], f[k + 3]), C = pdS(f[k + 4], f[k + 5]); g.moveTo(A[0], A[1]); g.lineTo(B[0], B[1]); g.lineTo(C[0], C[1]); g.closePath(); }
     g.fill(); g.stroke(); }
-  // фурнитура — бледной рамкой (за деталью — пунктиром), точка установки — крестиком
+  // фурнитура — своим контуром синим (за деталью — пунктиром); без кругов в контуре — крестик точки установки
   for (const h of PD.hw) {
-    const A = pdS(h.x0, h.y1), B = pdS(h.x1, h.y0);
-    g.fillStyle = 'rgba(43,108,176,.08)'; g.fillRect(A[0], A[1], B[0] - A[0], B[1] - A[1]);
-    g.strokeStyle = 'rgba(43,108,176,.55)'; g.lineWidth = 1; g.setLineDash(h.back ? [4, 3] : []);
-    g.strokeRect(A[0], A[1], B[0] - A[0], B[1] - A[1]); g.setLineDash([]);
-    const Q = pdS(h.ip[0], h.ip[1]); g.strokeStyle = '#2b6cb0'; g.lineWidth = 1.3; g.beginPath();
-    g.moveTo(Q[0] - 5, Q[1]); g.lineTo(Q[0] + 5, Q[1]); g.moveTo(Q[0], Q[1] - 5); g.lineTo(Q[0], Q[1] + 5); g.stroke();
+    const s = h.segs; g.strokeStyle = 'rgba(43,108,176,.75)'; g.lineWidth = 0.9; g.setLineDash(h.back ? [4, 3] : []); g.beginPath();
+    for (let k = 0; k + 3 < s.length; k += 4) { const A = pdS(s[k], s[k + 1]), B = pdS(s[k + 2], s[k + 3]); g.moveTo(A[0], A[1]); g.lineTo(B[0], B[1]); }
+    g.stroke(); g.setLineDash([]);
+    for (const c2 of h.circ) { const Q = pdS(c2.x, c2.y), r = c2.r * PD.sc; g.lineWidth = 0.6; g.beginPath();
+      g.moveTo(Q[0] - r - 3, Q[1]); g.lineTo(Q[0] + r + 3, Q[1]); g.moveTo(Q[0], Q[1] - r - 3); g.lineTo(Q[0], Q[1] + r + 3); g.stroke(); }
+    if (!h.circ.length && h.ip) { const Q = pdS(h.ip[0], h.ip[1]); g.strokeStyle = '#2b6cb0'; g.lineWidth = 1.3; g.beginPath();
+      g.moveTo(Q[0] - 5, Q[1]); g.lineTo(Q[0] + 5, Q[1]); g.moveTo(Q[0], Q[1] - 5); g.lineTo(Q[0], Q[1] + 5); g.stroke(); }
   }
   g.lineCap = 'round';
   g.strokeStyle = '#b8c0c8'; g.lineWidth = 0.8; g.beginPath(); for (const s of PD.segs) if (s.k === 'mk') line(s.a, s.b); g.stroke();
@@ -2771,12 +2830,17 @@ function pdDimDraw(g, dm) {
   g.fillStyle = '#16427f'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(t, mx, my + 0.5); g.textAlign = 'left';
 }
 // ближайшая цель у касания: точки важнее линий; на линии — ближайшая точка, сама линия запоминается (размер поперёк края)
+// Углы — только при касании прямо в угол: у края их много, и палец цеплялся за угол вместо края — выходил размер «до точки»
+// по ширине и высоте вместо размера до границы (Алексей 30.10)
 function pdSnap(sx, sy) {
-  const R = TOUCH ? 26 : 14;
+  const R = TOUCH ? 26 : 14, RC = TOUCH ? 10 : 6;
   let best = null, bd = R;
-  for (const q of PD.pts) { const Q = pdS(q.x, q.y), d = Math.hypot(Q[0] - sx, Q[1] - sy) - (q.pri ? 0 : 4); if (d < bd) { bd = d; best = { x: q.x, y: q.y, what: q.what }; } }
+  for (const q of PD.pts) { if (q.pri) continue; const Q = pdS(q.x, q.y), d = Math.hypot(Q[0] - sx, Q[1] - sy); if (d < bd) { bd = d; best = { x: q.x, y: q.y, what: q.what }; } }
   if (best) return best;
-  bd = R * 0.7;
+  bd = RC;
+  for (const q of PD.pts) { if (!q.pri) continue; const Q = pdS(q.x, q.y), d = Math.hypot(Q[0] - sx, Q[1] - sy); if (d < bd) { bd = d; best = { x: q.x, y: q.y, what: q.what }; } }
+  if (best) return best;
+  bd = R;
   for (const l of PD.lines) {
     const A = pdS(l.a[0], l.a[1]), B = pdS(l.b[0], l.b[1]), dx = B[0] - A[0], dy = B[1] - A[1], L2 = dx * dx + dy * dy || 1;
     const t = Math.max(0, Math.min(1, ((sx - A[0]) * dx + (sy - A[1]) * dy) / L2)), px = A[0] + t * dx, py = A[1] + t * dy, d = Math.hypot(px - sx, py - sy);
@@ -2812,12 +2876,13 @@ function pdPick(sx, sy) {
 function wirePd() {
   const w = $('pdw'), cv2 = pdC();
   $('pdX').innerHTML = ICON.x; $('pdX').title = 'закрити креслення';
-  $('pdFlip').innerHTML = ICON.flip; $('pdFlip').title = 'перевернути деталь';
+  // словами, не значком симметрии (Алексей 30.10: «интуитивно непонятно»)
+  $('pdFlip').innerHTML = ICON.flip + '<span>інший бік</span>'; $('pdFlip').title = 'подивитися деталь з іншого боку'; $('pdFlip').classList.add('txt');
   $('pdClr').innerHTML = ICON.trash; $('pdClr').title = 'стерти розміри';
   $('pdX').onclick = () => pdClose(false);
   $('pdClr').onclick = () => { PD.dims = []; PD.first = null; pdHint(); pdDraw(); };
   // перевернули — размеры в осях той стороны больше не годятся
-  $('pdFlip').onclick = () => { PD.side = -PD.side; PD.dims = []; PD.first = null; pdBuild(); pdFit(); pdHint(); pdDraw(); };
+  $('pdFlip').onclick = () => { PD.side = -PD.side; PD.flip = !PD.flip; PD.dims = []; PD.first = null; pdBuild(); pdFit(); pdSub(); pdHint(); pdDraw(); };
   addEventListener('popstate', () => { if (PD.on) pdClose(true); });
   addEventListener('resize', () => { if (!PD.on) return; pdResize(); pdFit(); pdDraw(); });
   addEventListener('keydown', e => { if (!PD.on) return; e.stopImmediatePropagation(); if (e.key === 'Escape') pdClose(false); }, true);   // модель под чертежом клавиш не слышит
