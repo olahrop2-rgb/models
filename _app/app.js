@@ -1294,12 +1294,13 @@ function edgeClick(e, mouse) {
 // стен в модели нет — есть только линии помещения («Слой 0»: зелёная линия пола, чёрные рёбра стен). Указал
 // плоскость детали и линию помещения, в любом порядке, — размер поперёк плоскости до этой линии. Годятся только пары
 // «плоскость примерно параллельна линии»: низ полки — к линии пола (высота), бок полки — к ребру стены или к линии
-// пола вдоль стены (до стены). Указана плоскость — подсвечены все подходящие к ней линии; указана линия — под курсором
-// подсвечиваются только подходящие плоскости. Линия к плоскости наискосок (стена завалена) — размер до середины
-// линии, то есть средний; погрешность до 10 мм Алексея устраивает.
+// пола вдоль стены (до стены). Подсвечивается только указанное (30.10, Алексей: «зачем все линии стен?»); второе под
+// пальцем / курсором — зелёным, если до него можно мерить, красным, если нет (касание по красному размер не ставит).
+// Линия к плоскости наискосок (стена завалена) — размер до середины линии, то есть средний; погрешность до 10 мм
+// Алексея устраивает.
 const WPAR = Math.sin(THREE.MathUtils.degToRad(10));    // «примерно параллельно» — до 10°
 let wall1 = null, wallHov = null;
-const wallHints = [];
+const WOK = 0x1f9d3a, WBAD = 0xe0301e;
 const lineFits = (e, f) => Math.abs(e.dir.dot(f.n)) < WPAR;
 // линия помещения под курсором (fit — только подходящие); видимая — в первую очередь, но линия пола под шкафом
 // тоже берётся: за неё и меряют
@@ -1333,46 +1334,47 @@ function roomLineAt(cx, cy, fit) {
   for (const k of cand.slice(0, 20)) if (pointVisible(k.p)) return k;
   return cand[0];
 }
-// что под курсором: после плоскости — только подходящая линия (мимо — другая плоскость, ею заменить первую);
-// после линии — только плоскость; в начале — линия, если рядом, иначе плоскость
+// что под курсором: после плоскости — линия (любая: неподходящая горит красным), мимо линий — другая плоскость, ею
+// заменить первую; после линии — только плоскость; в начале — линия, если рядом, иначе плоскость
 function wallAt(cx, cy) {
   if (wall1 && wall1.e) { const f = faceAt(cx, cy); return f ? { f } : null; }
-  const e = roomLineAt(cx, cy, wall1 ? (q => lineFits(q, wall1.f)) : null); if (e) return { e };
+  const e = roomLineAt(cx, cy, null); if (e) return { e };
   const f = faceAt(cx, cy); return f ? { f } : null;
 }
 const sameWall = (p, q) => !!p && !!q && (p.f ? !!q.f && sameFace(p.f, q.f) : !!q.e && sameEdge(p.e, q.e));
 function wallHL(w, color) { if (w.f) faceHL(w.f, color, 0.35); else edgeHL(w.e, color); }
 function wallDrop(w) { if (!w) return; if (w.f) dropHL(w.f); else dropEdge(w.e); }
+// пара с первым указанием: годится (зелёный) / нет (красный); без первого — просто синим
+const wallFits = w => !wall1 || (wall1.f && w.f) || lineFits(wall1.e || w.e, wall1.f || w.f);
 function wallHover(cx, cy) {
   const w = wallAt(cx, cy);
-  const ok = !!w && !sameWall(w, wall1) && !(wall1 && wall1.e && !lineFits(wall1.e, w.f));
-  if (wallHov && !(ok && sameWall(wallHov, w))) { wallDrop(wallHov); wallHov = null; }
-  if (ok && !wallHov) { wallHov = w; wallHL(w, 0x2b6cb0); }
+  const ok = !!w && !sameWall(w, wall1);
+  const col = !ok ? 0 : !wall1 || (wall1.f && w.f) ? 0x2b6cb0 : wallFits(w) ? WOK : WBAD;
+  if (wallHov && !(ok && sameWall(wallHov, w) && wallHov.col === col)) { wallDrop(wallHov); wallHov = null; }
+  if (ok && !wallHov) { wallHov = w; w.col = col; wallHL(w, col); }
   return w;
 }
 function wallHoverEnd() { wallDrop(wallHov); wallHov = null; }
-function dropWallHints() { while (wallHints.length) dropEdge(wallHints.pop()); }
-function clearWall1() { wallDrop(wall1); wall1 = null; dropWallHints(); showPending(); }
-// все линии помещения, до которых можно мерить от этой плоскости — бледной подсветкой
-function showWallHints(f) {
-  dropWallHints();
+function clearWall1() { wallDrop(wall1); wall1 = null; showPending(); }
+// есть ли вообще линия помещения, до которой можно мерить от этой плоскости (подсвечивать их не надо — только проверить)
+function wallLinesFor(f) {
   const A = new THREE.Vector3(), B = new THREE.Vector3();
   for (const pr of parts) {
     if (!pr.isL || !pr.g.visible) continue;
     for (const ln of pr.g.children) {
       if (!ln.isLineSegments) continue;
       const pos = ln.geometry.attributes.position, mw = ln.matrixWorld;
-      for (let i = 0; i + 1 < pos.count && wallHints.length < 400; i += 2) {
+      for (let i = 0; i + 1 < pos.count; i += 2) {
         A.fromBufferAttribute(pos, i).applyMatrix4(mw); B.fromBufferAttribute(pos, i + 1).applyMatrix4(mw);
         if (A.distanceTo(B) < 1) continue;
-        const e = { a: A.clone(), b: B.clone(), dir: B.clone().sub(A).normalize() };
-        if (!lineFits(e, f)) continue;
-        edgeHL(e, 0x8fb8e8); wallHints.push(e);
+        if (lineFits({ dir: B.clone().sub(A).normalize() }, f)) return true;
       }
     }
   }
-  return wallHints.length;
+  return false;
 }
+// неподходящее второе указание — мигнуть им красным
+function wallFlashBad(w) { wallHL(w, WBAD); setTimeout(() => wallDrop(w), 900); }
 const WHINT = 'до стін: вкажіть площину деталі, потім лінію підлоги або межі приміщення (порядок будь-який)';
 function wallClick(w, mouse) {
   if (!w) { if (wall1) { clearWall1(); $('st').textContent = WHINT; } return; }
@@ -1380,13 +1382,13 @@ function wallClick(w, mouse) {
   if (!wall1 || (wall1.f && w.f)) {                       // первое указание (или другая плоскость вместо первой)
     clearWall1(); wall1 = w; wallHL(w, DIMC); showPending();
     if (w.f) {
-      if (!showWallHints(w.f)) { toast('до цієї площини немає паралельної лінії приміщення — вкажіть іншу площину'); clearWall1(); $('st').textContent = WHINT; return; }
-      $('st').textContent = 'до стін: вкажіть підсвічену лінію підлоги або межі (порожнє місце — скинути)';
-    } else $('st').textContent = 'до стін: вкажіть площину деталі, паралельну лінії (порожнє місце — скинути)';
+      if (!wallLinesFor(w.f)) { toast('до цієї площини немає паралельної лінії приміщення — вкажіть іншу площину'); clearWall1(); $('st').textContent = WHINT; return; }
+      $('st').textContent = 'до стін: вкажіть лінію підлоги або межі — зелена підходить, червона ні (порожнє місце — скинути)';
+    } else $('st').textContent = 'до стін: вкажіть площину деталі — зелена підходить, червона ні (порожнє місце — скинути)';
     return;
   }
   const f = wall1.f || w.f, e = wall1.e || w.e;
-  if (!lineFits(e, f)) { toast('площина не паралельна лінії — вкажіть спочатку площину деталі, потім лінію підлоги або межі'); return; }
+  if (!lineFits(e, f)) { if (w !== wallHov) wallFlashBad(w); toast('ця лінія не паралельна площині — розміру до неї немає, виберіть зелену'); return; }
   // поперёк плоскости до середины линии; размер — от точки, где указана плоскость
   const n = f.n.clone(), mid = e.a.clone().add(e.b).multiplyScalar(0.5), d = mid.sub(f.p).dot(n);
   clearWall1(); $('st').textContent = WHINT;
@@ -6308,7 +6310,7 @@ function loop() {
   .then(data => {
     M = data; build(); for (const p of parts) if (p.isF) for (const l of drawEdgesFor(p)) l.visible = true;   // рёбра фурнитуры видны в 3D сразу
     wire(); wireLayout(); applyVis(); layout(); fitVisible();
-    window.__viewer = { parts, animNode, M, dims, addDim, drawerDims, easyPick, easyCell, tubeDims, openTarget, pick, blockersOf, poseAll, toggleAt, scopeIds, boxOf, isTube, toWorld, clearDims, root, partsUnder, dragDim, THREE, snapAt, pointVisible, picks, nodes, NCNT, REP, rootKids, selectPart, toggleOne, shiftPick, stepSel, tapPick, asmChain, hideSel, showAll, upLevel, downLevel, effVisible, selGab, gabShow, gabDims, setRMode, frameNodeFor, setDraw, buildSVG, sheetRect, autoDims, fitSheet, fitView, setTool, toolClick, toolHover, drawUndo, drawRedo, gabCommit, dragDimTo, pdOpen, pdClose, pdPick, pdS, findByNum, goPart, linkOf, get PD() { return PD; }, get drawN() { return drawN; }, get selDim() { return selDim; }, set selDim(v) { selDim = v; }, get drawOn() { return drawOn; }, get ruler() { return ruler; }, get selSet() { return selSet; }, get selMany() { return selMany; }, get selOne() { return selOne; }, get selNode() { return selNode; }, get cam() { return cam; }, get placing() { return placing; }, get rp() { return rp; } };   // для проверки из консоли
+    window.__viewer = { parts, animNode, M, dims, addDim, drawerDims, easyPick, easyCell, tubeDims, openTarget, pick, blockersOf, poseAll, toggleAt, scopeIds, boxOf, isTube, toWorld, clearDims, root, partsUnder, dragDim, THREE, snapAt, pointVisible, picks, nodes, NCNT, REP, rootKids, selectPart, toggleOne, shiftPick, stepSel, tapPick, asmChain, hideSel, showAll, upLevel, downLevel, effVisible, selGab, gabShow, gabDims, setRMode, frameNodeFor, setDraw, buildSVG, sheetRect, autoDims, fitSheet, fitView, setTool, toolClick, toolHover, drawUndo, drawRedo, gabCommit, dragDimTo, wallHover, wallClick, wallAt, roomLineAt, get wall1() { return wall1; }, get wallHov() { return wallHov; }, pdOpen, pdClose, pdPick, pdS, findByNum, goPart, linkOf, get PD() { return PD; }, get drawN() { return drawN; }, get selDim() { return selDim; }, set selDim(v) { selDim = v; }, get drawOn() { return drawOn; }, get ruler() { return ruler; }, get selSet() { return selSet; }, get selMany() { return selMany; }, get selOne() { return selOne; }, get selNode() { return selNode; }, get cam() { return cam; }, get placing() { return placing; }, get rp() { return rp; } };   // для проверки из консоли
     $('load').remove(); loop();
   })
   .catch(err => { $('load').textContent = 'Не вдалося відкрити модель: ' + err.message; });
