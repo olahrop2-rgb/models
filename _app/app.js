@@ -2796,6 +2796,29 @@ function segIn(A, E, b, s) {
   }
   return (t1 - t0) * A.distanceTo(E);
 }
+// отверстие правда задевает материал детали: ось A→E подходит к её поверхности ближе радиуса. Одного габарита мало —
+// гнутый лист / уголок огибает соседнюю деталь, и её крепёж попадает в габарит листа, не касаясь его (03.11, ресепшн
+// 001_R1: шпилька эксцентрика в фальш-панели «записывалась» на гнутую нержавейку, вырез ломал лист — проступал антрацит)
+const _tri = new THREE.Triangle(), _tb = new THREE.Box3(), _q = new THREE.Vector3(), _c = new THREE.Vector3();
+function holeTouches(p, A, E, R) {
+  const L = A.distanceTo(E), n = Math.max(1, Math.ceil(L / Math.min(1, R / 2))), lim = R + 0.5;
+  _tb.setFromPoints([A, E]).expandByScalar(lim);
+  for (const m of p.meshes) {
+    if (m.userData.mark) continue;
+    const pos = m.geometry.attributes.position;
+    for (let i = 0; i + 2 < pos.count; i += 3) {
+      _tri.a.fromBufferAttribute(pos, i); _tri.b.fromBufferAttribute(pos, i + 1); _tri.c.fromBufferAttribute(pos, i + 2);
+      const lo = [Math.min(_tri.a.x, _tri.b.x, _tri.c.x), Math.min(_tri.a.y, _tri.b.y, _tri.c.y), Math.min(_tri.a.z, _tri.b.z, _tri.c.z)];
+      const hi = [Math.max(_tri.a.x, _tri.b.x, _tri.c.x), Math.max(_tri.a.y, _tri.b.y, _tri.c.y), Math.max(_tri.a.z, _tri.b.z, _tri.c.z)];
+      if (lo[0] > _tb.max.x || hi[0] < _tb.min.x || lo[1] > _tb.max.y || hi[1] < _tb.min.y || lo[2] > _tb.max.z || hi[2] < _tb.min.z) continue;
+      for (let s = 0; s <= n; s++) {
+        _q.lerpVectors(A, E, s / n); _tri.closestPointToPoint(_q, _c);
+        if (_c.distanceTo(_q) <= lim) return true;
+      }
+    }
+  }
+  return false;
+}
 // контур отверстия (выгрузка) → замкнутые обходы точек в осях контура
 function contourLoops(c) {
   const segs = [];
@@ -2910,7 +2933,7 @@ async function cutHolesSoon() {
     const tb = new THREE.Box3().setFromPoints([A, E]).expandByScalar(R);
     // деталь — только та, в тело которой отверстие уходит (ось внутри габарита, ужатого на 0,2 мм, длиной больше 0,3 мм);
     // касание торцом (шкант соседней перегородки у края полки) — мимо
-    boxes.forEach((b, i) => { if (b && b.intersectsBox(tb) && segIn(A, E, b, 0.2) > 0.3) { if (!jobs.has(i)) jobs.set(i, []); jobs.get(i).push(hk); } });
+    boxes.forEach((b, i) => { if (b && b.intersectsBox(tb) && segIn(A, E, b, 0.2) > 0.3 && holeTouches(parts[i], A, E, R)) { if (!jobs.has(i)) jobs.set(i, []); jobs.get(i).push(hk); } });
   });
   const list = [...jobs]; CUT.all = list.length; let k = 0;
   const step = () => {
