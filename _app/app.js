@@ -189,6 +189,9 @@ function texture(ti, mt) {
   if (!texCache[name]) {
     const tx = new THREE.TextureLoader().load((window.__TEX && window.__TEX[name]) || '../_tex/' + name, need);
     tx.colorSpace = THREE.SRGBColorSpace; tx.wrapS = tx.wrapT = THREE.RepeatWrapping;
+    // Базис отдаёт координаты картинки сверху вниз (у OBJ-моделей v от 0 до −1) — картинку не переворачивать,
+    // иначе развёртка-«выкройка» ложится вверх ногами (розетка Lumine GALAXY, St5, 04.11); на досках разницы не видно
+    tx.flipY = false;
     // uvs=1: выгрузка уже перевела координаты в доли картинки (с учётом шага и фурнитуры в долях)
     if (!M.uvs) tx.repeat.set(1 / (mt.sx || 1000), 1 / (mt.sy || 1000));
     // «угол» из карточки не применяем: у кромок он 90, а картинка у Базиса и так лежит вдоль (прогон 26.09)
