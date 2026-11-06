@@ -3289,7 +3289,8 @@ function ledFacing(s) {
   if (near(1) < near(-1)) s.n.negate();
   // стенка сбоку от ленты: ровная лента (COB, неон) светит как от широкого рассеивателя — источник дальше от стенки, бусинок нет
   s.off = new THREE.Vector3();
-  if (s.cob) {
+  s.wide = s.cob || TOUCH;   // на телефоне любая лента ровной полосой: Алексей 06.11 — точки на малом экране не нравятся
+  if (s.wide) {
     const side = s.n.clone().cross(s.dir).normalize(), sideHit = sg => {
       d.copy(side).multiplyScalar(sg).transformDirection(s.p.g.matrixWorld); o.copy(s.ctr).addScaledVector(s.n, 12); s.p.g.localToWorld(o);
       rc.set(o, d); rc.near = 0; rc.far = 80; const h = rc.intersectObjects(others, false)[0]; return h ? h.distance : 1e9;
@@ -3437,7 +3438,7 @@ function ledApply() {
   need();
 }
 const LED_WHITE = new THREE.Color(0xffffff), LED_BLACK = new THREE.Color(0), LED_NIGHT = new THREE.Color(0x0d0e11);
-const LED_FRAMES = TOUCH ? 48 : 192, LED_SHOW = TOUCH ? 24 : 64, LED_BUDGET = TOUCH ? 10 : 12, ledFrames = () => LED.strips.some(s => s.cob) ? LED_FRAMES * 2 : LED_FRAMES;
+const LED_FRAMES = TOUCH ? 96 : 192, LED_SHOW = TOUCH ? 48 : 64, LED_BUDGET = TOUCH ? 10 : 12, ledFrames = () => LED.strips.some(s => s.wide) ? LED_FRAMES * 2 : LED_FRAMES;
 function ledEmit() {
   for (const s of LED.strips) for (const m of s.p.meshes.concat(s.lens || [])) { m.material.emissive.copy(LED.on ? s.col : LED_BLACK); m.material.emissiveIntensity = LED.on ? 1.2 + LED.k * 1.6 : 0; }
 }
@@ -3449,7 +3450,7 @@ function ledPlace(j, rgb) {
   LED.spots.forEach(sp => {
     const mine = sp.s.rgb === rgb; sp.l.intensity = mine ? LED.base : 0; if (!mine) return;
     sp.l.color.copy(rgb ? LED_WHITE : sp.s.col);
-    const g = (j * 0.61803398875 + sp.i * 0.37 + (sp.s.cob ? Math.random() * 0.004 : 0)) % 1, q = (sp.i + g) / sp.cnt, at = sp.s.ctr.clone().addScaledVector(sp.s.dir, sp.s.lo + sp.s.len * (q % 1)).addScaledVector(sp.s.n, sp.s.out + (sp.s.cob ? 30 : 0)).add(sp.s.off || new THREE.Vector3());
+    const g = (j * 0.61803398875 + sp.i * 0.37 + (sp.s.wide ? Math.random() * 0.004 : 0)) % 1, q = (sp.i + g) / sp.cnt, at = sp.s.ctr.clone().addScaledVector(sp.s.dir, sp.s.lo + sp.s.len * (q % 1)).addScaledVector(sp.s.n, sp.s.out + (sp.s.wide ? 30 : 0)).add(sp.s.off || new THREE.Vector3());
     sp.l.position.copy(at); sp.l.target.position.copy(at).add(sp.s.n);
     if (sp.s.off && sp.s.off.lengthSq() > 0) sp.l.target.position.addScaledVector(sp.s.off.clone().normalize(), -0.8);   // отодвинутый источник — лицом к стенке, иначе под профилем тёмная полоса
     sp.l.target.updateMatrixWorld();
