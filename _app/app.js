@@ -30,6 +30,7 @@ if (TOUCH) document.documentElement.classList.add('touch');
 const sv = b => `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${b}</svg>`;
 const CT = '12,3 20,7.5 12,12 4,7.5', CF = '4,7.5 12,12 12,21 4,16.5', CR = '12,12 20,7.5 20,16.5 12,21';
 const ICON = {
+  led: sv('<path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.8 10.6c.7.6 1.1 1.4 1.3 2.4h5c.2-1 .6-1.8 1.3-2.4A6 6 0 0 0 12 3z"/>'),
   // структура — как у веб-просмотра Базиса: точки со строками (замечание 29.09)
   tree: sv('<circle cx="4.5" cy="7" r="1.4" fill="currentColor"/><circle cx="4.5" cy="12" r="1.4" fill="currentColor"/><circle cx="4.5" cy="17" r="1.4" fill="currentColor"/><path d="M9 7h11M9 12h11M9 17h11"/>'),
   v3: sv(`<polygon points="${CT}" fill="currentColor" fill-opacity=".15"/><polygon points="${CF}" fill="currentColor" fill-opacity=".4"/><polygon points="${CR}" fill="currentColor" fill-opacity=".25"/>`),
@@ -73,6 +74,7 @@ const BTN_ICON = {
   bMode: ['solid', 'вигляд: суцільно / напівпрозоро / лінії'],
   bCam: ['persp', 'камера: перспектива / без перспективи / вписати'],
   bFac: ['fac', 'сховати фасади / показати фасади'],
+  bLed: ['led', 'підсвітка: вечірнє світло'],
   bRuler: ['ruler', 'рулетка'], bUndo: ['undo', 'скасувати точку (Esc, права кнопка)'],
   bDims: ['dims', 'розміри: коротко — сховати/показати, довго — видалити всі'],
   bDraw: ['sheet', 'креслення: кадри для звіту'],
@@ -119,6 +121,7 @@ document.body.insertAdjacentHTML('beforeend', `
   <button id="bMode">вигляд</button><button id="bCam">камера</button><button id="bFac" style="display:none">фасади</button>
   <button id="bRuler">рулетка</button><button id="bUndo" style="display:none" title="Прибрати поставлену першу точку (Esc, права кнопка)">скасувати точку</button><button id="bDims" style="display:none" title="Коротко — сховати/показати, довго — видалити всі">розміри</button>
   <button id="bFind">пошук</button>
+  <button id="bLed" style="display:none">світло</button><input id="ledK" type="range" min="10" max="100" value="60" style="display:none;width:110px" title="яскравість підсвітки">
   <button id="bDraw" style="display:none">креслення</button>
   <span id="st"></span>
 </div>
@@ -131,7 +134,8 @@ $('stamp').textContent = 'програвач від ' + APP_DATE;
 // ---------------- сцена ----------------
 const scene = new THREE.Scene();
 const root = new THREE.Group(); scene.add(root);
-scene.add(new THREE.AmbientLight(0xffffff, 1.9));
+const amb = new THREE.AmbientLight(0xffffff, 1.9); scene.add(amb);
+const LED = { on: false, strips: [], lights: [], spots: [], k: 0.6, ready: false };   // подсветка LED-лент (см. ниже)
 const d1 = new THREE.DirectionalLight(0xffffff, 1.5); d1.position.set(1, 2, 1.2); scene.add(d1);
 const d2 = new THREE.DirectionalLight(0xffffff, 0.6); d2.position.set(-1, -0.6, -1); scene.add(d2);
 
@@ -585,6 +589,7 @@ function screwMatrix(n) {
   return new THREE.Matrix4().compose(p, q, ONE);
 }
 function poseAll() {
+  if (LED.on && !TOUCH) rend.shadowMap.needsUpdate = true;   // открыли дверь / ящик — тени пересчитать
   for (const pr of moving) {
     const m = new THREE.Matrix4();
     for (const id of pr.chainA) m.multiply(screwMatrix(animNode[id]));   // внешнее слева, внутреннее справа
@@ -1006,6 +1011,7 @@ function paint() {
     for (const m of p.meshes) {
       if (drawOn && m.userData.mat) { if (!m.userData.glass) m.material = on.has(i) ? DRAW_SEL : DRAW_MAT; continue; }
       if (i === findHi) continue;                          // найденная поиском — свой сплошной цвет (findLook)
+      if (m.userData.led && LED.on) continue;              // горящая лента — своим светом
       m.material.emissive.setHex(on.has(i) ? 0x2b6cb0 : 0x000000);
       m.material.emissiveIntensity = on.has(i) ? 0.45 : 0;
     }
@@ -2981,7 +2987,7 @@ function wire() {
     b.addEventListener('pointerleave', () => clearTimeout(t));
     b.addEventListener('contextmenu', e => { e.preventDefault(); clearTimeout(t); clearDims(); }); }
   $('bShowAll').onclick = showAll;
-  wireHintFade(); wireFind(); wirePd(); wireFull();
+  wireHintFade(); wireFind(); wirePd(); wireFull(); wireLed();
   // какая это модель и когда выгружена — одной строкой вверху структуры (на экране места не занимает; Алексей 30.10)
   { const t = /^\d{4}-\d\d-\d\d \d\d:\d\d/.test(M.date || '') ? new Date(M.date.replace(' ', 'T') + 'Z') : null;   // выгрузка пишет время по Гринвичу
     const z = n => String(n).padStart(2, '0');
@@ -3222,6 +3228,219 @@ function cutPart(i, hks, hcont, Brush, ev, SUBTRACTION, ADDITION) {
 // ---------------- на весь экран (30.10) ----------------
 // Телефон лёжа: строка адреса и вкладки браузера съедают полэкрана (скрин Алексея). Android-браузер умеет их убрать —
 // кнопка в строке значков; айфон (Safari) не умеет — кнопки нет, в «Як дивитися» строка про «на экран Додому».
+// ---------------- подсветка LED (06.11) ----------------
+// Лента в модели — блок с типом «Led лента» (тот же признак, что у расчёта блока питания). Кнопка-лампочка: общий свет гаснет до
+// вечернего, лента горит. Компьютер: источники вдоль ленты с настоящими тенями (деталь затеняет деталь), тени считаются один раз
+// и при открывании дверей, крутить камеру не тормозит. Телефон: только свечение ленты с ореолом, без расчёта света.
+const LED_MAX = 4;
+// цвет и вид — из материала ленты (база Алексея: «…теплый свет, 3000К», «COB…», «Neon…», «…RGB…»), в Базисе отдельно не задаётся
+function kelvinColor(K) {
+  const k = K / 100, r = k <= 66 ? 255 : 329.7 * Math.pow(k - 60, -0.1332), g = k <= 66 ? 99.47 * Math.log(k) - 161.1 : 288.1 * Math.pow(k - 60, -0.0755), b = k >= 66 ? 255 : k <= 19 ? 0 : 138.5 * Math.log(k - 10) - 305;
+  const c = v => Math.max(0, Math.min(255, v)) / 255; return new THREE.Color().setRGB(c(r), c(g), c(b), THREE.SRGBColorSpace);
+}
+function ledKind(name) {
+  const K = /(\d{4})\s*(?:-\s*\d{4}\s*)?[kк]/i.exec(name);
+  return { cob: /\bcob\b|neon/i.test(name), rgb: /rgb/i.test(name), col: kelvinColor(K ? +K[1] : 4000) };
+}
+function ledFind() {
+  const ids = new Set(Object.keys(M.nft || {}).filter(k => /led\s*лент/i.test(String(M.nft[k]))).map(Number)), out = [];
+  if (!ids.size) return out;
+  for (const p of parts) {
+    if (!p.h.some(id => ids.has(id)) || !p.meshes.length) continue;
+    const pos = p.meshes[0].geometry.attributes.position;
+    let best = 0, n = null, dir = null, top = 0;
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), e1 = new THREE.Vector3(), e2 = new THREE.Vector3(), nr = new THREE.Vector3();
+    for (let i = 0; i + 2 < pos.count; i += 3) {
+      a.fromBufferAttribute(pos, i); b.fromBufferAttribute(pos, i + 1); c.fromBufferAttribute(pos, i + 2);
+      nr.crossVectors(e1.subVectors(b, a), e2.subVectors(c, a)); const s = nr.length();
+      if (s > best) { best = s; n = nr.clone().normalize(); }
+      for (const [P, Q] of [[a, b], [b, c], [c, a]]) { const l = P.distanceTo(Q); if (l > top) { top = l; dir = Q.clone().sub(P).normalize(); } }
+    }
+    if (!n || !dir) continue;
+    const box = rawBox(p), ctr = box.getCenter(new THREE.Vector3()); let lo = 1e9, hi = -1e9;
+    for (let i = 0; i < pos.count; i++) { const s = a.fromBufferAttribute(pos, i).sub(ctr).dot(dir); lo = Math.min(lo, s); hi = Math.max(hi, s); }
+    // светильник — соседи ленты по её сборке (профиль, линза): тени не бросают, линза светится
+    const up = p.h[p.h.findIndex(id => ids.has(id)) + 1], fix = up === undefined ? [] : parts.filter(q => q !== p && q.h.includes(up));
+    const nm = M.mnames && M.objs[p.i].mn !== undefined ? String(M.mnames[M.objs[p.i].mn]) : '';
+    out.push({ p, ctr, n, dir, lo, hi, len: hi - lo, fix: fix.length <= 6 ? fix : [], name: nm, ...ledKind(nm) });
+  }
+  return out;
+}
+// куда светит: ленту (профиль) клеят на деталь — с той стороны рядом деталь, свет в обратную; свой светильник не в счёт
+function ledFacing(s) {
+  const rc = new THREE.Raycaster(), o = new THREE.Vector3(), d = new THREE.Vector3(), own = new Set(s.p.meshes.concat(s.fix.flatMap(q => q.meshes))), others = picks.filter(m => !own.has(m));
+  const near = sign => {
+    d.copy(s.n).multiplyScalar(sign).transformDirection(s.p.g.matrixWorld);
+    o.copy(s.ctr).addScaledVector(s.n, sign * 0.1); s.p.g.localToWorld(o);
+    rc.set(o, d); rc.near = 0; rc.far = 40; const h = rc.intersectObjects(others, false)[0]; return h ? h.distance : 1e9;
+  };
+  if (near(1) < near(-1)) s.n.negate();
+  // свет выходит за светильником: сразу за самой дальней его точкой по направлению света
+  s.out = 12;
+  const v = new THREE.Vector3();
+  for (const q of s.fix) if (!q.isF) for (const m of q.meshes) { const P = m.geometry.attributes.position; for (let i = 0; i < P.count; i++) s.out = Math.max(s.out, v.fromBufferAttribute(P, i).sub(s.ctr).dot(s.n) + 6); }
+}
+function ledGlowTex() {
+  const c = document.createElement('canvas'); c.width = 16; c.height = 128; const x = c.getContext('2d'), g = x.createLinearGradient(0, 0, 0, 128);
+  g.addColorStop(0, 'rgba(255,255,255,0)'); g.addColorStop(0.5, 'rgba(255,255,255,1)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+  x.fillStyle = g; x.fillRect(0, 0, 16, 128); return new THREE.CanvasTexture(c);
+}
+function ledPrepare() {
+  if (LED.ready) return; LED.ready = true;
+  LED.strips.forEach(ledFacing);
+  // линза — полупрозрачная часть светильника, или с самой маленькой глубиной по свету, если прозрачной нет
+  for (const s of LED.strips) s.lens = s.fix.flatMap(q => q.meshes).filter(m => m.material.transparent || /линз/i.test(String(parts[m.userData.idx].n)));
+  if (TOUCH) {
+    const tex = ledGlowTex();
+    for (const s of LED.strips) {
+      const g = new THREE.Mesh(new THREE.PlaneGeometry(s.len + 120, 300), new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0, side: THREE.DoubleSide }));
+      const X = s.dir.clone(), Z = s.n.clone(), Y = Z.clone().cross(X);
+      g.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(X, Y, Z));
+      g.position.copy(s.ctr).addScaledVector(X, (s.lo + s.hi) / 2).addScaledVector(Z, 1.5); g.visible = false; g.raycast = () => {}; s.p.g.add(g); s.glow = g;
+    }
+    return;
+  }
+  const total = LED.strips.reduce((a, s) => a + s.len, 0) || 1;
+  rend.shadowMap.enabled = true; rend.shadowMap.type = THREE.PCFSoftShadowMap; rend.shadowMap.autoUpdate = false;
+  LED.lights = []; LED.spots = [];
+  for (const s of LED.strips) {
+    const cnt = Math.max(1, Math.round(LED_MAX * s.len / total));
+    for (let i = 0; i < cnt && LED.lights.length < LED_MAX; i++) {
+      const at = s.ctr.clone().addScaledVector(s.dir, s.lo + s.len * (i + 0.5) / cnt).addScaledVector(s.n, s.out);
+      const l = new THREE.SpotLight(s.col.getHex(), 0, 2800, 1.3, 1, 1.5); l.position.copy(at); l.target.position.copy(at).add(s.n);
+      l.castShadow = true; l.shadow.mapSize.set(1536, 1536); l.shadow.camera.near = 3; l.shadow.camera.far = 2800; l.shadow.bias = -0.0004; l.shadow.normalBias = 0.6; l.shadow.radius = 5;
+      l.visible = false; s.p.g.add(l); s.p.g.add(l.target); LED.lights.push(l); LED.spots.push({ l, s, i, cnt });
+    }
+  }
+  LED.base = 60000 / Math.max(1, LED.lights.length / (total / 1000));   // на метр ленты — одна и та же яркость
+  for (const p of parts) for (const m of p.meshes) m.material.needsUpdate = true;
+}
+function ledApply() {
+  const on = LED.on, k = LED.k;
+  LED.sampling = null; ledMode(false);
+  for (const s of LED.strips) {
+    for (const m of s.p.meshes.concat(s.lens || [])) m.userData.led = true;
+    if (s.glow) { s.glow.visible = on; s.glow.material.opacity = 0.55 * k + 0.15; s.glow.material.color.copy(s.col); }
+  }
+  if (!TOUCH) {
+    for (const sp of LED.spots) sp.l.visible = on;
+    LED.n = 0;
+    if (on) {
+      const own = new Set(LED.strips.flatMap(s => s.p.meshes.concat(s.fix.flatMap(q => q.meshes))));
+      for (const p of parts) for (const m of p.meshes) { const ok = !m.userData.mark && !own.has(m); m.castShadow = ok; m.receiveShadow = ok; }
+      rend.shadowMap.needsUpdate = true;
+    }
+  }
+  $('bLed').classList.toggle('on', on); $('ledK').style.display = on ? '' : 'none';
+  const W = $('ledW'); if (W) { W.style.display = on ? '' : 'none'; if (on) { const B = $('bLed').getBoundingClientRect(); W.style.left = (B.left + B.width / 2 - 60) + 'px'; W.style.top = (B.top - 132) + 'px'; } }
+  need();
+}
+// На ходу горит только сама лента, света на детали нет: заливка источниками давала те же пятна. Камера встала — источники с тенями
+// расставляются вдоль ленты вперемешку (золотое сечение, не слева направо), проходы усредняются за кадром; на экран результат
+// выходит только когда лента уже сплошная (Алексей 06.11: «почему по одной лампочке, штучки клацать»).
+const LED_FRAMES = 192, LED_SHOW = 64, LED_BUDGET = 24, ledFrames = () => LED.strips.some(s => s.cob) ? LED_FRAMES * 2 : LED_FRAMES;
+// Цвет и яркость на лету: свет лент копится отдельно от вечерней сцены (свет складывается), и его можно умножать на яркость и цвет без
+// пересчёта. Два накопителя: обычные ленты — своими кельвинами, RGB — белым, цвет накладывается при показе. Картинка = вечер + свет.
+const LED_BLACK = new THREE.Color(0), LED_NIGHT = new THREE.Color(0x0d0e11), LED_WHITE = new THREE.Color(0xffffff);
+function ledEmit(zero) {
+  for (const s of LED.strips) for (const m of s.p.meshes.concat(s.lens || [])) {
+    m.material.emissive.copy(LED.on ? s.col : LED_BLACK); m.material.emissiveIntensity = LED.on && !zero ? 1.2 + LED.k * 1.6 : 0;
+  }
+}
+function ledMode(light) {
+  if (LED.sampling === light) return; LED.sampling = light;
+  const dim = TOUCH ? 0.4 : 0.1, d = LED.on ? dim : 1;
+  amb.intensity = light ? 0 : 1.9 * d; d1.intensity = light ? 0 : 1.5 * d; d2.intensity = light ? 0 : 0.6 * d;
+  scene.background = light ? LED_BLACK : LED.on ? LED_NIGHT : null;
+  ledEmit(light);
+  if (!light) for (const l of LED.lights) l.intensity = 0;
+  // цветные линии слоёв своим цветом светятся и без света — в накопитель света не пускать
+  if (light) { LED.vis = []; for (const p of parts) if (p.isL) { LED.vis.push([p.g, p.g.visible]); p.g.visible = false; } }
+  else if (LED.vis) { for (const [g, v] of LED.vis) g.visible = v; LED.vis = null; }
+}
+function ledReset() { LED.n = 0; ledMode(false); }
+function ledPlace(j, rgb) {
+  LED.spots.forEach(sp => {
+    const mine = sp.s.rgb === rgb; sp.l.intensity = mine ? LED.base : 0; if (!mine) return;
+    sp.l.color.copy(rgb ? LED_WHITE : sp.s.col);
+    const g = (j * 0.61803398875 + sp.i * 0.37 + (sp.s.cob ? Math.random() * 0.004 : 0)) % 1, q = (sp.i + g) / sp.cnt, at = sp.s.ctr.clone().addScaledVector(sp.s.dir, sp.s.lo + sp.s.len * (q % 1)).addScaledVector(sp.s.n, sp.s.out + (sp.s.cob ? 30 : 0));
+    sp.l.position.copy(at); sp.l.target.position.copy(at).add(sp.s.n); sp.l.target.updateMatrixWorld();
+  });
+}
+function ledTargets() {
+  const w = rend.domElement.width, h = rend.domElement.height;
+  if (LED.rt && LED.rt.width === w && LED.rt.height === h) return;
+  if (LED.rt) for (const k of ['rt', 'bt', 'aw', 'ar']) LED[k].dispose();
+  const hf = { type: THREE.HalfFloatType };
+  LED.rt = new THREE.WebGLRenderTarget(w, h, { ...hf, samples: 4 }); LED.bt = new THREE.WebGLRenderTarget(w, h, { ...hf, samples: 4 });
+  LED.aw = new THREE.WebGLRenderTarget(w, h, hf); LED.ar = new THREE.WebGLRenderTarget(w, h, hf); LED.n = 0;
+  if (LED.qs) return;
+  LED.qs = new THREE.Scene(); LED.qc = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  LED.qm = new THREE.MeshBasicMaterial({ transparent: true, depthTest: false, depthWrite: false, toneMapped: false });
+  LED.cm = new THREE.ShaderMaterial({
+    uniforms: { tB: { value: null }, tW: { value: null }, tR: { value: null }, k: { value: 1 }, c: { value: new THREE.Color() } }, depthTest: false, depthWrite: false, toneMapped: false,
+    vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+    fragmentShader: 'varying vec2 vUv; uniform sampler2D tB, tW, tR; uniform float k; uniform vec3 c;\nvoid main() { vec3 col = texture2D(tB, vUv).rgb + k * (texture2D(tW, vUv).rgb + c * texture2D(tR, vUv).rgb); gl_FragColor = vec4(col, 1.0);\n#include <colorspace_fragment>\n}'
+  });
+  LED.qp = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), LED.qm); LED.qp.frustumCulled = false; LED.qs.add(LED.qp);
+}
+function ledBase() { ledMode(false); rend.setRenderTarget(LED.bt); rend.autoClear = true; rend.render(scene, cam); }
+function ledShow() {
+  const U = LED.cm.uniforms, rs = LED.strips.find(s => s.rgb);
+  U.tB.value = LED.bt.texture; U.tW.value = LED.aw.texture; U.tR.value = LED.ar.texture; U.k.value = LED.k; if (rs) U.c.value.copy(rs.col);
+  LED.qp.material = LED.cm; rend.setRenderTarget(null); rend.autoClear = true; rend.render(LED.qs, LED.qc);
+}
+function ledSample() {
+  if (LED.n >= ledFrames() || drawOn) return;
+  const t0 = performance.now(), ac = rend.autoClear, ccol = new THREE.Color(), ca = rend.getClearAlpha(); rend.getClearColor(ccol);
+  ledTargets();
+  if (LED.n === 0) { ledBase(); for (const q of [LED.aw, LED.ar]) { rend.setRenderTarget(q); rend.setClearColor(0, 0); rend.clear(); } rend.setClearColor(ccol, ca); }
+  const anyRgb = LED.strips.some(s => s.rgb), anyW = LED.strips.some(s => !s.rgb);
+  const pass = (rgb, acc) => {
+    ledPlace(LED.n, rgb); rend.shadowMap.needsUpdate = true;
+    rend.setRenderTarget(LED.rt); rend.autoClear = true; rend.render(scene, cam);
+    LED.qp.material = LED.qm; LED.qm.map = LED.rt.texture; LED.qm.opacity = 1 / (LED.n + 1); LED.qm.blending = THREE.NormalBlending; LED.qm.needsUpdate = true;
+    rend.setRenderTarget(acc); rend.autoClear = false; rend.render(LED.qs, LED.qc);
+  };
+  ledMode(true);
+  do { if (anyW) pass(false, LED.aw); if (anyRgb) pass(true, LED.ar); LED.n++; } while (LED.n < ledFrames() && performance.now() - t0 < LED_BUDGET);
+  ledMode(false);
+  if (LED.n >= LED_SHOW) ledShow(); else rend.setRenderTarget(null);
+  rend.autoClear = ac; rend.setClearColor(ccol, ca);
+}
+// ползунок и колесо: готовый свет умножается сразу, ничего не считается заново
+function ledLive() {
+  if (TOUCH || !LED.on) { if (LED.on) ledApply(); return; }
+  ledEmit(false);
+  if (LED.n < LED_SHOW) return;
+  const ac = rend.autoClear; ledBase(); ledShow(); rend.autoClear = ac;
+}
+function ledSet(on) { if (on) ledPrepare(); LED.on = on; LED.n = 0; ledApply(); }
+// цветовое колесо RGB-ленты: кольцо над кнопкой, тянешь — меняется цвет свечения
+function ledWheel() {
+  const c = document.createElement('canvas'); c.id = 'ledW'; c.width = c.height = 240; c.style.cssText = 'display:none;position:fixed;width:120px;height:120px;z-index:30;cursor:pointer;touch-action:none';
+  document.body.appendChild(c); const x = c.getContext('2d'), g = x.createConicGradient(0, 120, 120);
+  for (let i = 0; i <= 12; i++) g.addColorStop(i / 12, 'hsl(' + i * 30 + ',100%,50%)');
+  x.strokeStyle = g; x.lineWidth = 42; x.beginPath(); x.arc(120, 120, 97, 0, Math.PI * 2); x.stroke();
+  const set = e => {
+    const b = c.getBoundingClientRect(), a = Math.atan2(e.clientY - b.top - b.height / 2, e.clientX - b.left - b.width / 2), h = (a / (Math.PI * 2) + 1) % 1;
+    for (const s of LED.strips) if (s.rgb) s.col.setHSL(h, 1, 0.5);
+    ledLive();
+  };
+  let drag = false;
+  c.onpointerdown = e => { drag = true; c.setPointerCapture(e.pointerId); set(e); };
+  c.onpointermove = e => { if (drag) set(e); };
+  c.onpointerup = () => { drag = false; };
+  for (const s of LED.strips) if (s.rgb) s.col.setHSL(0.6, 1, 0.5);
+}
+function wireLed() {
+  LED.strips = ledFind(); if (!LED.strips.length) return;
+  const b = $('bLed'), r = $('ledK'); b.style.display = '';
+  b.onclick = () => ledSet(!LED.on);
+  r.oninput = () => { LED.k = +r.value / 100; ledLive(); };
+  if (LED.strips.some(s => s.rgb)) ledWheel();
+}
+
 function wireFull() {
   const el = document.documentElement, req = el.requestFullscreen || el.webkitRequestFullscreen;
   const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
@@ -3874,6 +4093,7 @@ function setDraw(on) {
   if (on === drawOn) return;
   if (on) { closePop(); findOff(); mode(1); if (ruler) stopRuler(); }
   else metalOff();                                          // из листа металла — вернуть спрятанное
+  if (on && LED.on) ledSet(false);
   drawOn = on;
   clipApply();                                              // разрез вида — только в кресленні
   document.documentElement.classList.toggle('draw', on);
@@ -7115,8 +7335,9 @@ function loop() {
     if (flip && TOUCH) fitVisible();                       // повернули телефон — вписать модель заново
   }
   tick();
-  if (!dirty) return;
+  if (!dirty) { if (LED.on && !TOUCH) ledSample(); return; }
   dirty = false;
+  if (LED.on && !TOUCH) ledReset();
   rend.render(scene, cam);
   if (drawOn) thumbTick();
 }
