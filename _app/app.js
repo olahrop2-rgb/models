@@ -30,6 +30,7 @@ if (TOUCH) document.documentElement.classList.add('touch');
 const sv = b => `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${b}</svg>`;
 const CT = '12,3 20,7.5 12,12 4,7.5', CF = '4,7.5 12,12 12,21 4,16.5', CR = '12,12 20,7.5 20,16.5 12,21';
 const ICON = {
+  room: sv('<path d="M3 10l9-6 9 6v10H3z"/><path d="M3 15h18"/>'),
   led: sv('<path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.8 10.6c.7.6 1.1 1.4 1.3 2.4h5c.2-1 .6-1.8 1.3-2.4A6 6 0 0 0 12 3z"/>'),
   // структура — как у веб-просмотра Базиса: точки со строками (замечание 29.09)
   tree: sv('<circle cx="4.5" cy="7" r="1.4" fill="currentColor"/><circle cx="4.5" cy="12" r="1.4" fill="currentColor"/><circle cx="4.5" cy="17" r="1.4" fill="currentColor"/><path d="M9 7h11M9 12h11M9 17h11"/>'),
@@ -75,6 +76,7 @@ const BTN_ICON = {
   bCam: ['persp', 'камера: перспектива / без перспективи / вписати'],
   bFac: ['fac', 'сховати фасади / показати фасади'],
   bLed: ['led', 'підсвітка: вечірнє світло'],
+  bRoom: ['room', 'кімната: підлога і стіни'],
   bRuler: ['ruler', 'рулетка'], bUndo: ['undo', 'скасувати точку (Esc, права кнопка)'],
   bDims: ['dims', 'розміри: коротко — сховати/показати, довго — видалити всі'],
   bDraw: ['sheet', 'креслення: кадри для звіту'],
@@ -121,7 +123,7 @@ document.body.insertAdjacentHTML('beforeend', `
   <button id="bMode">вигляд</button><button id="bCam">камера</button><button id="bFac" style="display:none">фасади</button>
   <button id="bRuler">рулетка</button><button id="bUndo" style="display:none" title="Прибрати поставлену першу точку (Esc, права кнопка)">скасувати точку</button><button id="bDims" style="display:none" title="Коротко — сховати/показати, довго — видалити всі">розміри</button>
   <button id="bFind">пошук</button>
-  <button id="bLed" style="display:none">світло</button><input id="ledK" type="range" min="10" max="100" value="60" style="display:none;width:110px" title="яскравість підсвітки">
+  <button id="bRoom" style="display:none">кімната</button><button id="bLed" style="display:none">світло</button><input id="ledK" type="range" min="10" max="100" value="60" style="display:none;width:110px" title="яскравість підсвітки">
   <button id="bDraw" style="display:none">креслення</button>
   <span id="st"></span>
 </div>
@@ -2987,7 +2989,7 @@ function wire() {
     b.addEventListener('pointerleave', () => clearTimeout(t));
     b.addEventListener('contextmenu', e => { e.preventDefault(); clearTimeout(t); clearDims(); }); }
   $('bShowAll').onclick = showAll;
-  wireHintFade(); wireFind(); wirePd(); wireFull(); wireLed();
+  wireHintFade(); wireFind(); wirePd(); wireFull(); wireLed(); wireRoom();
   // какая это модель и когда выгружена — одной строкой вверху структуры (на экране места не занимает; Алексей 30.10)
   { const t = /^\d{4}-\d\d-\d\d \d\d:\d\d/.test(M.date || '') ? new Date(M.date.replace(' ', 'T') + 'Z') : null;   // выгрузка пишет время по Гринвичу
     const z = n => String(n).padStart(2, '0');
@@ -3328,16 +3330,12 @@ function ledPrepare() {
   if (CUT.done < CUT.all) { LED.ready = false; setTimeout(() => { if (LED.on) { ledPrepare(); ledApply(); } }, 400); return; }
   const total = LED.strips.reduce((a, s) => a + s.len, 0) || 1;
   rend.shadowMap.enabled = true; rend.shadowMap.type = THREE.PCFSoftShadowMap; rend.shadowMap.autoUpdate = false;
-  LED.lights = []; LED.spots = [];
-  for (const s of LED.strips) {
-    const cnt = Math.max(1, Math.round(LED_MAX * s.len / total));
-    for (let i = 0; i < cnt && LED.lights.length < LED_MAX; i++) {
-      const l = new THREE.SpotLight(0xffffff, 0, 2800, 1.3, 1, 1.5);
-      l.castShadow = true; l.shadow.mapSize.set(TOUCH ? 1024 : 1536, TOUCH ? 1024 : 1536); l.shadow.camera.near = 3; l.shadow.camera.far = 2800; l.shadow.bias = -0.0004; l.shadow.normalBias = 0.6; l.shadow.radius = 5;
-      l.layers.set(1); s.p.g.add(l); s.p.g.add(l.target); LED.lights.push(l); LED.spots.push({ l, s, i, cnt });
-    }
+  LED.lights = [];
+  for (let i = 0; i < LED_MAX; i++) {
+    const l = new THREE.SpotLight(0xffffff, 0, 2800, 1.3, 1, 1.5);
+    l.castShadow = true; l.shadow.mapSize.set(TOUCH ? 1024 : 1536, TOUCH ? 1024 : 1536); l.shadow.camera.near = 3; l.shadow.camera.far = 2800; l.shadow.bias = -0.0004; l.shadow.normalBias = 0.6; l.shadow.radius = 5;
+    l.layers.set(1); root.add(l); root.add(l.target); LED.lights.push(l);
   }
-  LED.base = 60000 / Math.max(1, LED.lights.length / (total / 1000));   // на метр ленты — одна и та же яркость
   ledAtlas(); ledBakeInit(); LED.baked = true; LED.n = 0;
 }
 // Карта света: у каждой плоскости детали своё место на общей большой картинке. Плоскости — по направлению и положению; перевёрнутые
@@ -3348,11 +3346,7 @@ function ledAtlas() {
   const none = g => { if (!g.attributes.uvLed) { g.setAttribute('uvLed', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 2).fill(-2), 2)); g.setAttribute('nLed', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 3), 3)); } };
   const near = box => LED.strips.some(s => { const c = box.clampPoint(s.ctr, new THREE.Vector3()); return c.distanceTo(s.ctr) < 3000 + s.len / 2; });
   const meshes = [];
-  for (const p of parts) for (const m of p.meshes) {
-    m.frustumCulled = false; m.layers.enable(1); m.castShadow = !m.userData.mark && !own.has(m); m.receiveShadow = true;
-    const g = m.geometry;
-    if (p.isF || p.isL || m.userData.mark || own.has(m) || !near((g.computeBoundingBox(), g.boundingBox))) { none(g); continue; }
-    meshes.push(m);
+  const chart = g => {
     const pos = g.attributes.position, groups = new Map();
     for (let i = 0; i + 2 < pos.count; i += 3) {
       A.fromBufferAttribute(pos, i); B.fromBufferAttribute(pos, i + 1); C.fromBufferAttribute(pos, i + 2);
@@ -3371,6 +3365,18 @@ function ledAtlas() {
       for (const i of G.idx) for (let k = 0; k < 3; k++) { A.fromBufferAttribute(pos, i + k); const a = A.dot(u), b = A.dot(w); a0 = Math.min(a0, a); a1 = Math.max(a1, a); b0 = Math.min(b0, b); b1 = Math.max(b1, b); }
       charts.push({ g, G, n, u, w, a0, b0, W: a1 - a0, H: b1 - b0, uvA, nA, pos });
     }
+  };
+  for (const p of parts) for (const m of p.meshes) {
+    m.frustumCulled = false; m.layers.enable(1); m.castShadow = !m.userData.mark && !own.has(m); m.receiveShadow = true;
+    const g = m.geometry;
+    if (p.isF || p.isL || m.userData.mark || own.has(m) || !near((g.computeBoundingBox(), g.boundingBox))) { none(g); continue; }
+    meshes.push(m); chart(g);
+  }
+  // комната: пол и стены получают свет, тень на них падает, сами не отбрасывают
+  roomSkinInit();
+  for (const s of ROOM.surfs) {
+    const m = s.m, g = m.geometry; m.frustumCulled = false; m.layers.enable(1); m.castShadow = false; m.receiveShadow = true;
+    if (s.kind === 'wall' || s.kind === 'floor') chart(g); else none(g);
   }
   // раскладка рядами: высокие первыми; не влезло — крупнее клетка
   charts.sort((p, q) => q.H - p.H);
@@ -3393,15 +3399,17 @@ function ledAtlas() {
   }
   LED.S = S; LED.T = T; LED.charts = charts.length;
   LED.u = { uLedW: { value: null }, uLedR: { value: null }, uLedK: { value: 0 }, uLedC: { value: new THREE.Color() } };
-  for (const m of meshes) {
-    m.material.onBeforeCompile = sh => {
+  const patch = mat => {
+    mat.onBeforeCompile = sh => {
       Object.assign(sh.uniforms, LED.u);
       sh.vertexShader = 'attribute vec2 uvLed; varying vec2 vLed;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\nvLed = uvLed;');
       sh.fragmentShader = 'varying vec2 vLed; uniform sampler2D uLedW, uLedR; uniform float uLedK; uniform vec3 uLedC;\n' +
         sh.fragmentShader.replace('#include <lights_fragment_end>', '#include <lights_fragment_end>\nreflectedLight.directDiffuse += uLedK * (texture2D(uLedW, vLed).rgb + uLedC * texture2D(uLedR, vLed).rgb) * material.diffuseColor;');
     };
-    m.material.customProgramCacheKey = () => 'led'; m.material.needsUpdate = true;
-  }
+    mat.customProgramCacheKey = () => 'led'; mat.needsUpdate = true;
+  };
+  for (const m of meshes) patch(m.material);
+  for (const mat of Object.values(SKIN.mats)) patch(mat);
 }
 function ledBakeInit() {
   const S = LED.S, hf = { type: THREE.HalfFloatType, depthBuffer: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter };
@@ -3437,7 +3445,7 @@ function ledApply() {
   const W = $('ledW'); if (W) { W.style.display = on ? '' : 'none'; if (on) { const B = $('bLed').getBoundingClientRect(); W.style.left = (B.left + B.width / 2 - 60) + 'px'; W.style.top = (B.top - 132) + 'px'; } }
   need();
 }
-const LED_WHITE = new THREE.Color(0xffffff), LED_BLACK = new THREE.Color(0), LED_NIGHT = new THREE.Color(0x0d0e11);
+const LED_ZERO = new THREE.Vector3(), LED_WHITE = new THREE.Color(0xffffff), LED_BLACK = new THREE.Color(0), LED_NIGHT = new THREE.Color(0x0d0e11);
 const LED_FRAMES = TOUCH ? 96 : 192, LED_SHOW = TOUCH ? 48 : 64, LED_BUDGET = TOUCH ? 10 : 12, ledFrames = () => LED.strips.some(s => s.wide) ? LED_FRAMES * 2 : LED_FRAMES;
 function ledEmit() {
   for (const s of LED.strips) for (const m of s.p.meshes.concat(s.lens || [])) { m.material.emissive.copy(LED.on ? s.col : LED_BLACK); m.material.emissiveIntensity = LED.on ? 1.2 + LED.k * 1.6 : 0; }
@@ -3447,13 +3455,16 @@ function ledUniforms() {
   const rs = LED.strips.find(s => s.rgb); LED.u.uLedK.value = LED.on && LED.shown ? LED.k : 0; if (rs) LED.u.uLedC.value.copy(rs.col);
 }
 function ledPlace(j, rgb) {
-  LED.spots.forEach(sp => {
-    const mine = sp.s.rgb === rgb; sp.l.intensity = mine ? LED.base : 0; if (!mine) return;
-    sp.l.color.copy(rgb ? LED_WHITE : sp.s.col);
-    const g = (j * 0.61803398875 + sp.i * 0.37 + (sp.s.wide ? Math.random() * 0.004 : 0)) % 1, q = (sp.i + g) / sp.cnt, at = sp.s.ctr.clone().addScaledVector(sp.s.dir, sp.s.lo + sp.s.len * (q % 1)).addScaledVector(sp.s.n, sp.s.out + (sp.s.wide ? 30 : 0)).add(sp.s.off || new THREE.Vector3());
-    sp.l.position.copy(at); sp.l.target.position.copy(at).add(sp.s.n);
-    if (sp.s.off && sp.s.off.lengthSq() > 0) sp.l.target.position.addScaledVector(sp.s.off.clone().normalize(), -0.8);   // отодвинутый источник — лицом к стенке, иначе под профилем тёмная полоса
-    sp.l.target.updateMatrixWorld();
+  const list = LED.strips.filter(s => s.rgb === rgb), sum = list.reduce((a, s) => a + s.len, 0) || 1;
+  LED.lights.forEach((l, k) => {
+    // доля по общей длине лент этой группы; золотое сечение — вперемешку, не слева направо
+    let w = (j * 0.61803398875 + k / LED.lights.length + Math.random() * 0.002) % 1 * sum, s = list[0];
+    for (const q of list) { s = q; if (w <= q.len) break; w -= q.len; }
+    const at = s.ctr.clone().addScaledVector(s.dir, s.lo + w).addScaledVector(s.n, s.out + (s.wide ? 30 : 0)).add(s.off || LED_ZERO);
+    l.intensity = 60000 * (sum / 1000) / LED.lights.length; l.color.copy(rgb ? LED_WHITE : s.col);
+    l.position.copy(at); l.target.position.copy(at).add(s.n);
+    if (s.off && s.off.lengthSq() > 0) l.target.position.addScaledVector(s.off.clone().normalize(), -0.8);   // отодвинутый источник — лицом к стенке, иначе под профилем тёмная полоса
+    l.target.updateMatrixWorld();
   });
 }
 function ledSample() {
@@ -3505,6 +3516,74 @@ function wireLed() {
   b.onclick = () => ledSet(!LED.on);
   r.oninput = () => { LED.k = +r.value / 100; ledLive(); };
   if (LED.strips.some(s => s.rgb)) ledWheel();
+}
+
+// ---------------- комната с покрытием (06.11, для показа заказчику) ----------------
+// Пол и стены из линий «Слоя 0» обычно бледные, для замеров. Кнопка-домик делает их настоящими: набор полов и цвет стен выбирается на
+// странице, в Базисе ничего не задаётся. Картинки полов рисуются здесь же, файлов не нужно. Ближняя стена по-прежнему не мешает смотреть.
+const SKIN = { on: false, floor: 0, wall: 0, mats: {}, tex: [] };
+const ROOM_FLOORS = [['дуб світлий', 'plank', ['#cdaa7d', '#c19a6b', '#d8ba90', '#bb9262']], ['дуб темний', 'plank', ['#5d4432', '#6b4f3a', '#513b2b', '#74563f']], ['бетон', 'conc', ['#9b9c9b']], ['плитка', 'tile', ['#d9d6cf']]];
+const ROOM_WALLS = [['білий', 0xece9e3], ['сірий', 0xb9bcc0], ['беж', 0xd8cbb6], ['графіт', 0x55585e]];
+function floorTex(i) {
+  if (SKIN.tex[i]) return SKIN.tex[i];
+  const [, kind, cols] = ROOM_FLOORS[i], S = 1024, c = document.createElement('canvas'); c.width = c.height = S; const x = c.getContext('2d');
+  let seed = 7 + i; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  if (kind === 'plank') {
+    const H = S / 8;
+    for (let r = 0; r < 8; r++) {
+      const off = r % 2 ? S * 0.37 : S * 0.05;
+      for (let k = -1; k < 3; k++) {
+        const x0 = off + k * S / 2; x.fillStyle = cols[Math.floor(rnd() * cols.length)]; x.fillRect(x0, r * H, S / 2, H);
+        x.strokeStyle = 'rgba(0,0,0,.09)'; x.lineWidth = 1;
+        for (let g = 0; g < 26; g++) { const y = r * H + rnd() * H; x.beginPath(); x.moveTo(x0, y); x.bezierCurveTo(x0 + S / 6, y + rnd() * 8 - 4, x0 + S / 3, y + rnd() * 8 - 4, x0 + S / 2, y); x.stroke(); }
+        x.strokeStyle = 'rgba(0,0,0,.35)'; x.strokeRect(x0, r * H, S / 2, H);
+      }
+    }
+  } else if (kind === 'conc') {
+    x.fillStyle = cols[0]; x.fillRect(0, 0, S, S);
+    for (let k = 0; k < 9000; k++) { const v = rnd() > 0.5 ? 255 : 0; x.fillStyle = 'rgba(' + v + ',' + v + ',' + v + ',' + (rnd() * 0.05) + ')'; x.beginPath(); x.arc(rnd() * S, rnd() * S, rnd() * 10, 0, 7); x.fill(); }
+  } else {
+    const N = 2, W = S / N; x.fillStyle = '#8e8c87'; x.fillRect(0, 0, S, S);
+    for (let a = 0; a < N; a++) for (let b = 0; b < N; b++) { const v = 6 * (rnd() - 0.5); x.fillStyle = 'rgb(' + (217 + v) + ',' + (214 + v) + ',' + (207 + v) + ')'; x.fillRect(a * W + 3, b * W + 3, W - 6, W - 6); }
+  }
+  const tx = new THREE.CanvasTexture(c); tx.colorSpace = THREE.SRGBColorSpace; tx.wrapS = tx.wrapT = THREE.RepeatWrapping; tx.anisotropy = 4;
+  return (SKIN.tex[i] = tx);
+}
+function roomSkinInit() {
+  if (SKIN.mats.wall) return;
+  SKIN.mats.wall = new THREE.MeshLambertMaterial({ color: ROOM_WALLS[0][1], side: THREE.FrontSide });
+  SKIN.mats.reveal = new THREE.MeshLambertMaterial({ color: ROOM_WALLS[0][1], side: THREE.DoubleSide });
+  SKIN.mats.floor = new THREE.MeshLambertMaterial({ map: floorTex(0), side: THREE.FrontSide });
+  for (const s of ROOM.surfs) {
+    s.m0 = s.m.material; const g = s.m.geometry; if (!g.attributes.normal) g.computeVertexNormals();
+    if (s.kind === 'floor') { const P = g.attributes.position, U = new Float32Array(P.count * 2); for (let i = 0; i < P.count; i++) { U[i * 2] = P.getX(i) / 1520; U[i * 2 + 1] = P.getZ(i) / 1520; } g.setAttribute('uv', new THREE.BufferAttribute(U, 2)); }
+  }
+}
+function roomSkin() {
+  roomSkinInit();
+  SKIN.mats.floor.map = floorTex(SKIN.floor); SKIN.mats.floor.needsUpdate = true;
+  SKIN.mats.wall.color.setHex(ROOM_WALLS[SKIN.wall][1]); SKIN.mats.reveal.color.setHex(ROOM_WALLS[SKIN.wall][1]);
+  for (const s of ROOM.surfs) {
+    if (s.kind === 'floor') s.m.material = SKIN.on ? SKIN.mats.floor : s.m0;
+    else if (s.kind === 'wall') s.m.material = SKIN.on ? (s.m0 === ROOM_MAT.reveal ? SKIN.mats.reveal : SKIN.mats.wall) : s.m0;
+    s.m.renderOrder = SKIN.on ? 0 : (s.kind === 'floor' ? -2 : -1);
+  }
+  $('bRoom').classList.toggle('on', SKIN.on); $('roomP').style.display = SKIN.on ? '' : 'none';
+  need();
+}
+function wireRoom() {
+  if (!ROOM.surfs.some(s => s.kind === 'floor')) return;
+  const b = $('bRoom'); b.style.display = '';
+  const p = document.createElement('div'); p.id = 'roomP'; p.style.cssText = 'display:none;position:fixed;left:12px;bottom:76px;z-index:30;background:rgba(255,255,255,.92);border-radius:10px;padding:8px;font-size:13px;color:#222;max-width:calc(100vw - 24px)';
+  const row = (title, list, key) => {
+    const d = document.createElement('div'); d.style.cssText = 'display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin:3px 0';
+    const s = document.createElement('span'); s.textContent = title; s.style.width = '46px'; d.appendChild(s);
+    list.forEach((it, i) => { const q = document.createElement('button'); q.textContent = it[0]; q.style.cssText = 'padding:4px 8px;border-radius:7px;border:1px solid #bbb;background:' + (i === SKIN[key] ? '#2b6cb0;color:#fff' : '#fff'); q.onclick = () => { SKIN[key] = i; [...d.querySelectorAll('button')].forEach((z, n) => { z.style.background = n === i ? '#2b6cb0' : '#fff'; z.style.color = n === i ? '#fff' : '#222'; }); roomSkin(); }; d.appendChild(q); });
+    p.appendChild(d);
+  };
+  row('підлога', ROOM_FLOORS, 'floor'); row('стіни', ROOM_WALLS, 'wall');
+  document.body.appendChild(p);
+  b.onclick = () => { SKIN.on = !SKIN.on; roomSkin(); };
 }
 
 function wireFull() {
