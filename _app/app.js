@@ -3424,6 +3424,7 @@ function ledBakeInit() {
 function ledApply() {
   const on = LED.on, k = LED.k, d = on ? (TOUCH ? 0.4 : 0.1) : 1;
   amb.intensity = 1.9 * d; d1.intensity = 1.5 * d; d2.intensity = 0.6 * d; scene.background = on ? LED_NIGHT : null;
+  document.body.classList.toggle('night', on);   // вечером панели тёмные: тёмные надписи на чёрном фоне не читались
   ledEmit(); ledUniforms();
   for (const s of LED.strips) {
     for (const m of s.p.meshes.concat(s.lens || [])) m.userData.led = true;
