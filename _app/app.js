@@ -215,8 +215,210 @@ function geom(pd) {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pd.v, 3));
   if (pd.u) g.setAttribute('uv', new THREE.Float32BufferAttribute(pd.u, 2));
-  g.computeVertexNormals();
+  if (pd.n) g.setAttribute('normal', new THREE.Float32BufferAttribute(pd.n, 3)); else g.computeVertexNormals();
   return g;
+}
+
+// ---------------- кромка с толщиной (06.11, только компьютер) ----------------
+// В Базисе кромка — плёнка нулевой толщины по контуру. Здесь она тело: контур — наружная сторона кромки (Базис рисует торец
+// по внешнему краю, diag_27), габарит не меняется, плита короче на толщину кромки. Радиус: до 0,7 мм — прямой угол, до 1,5 — 0,5,
+// толще — 2 (решение Алексея). Телефон и выгрузки без толщины (нет od.nz) — как было. Стык плиты и кромки линией не обводится.
+const krRadius = t => t < 0.7 ? 0 : t < 1.5 ? 0.5 : 2;
+const KR = { segs: 0, parts: 0 };
+function krMinus(poly, Q) {   // выпуклый Q против часовой: куски многоугольника снаружи Q (u, v и высота — по интерполяции)
+  let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+  for (const q of Q) { x0 = Math.min(x0, q[0]); x1 = Math.max(x1, q[0]); y0 = Math.min(y0, q[1]); y1 = Math.max(y1, q[1]); }
+  if (poly.every(p => p.a <= x0) || poly.every(p => p.a >= x1) || poly.every(p => p.b <= y0) || poly.every(p => p.b >= y1)) return [poly];
+  const out = []; let cur = poly;
+  for (let e = 0; e < Q.length && cur.length >= 3; e++) {
+    const E = Q[e], F = Q[(e + 1) % Q.length], ex = F[0] - E[0], ey = F[1] - E[1], ins = [], ous = [];
+    const sd = p => ex * (p.b - E[1]) - ey * (p.a - E[0]);
+    for (let i = 0; i < cur.length; i++) {
+      const A = cur[i], B = cur[(i + 1) % cur.length], sa = sd(A), sb = sd(B);
+      if (sa >= 0) ins.push(A); if (sa <= 0) ous.push(A);
+      if ((sa > 0 && sb < 0) || (sa < 0 && sb > 0)) {
+        const t = sa / (sa - sb), X = {}; for (const k of ['a', 'b', 'h', 'u', 'v']) X[k] = A[k] + (B[k] - A[k]) * t;
+        ins.push(X); ous.push(X);
+      }
+    }
+    if (ous.length >= 3) out.push(ous);
+    cur = ins;
+  }
+  return out;
+}
+function kromkaBuild(od) {
+  if (TOUCH || !od.nz || !od.p || !od.p.some(pd => pd.bt)) return;
+  const N = od.nz, nl = Math.hypot(N[0], N[1], N[2]); if (!(nl > 0.5)) return;
+  const nz = N.map(x => x / nl), seed = Math.abs(nz[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0], sd = seed[0] * nz[0] + seed[1] * nz[1] + seed[2] * nz[2];
+  const ux0 = [seed[0] - sd * nz[0], seed[1] - sd * nz[1], seed[2] - sd * nz[2]], ul = Math.hypot(...ux0), ux = ux0.map(x => x / ul);
+  const vx = [nz[1] * ux[2] - nz[2] * ux[1], nz[2] * ux[0] - nz[0] * ux[2], nz[0] * ux[1] - nz[1] * ux[0]];
+  const to2 = (v, i) => ({ a: v[i] * ux[0] + v[i + 1] * ux[1] + v[i + 2] * ux[2], b: v[i] * vx[0] + v[i + 1] * vx[1] + v[i + 2] * vx[2], h: v[i] * nz[0] + v[i + 1] * nz[1] + v[i + 2] * nz[2] });
+  const to3 = (a, b, h) => [a * ux[0] + b * vx[0] + h * nz[0], a * ux[1] + b * vx[1] + h * nz[1], a * ux[2] + b * vx[2] + h * nz[2]];
+  const near = (p, q, tl) => Math.hypot(p.a - q.a, p.b - q.b) < tl;
+  // отрезки контура под кромкой — из её граней: у каждой две вершины над одной точкой контура, третья над другой
+  const segs = [], rest = new Map();
+  for (const pd of od.p) {
+    if (!pd.bt) continue;
+    const left = []; rest.set(pd, left);
+    for (let i = 0; i + 8 < pd.v.length; i += 9) {
+      const P = [0, 1, 2].map(k => { const q = to2(pd.v, i + k * 3); q.u = pd.u[(i / 3 + k) * 2]; q.v = pd.u[(i / 3 + k) * 2 + 1]; return q; });
+      const gr = []; for (const q of P) { const g = gr.find(x => near(x[0], q, 0.15)); if (g) g.push(q); else gr.push([q]); }
+      if (gr.length !== 2) { left.push(i); continue; }
+      const A = gr[0][0], B = gr[1][0];
+      let s = segs.find(x => x.pd === pd && ((near(x.a, A, 0.15) && near(x.b, B, 0.15)) || (near(x.a, B, 0.15) && near(x.b, A, 0.15))));
+      if (!s) { s = { pd, t: pd.bt, a: A, b: B, pa: [], pb: [], idx: [] }; segs.push(s); }
+      for (const q of P) (near(q, s.a, 0.15) ? s.pa : s.pb).push(q);
+      s.idx.push(i);
+    }
+  }
+  // пласти детали — для того, чтобы понять, с какой стороны отрезка материал, и обрезать плиту
+  const flat = [];
+  for (const pd of od.p) {
+    if (pd.bt) continue;
+    for (let i = 0; i + 8 < pd.v.length; i += 9) {
+      const P = [0, 1, 2].map(k => to2(pd.v, i + k * 3));
+      if (Math.abs(P[0].h - P[1].h) < 0.05 && Math.abs(P[0].h - P[2].h) < 0.05) flat.push(P);
+    }
+  }
+  const inTri = (T, a, b) => { let n = false, p = false; for (let k = 0; k < 3; k++) { const A = T[k], B = T[(k + 1) % 3], c = (B.a - A.a) * (b - A.b) - (B.b - A.b) * (a - A.a); if (c < -1e-6) n = true; if (c > 1e-6) p = true; } return !(n && p); };
+  const good = [];
+  for (const s of segs) {
+    const hs = s.pa.concat(s.pb).map(q => q.h), lo = Math.min(...hs), hi = Math.max(...hs), H = hi - lo, ends = q => { const a = q.reduce((m, x) => x.h < m.h ? x : m), b = q.reduce((m, x) => x.h > m.h ? x : m); return b.h - a.h > 1 ? [a, b] : null; };
+    const ea = ends(s.pa), eb = ends(s.pb); if (!ea || !eb) continue;
+    const dx = s.b.a - s.a.a, dy = s.b.b - s.a.b, L = Math.hypot(dx, dy); if (L < 0.01) continue;
+    const px = -dy / L, py = dx / L, ma = (s.a.a + s.b.a) / 2, mb = (s.a.b + s.b.b) / 2, on = (a, b) => flat.some(T => (Math.abs(T[0].h - lo) < 0.2 || Math.abs(T[0].h - hi) < 0.2) && inTri(T, a, b));
+    const d = Math.min(1, H / 4), plus = on(ma + px * d, mb + py * d), minus = on(ma - px * d, mb - py * d);
+    if (plus === minus) continue;
+    Object.assign(s, { L, lo, hi, H, ea, eb, nx: plus ? px : -px, ny: plus ? py : -py });
+    good.push(s);
+  }
+  if (!good.length) return;
+  // угол как в жизни: короткая сторона катается первой, длинная идёт поверх на всю длину — её торец виден с короткой стороны,
+  // с тем же радиусом (Алексей 06.11). Плавный переход (дуга контура) и внутренний угол — стык по биссектрисе.
+  // Конец отрезка: точка на глубине d = E + (cx, cy) + d·(mx, my); (dx, dy) — от угла вдоль отрезка
+  const endOf = (s, E, dx, dy) => {
+    const o = good.find(x => x !== s && x.pd === s.pd && (near(x.a, E, 0.2) || near(x.b, E, 0.2))) || good.find(x => x !== s && (near(x.a, E, 0.2) || near(x.b, E, 0.2)));
+    const R = { mx: s.nx, my: s.ny, cx: 0, cy: 0, cap: false, wall: false, dx, dy };
+    if (!o) return R;
+    const c = s.nx * o.nx + s.ny * o.ny, q = dx * o.nx + dy * o.ny;
+    if (Math.abs(c) >= 0.9 || q <= 0.05) { if (c > -0.5) { R.mx = (s.nx + o.nx) / (1 + c); R.my = (s.ny + o.ny) / (1 + c); } return R; }
+    const win = s.L > o.L + 0.01 || (Math.abs(s.L - o.L) <= 0.01 && good.indexOf(s) < good.indexOf(o));
+    R.mx = s.nx - dx * c / q; R.my = s.ny - dy * c / q;
+    if (win) R.cap = true; else { R.cx = dx * o.t / q; R.cy = dy * o.t / q; R.wall = o.r !== s.r; }
+    return R;
+  };
+  for (const s of good) s.r = Math.min(krRadius(s.t), s.t, s.H / 2);
+  const skip = [], skipF = [], faces = [], outK = new Map();
+  for (const pd of od.p) if (pd.bt) outK.set(pd, { v: [], u: [], n: [], xl: [] });
+  for (const s of good) {
+    const dl = Math.hypot(s.b.a - s.a.a, s.b.b - s.a.b), dx0 = (s.b.a - s.a.a) / dl, dy0 = (s.b.b - s.a.b) / dl;
+    const ma = endOf(s, s.a, dx0, dy0), mb = endOf(s, s.b, -dx0, -dy0), r = s.r, T = s.t, O = outK.get(s.pd), { lo, hi, H } = s;
+    // раунд: длинная кромка кончается за радиус до угла, дальше — скругление вертикального края и шар на углу
+    for (const m of [ma, mb]) if (m.cap && r > 0) { m.round = true; m.cx = m.dx * r; m.cy = m.dy * r; }
+    // сечение кромки поперёк: [от контура внутрь, высота, длина по сечению, нормаль внутрь, нормаль по высоте]
+    const sec = [], ST = r >= 1 ? 6 : 4;
+    if (T > r) sec.push([[T, lo, -(T - r) - r * Math.PI / 2, 0, -1], [r, lo, -r * Math.PI / 2, 0, -1]]);
+    if (r > 0) { const arc = []; for (let k = 0; k <= ST; k++) { const f = Math.PI / 2 * k / ST; arc.push([r - r * Math.sin(f), lo + r - r * Math.cos(f), -r * Math.PI / 2 + r * f, -Math.sin(f), -Math.cos(f)]); } sec.push(arc); }
+    sec.push([[0, lo + r, r, -1, 0], [0, hi - r, H - r, -1, 0]]);
+    if (r > 0) { const arc = []; for (let k = 0; k <= ST; k++) { const f = Math.PI / 2 * k / ST; arc.push([r - r * Math.cos(f), hi - r + r * Math.sin(f), H - r + r * f, -Math.cos(f), Math.sin(f)]); } sec.push(arc); }
+    if (T > r) sec.push([[r, hi, H - r + r * Math.PI / 2, 0, 1], [T, hi, H - r + r * Math.PI / 2 + (T - r), 0, 1]]);
+    const uvAt = (e, w) => [e[0].u + (e[1].u - e[0].u) * w / H, e[0].v + (e[1].v - e[0].v) * w / H];
+    const put = (A, m, e, q, nrm) => {
+      const P = to3(A.a + m.cx + m.mx * q[0], A.b + m.cy + m.my * q[0], q[1]), N3 = nrm || to3(s.nx * q[3], s.ny * q[3], q[4]);
+      return { P, N3, uv: uvAt(e, q[2]) };
+    };
+    const addTri = (p, q, w) => {
+      const e1 = [q.P[0] - p.P[0], q.P[1] - p.P[1], q.P[2] - p.P[2]], e2 = [w.P[0] - p.P[0], w.P[1] - p.P[1], w.P[2] - p.P[2]];
+      const c = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]]; if (Math.hypot(...c) < 1e-7) return;
+      const nn = (p.N3[0] + q.N3[0] + w.N3[0]) * c[0] + (p.N3[1] + q.N3[1] + w.N3[1]) * c[1] + (p.N3[2] + q.N3[2] + w.N3[2]) * c[2];
+      for (const x of nn >= 0 ? [p, q, w] : [p, w, q]) { O.v.push(...x.P); O.n.push(...x.N3); O.u.push(...x.uv); }
+    };
+    for (const pl of sec) for (let k = 0; k + 1 < pl.length; k++) {
+      const a0 = put(s.a, ma, s.ea, pl[k]), a1 = put(s.a, ma, s.ea, pl[k + 1]), b0 = put(s.b, mb, s.eb, pl[k]), b1 = put(s.b, mb, s.eb, pl[k + 1]);
+      addTri(a0, b0, b1); addTri(a0, b1, a1);
+    }
+    const prof = sec.flat();
+    for (const [A, m, e] of [[s.a, ma, s.ea], [s.b, mb, s.eb]]) {
+      // торец длинной кромки — сечением со своим радиусом; у короткой — стенка длинной, выглядывающая над её скруглением
+      if (m.cap && !m.round) {   // прямая кромка (без радиуса): торец плоский, рисунок ровными полосами по высоте
+        const nr = to3(-m.dx, -m.dy, 0), pc = q => put(A, m, e, [q[0], q[1], q[1] - lo, 0, 0], nr);
+        for (let k = 1; k + 1 < prof.length; k++) addTri(pc(prof[0]), pc(prof[k]), pc(prof[k + 1]));
+      }
+      if (m.round) {
+        // поверхность угла: ряды по высоте (φ от низа до верха), в ряду — скругление края (θ) и прямой кусок до стыка с короткой;
+        // e — от плоскости короткой стороны, d — от контура длинной; картинка кромки загибается за угол, не рвётся
+        const rows = [];
+        for (let k = 0; k <= ST; k++) { const f = -Math.PI / 2 + Math.PI / 2 * k / ST; rows.push({ f, h: lo + r + r * Math.sin(f), w: r + r * f }); }
+        for (let k = 0; k <= ST; k++) { const f = Math.PI / 2 * k / ST; rows.push({ f, h: hi - r + r * Math.sin(f), w: H - r + r * f }); }
+        const uvL = [(s.eb[0].u - s.ea[0].u) / dl * (A === s.a ? -1 : 1), (s.eb[0].v - s.ea[0].v) / dl * (A === s.a ? -1 : 1)];
+        const pt = (R0, c) => {
+          const ins = r * (1 - Math.cos(R0.f)), ro = r - ins, th = c * Math.PI / 2 / ST;
+          const arc = c <= ST, d = arc ? r - ro * Math.cos(th) : T, ee = arc ? r - ro * Math.sin(th) : ins;
+          const nd = arc ? -Math.cos(th) : 0, ne = arc ? -Math.sin(th) : -1, cf = Math.cos(R0.f), sf = Math.sin(R0.f), path = arc ? r * th : r * Math.PI / 2 + (T - r);
+          const P = to3(A.a + m.dx * ee + m.mx * d, A.b + m.dy * ee + m.my * d, R0.h);
+          const N3 = to3((s.nx * nd + m.dx * ne) * cf, (s.ny * nd + m.dy * ne) * cf, sf), base = uvAt(e, R0.w);
+          return { P, N3, uv: [base[0] + uvL[0] * path, base[1] + uvL[1] * path] };
+        };
+        const cols = ST + (T > r ? 2 : 1);
+        for (let i = 0; i + 1 < rows.length; i++) for (let c = 0; c + 1 < cols; c++) {
+          const p00 = pt(rows[i], c), p01 = pt(rows[i], c + 1), p10 = pt(rows[i + 1], c), p11 = pt(rows[i + 1], c + 1);
+          addTri(p00, p01, p11); addTri(p00, p11, p10);
+        }
+        // наружная линия обходит угол по началу скругления; вертикальная посередине радиуса — только на тонкой кромке, где скругление
+        // не разглядеть и без неё у детали сбоку нет угла; на кромке 2 мм она чёрной чертой ложилась по круглому
+        for (const R0 of [rows[ST], rows[ST + 1]]) for (let c = 0; c + 1 < cols; c++) O.xl.push(...pt(R0, c).P, ...pt(R0, c + 1).P);
+        if (r < 1) { const mid = Math.floor(ST / 2); O.xl.push(...pt(rows[ST], mid).P, ...pt(rows[ST + 1], mid).P); }
+      }
+      if (m.wall) {
+        const nr = to3(m.dx, m.dy, 0), w0 = put(A, m, e, [0, lo, 0, 0, 0], nr), w1 = put(A, m, e, [T, lo, 0, 0, 0], nr), w2 = put(A, m, e, [T, hi, H, 0, 0], nr), w3 = put(A, m, e, [0, hi, H, 0, 0], nr);
+        addTri(w0, w1, w2); addTri(w0, w2, w3);
+      }
+    }
+    if (r > 0) for (const h of [lo + r, hi - r]) O.xl.push(...to3(s.a.a + ma.cx, s.a.b + ma.cy, h), ...to3(s.b.a + mb.cx, s.b.b + mb.cy, h));
+    const a0 = ma.round ? { a: s.a.a, b: s.a.b } : { a: s.a.a + ma.cx, b: s.a.b + ma.cy }, b0 = mb.round ? { a: s.b.a, b: s.b.b } : { a: s.b.a + mb.cx, b: s.b.b + mb.cy };
+    const ia = { a: a0.a + ma.mx * T, b: a0.b + ma.my * T }, ib = { a: b0.a + mb.mx * T, b: b0.b + mb.my * T };
+    for (const h of [lo, hi]) { skip.push([to3(ia.a, ia.b, h), to3(ib.a, ib.b, h)]); skipF.push([to3(s.a.a, s.a.b, h), to3(s.b.a, s.b.b, h)]); }
+    let Q = [[a0.a, a0.b], [b0.a, b0.b], [ib.a, ib.b], [ia.a, ia.b]], ar = 0;
+    for (let k = 0; k < 4; k++) { const A = Q[k], B = Q[(k + 1) % 4]; ar += A[0] * B[1] - B[0] * A[1]; }
+    if (ar < 0) Q = Q.reverse();
+    faces.push({ Q, lo, hi });
+  }
+  // плиту короче на толщину кромки: пласти обрезаются полосами кромок
+  const clipped = new Map();
+  for (const pd of od.p) {
+    if (pd.bt) continue;
+    const V = [], U = [];
+    for (let i = 0; i + 8 < pd.v.length; i += 9) {
+      const P = [0, 1, 2].map(k => { const q = to2(pd.v, i + k * 3); q.u = pd.u[(i / 3 + k) * 2]; q.v = pd.u[(i / 3 + k) * 2 + 1]; return q; });
+      const same = () => { for (let k = 0; k < 9; k++) V.push(pd.v[i + k]); for (let k = 0; k < 6; k++) U.push(pd.u[i / 3 * 2 + k]); };
+      if (Math.abs(P[0].h - P[1].h) >= 0.05 || Math.abs(P[0].h - P[2].h) >= 0.05) { same(); continue; }
+      let polys = [P], cut = false;
+      for (const f of faces) {
+        if (Math.abs(P[0].h - f.lo) > 0.2 && Math.abs(P[0].h - f.hi) > 0.2) continue;
+        const nx = []; for (const p of polys) { const m = krMinus(p, f.Q); if (m.length !== 1 || m[0] !== p) cut = true; nx.push(...m); }
+        polys = nx;
+      }
+      if (!cut) { same(); continue; }
+      for (const p of polys) for (let k = 1; k + 1 < p.length; k++) for (const q of [p[0], p[k], p[k + 1]]) { V.push(...to3(q.a, q.b, q.h)); U.push(q.u, q.v); }
+    }
+    clipped.set(pd, { v: V, u: U });
+  }
+  // всё посчитано — только теперь подмена (ошибка выше оставляет деталь как была)
+  for (const pd of od.p) {
+    if (pd.bt) {
+      const O = outK.get(pd), left = rest.get(pd).slice();
+      for (const s of segs) if (s.pd === pd && !good.includes(s)) left.push(...s.idx);
+      for (const i of left) {
+        const a = [pd.v[i], pd.v[i + 1], pd.v[i + 2]], e1 = [pd.v[i + 3] - a[0], pd.v[i + 4] - a[1], pd.v[i + 5] - a[2]], e2 = [pd.v[i + 6] - a[0], pd.v[i + 7] - a[1], pd.v[i + 8] - a[2]];
+        const c = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]], l = Math.hypot(...c) || 1;
+        for (let k = 0; k < 3; k++) { O.v.push(pd.v[i + k * 3], pd.v[i + k * 3 + 1], pd.v[i + k * 3 + 2]); O.n.push(c[0] / l, c[1] / l, c[2] / l); O.u.push(pd.u[(i / 3 + k) * 2], pd.u[(i / 3 + k) * 2 + 1]); }
+      }
+      pd.v = O.v; pd.u = O.u; pd.n = O.n; pd.xl = O.xl; pd.skip = skip;
+    } else {   // линии плиты — по её прежней форме: обрезка рвёт границы внутренних треугольников, они вылезали косыми чертами
+      const c = clipped.get(pd); pd.ev = pd.v; pd.v = c.v; pd.u = c.u; pd.skip = skipF;
+    }
+  }
+  KR.segs += good.length; KR.parts++;
 }
 
 // рёбра детали как у EdgesGeometry, но без «сгиба на 180°»: Базис у деталей с вырезами/отверстиями отдаёт часть
@@ -227,8 +429,13 @@ function geom(pd) {
 // до 0,1 мм, и направление у волоска выходит случайным — на ровной пласти рисовалась косая черта (08.10: бок антресоли
 // левой 050_3, 275 мм). Волосок берёт направление широкого соседа по своей длинной стороне. Сверено на 050_3, 050_8,
 // 051_1, 051_3, 051_4: уходят только эти три черты. У фурнитуры и 3D-объектов не применяется — там меняло настоящие рёбра.
-function partEdges(g, deg, slivers) {
+function partEdges(g, deg, slivers, pd) {
   const pos = g.attributes.position.array, cosT = Math.cos(deg * Math.PI / 180);
+  // кромка с толщиной: линии по контуру плиты под кромкой и по стыку с плитой не рисуем; xl — наружная линия кромки
+  const skipOn = (i, S) => { const d = S[1].map((x, q) => x - S[0][q]), l = d[0] * d[0] + d[1] * d[1] + d[2] * d[2]; if (l < 1e-9) return false;
+    const w = [pos[i] - S[0][0], pos[i + 1] - S[0][1], pos[i + 2] - S[0][2]], t = (w[0] * d[0] + w[1] * d[1] + w[2] * d[2]) / l;
+    return t > -0.01 && t < 1.01 && Math.hypot(w[0] - d[0] * t, w[1] - d[1] * t, w[2] - d[2] * t) < 0.06; };
+  const skipped = (a, b) => pd && pd.skip && pd.skip.some(S => skipOn(a, S) && skipOn(b, S));
   const key = i => Math.round(pos[i] * 1e4) + ',' + Math.round(pos[i + 1] * 1e4) + ',' + Math.round(pos[i + 2] * 1e4);
   const E = new Map(), out = [], thin = [];
   const v = i => [pos[i], pos[i + 1], pos[i + 2]];
@@ -262,8 +469,10 @@ function partEdges(g, deg, slivers) {
       const d = dot(f.tri.n, fs[1].tri.n);
       draw = d <= cosT && d >= -cosT;   // d < -cosT: перевёрнутый сосед в той же плоскости — не ребро
     }
+    if (draw && fs.length === 1 && skipped(f.a, f.b)) draw = false;
     if (draw) out.push(pos[f.a], pos[f.a + 1], pos[f.a + 2], pos[f.b], pos[f.b + 1], pos[f.b + 2]);
   }
+  if (pd && pd.xl) out.push(...pd.xl);
   const eg = new THREE.BufferGeometry();
   eg.setAttribute('position', new THREE.Float32BufferAttribute(out, 3));
   return eg;
@@ -305,10 +514,14 @@ function build() {
       }
       grp.add(inst);
     } else {
+      try { kromkaBuild(od); } catch (e) { console.warn('кромка: деталь', i, e && e.message); }
       for (const pd of od.p) {
         const g = geom(pd); g.computeBoundingBox(); box.union(g.boundingBox);
         const m = new THREE.Mesh(g, materialFor(pd.m)); m.userData.idx = i; grp.add(m); meshes.push(m); picks.push(m);
-        const ln = new THREE.LineSegments(partEdges(g, 25, od.k === 'p'), EDGE); grp.add(ln); edges.push(ln);
+        // наружная линия кромки лежит прямо на её поверхности — издали шла пунктиром; кромка на волос глубже линии
+        if (pd.xl) { m.material.polygonOffset = true; m.material.polygonOffsetFactor = 1; m.material.polygonOffsetUnits = 2; }
+        const egm = pd.ev ? { attributes: { position: { array: new Float32Array(pd.ev) } } } : g; delete pd.ev;
+        const ln = new THREE.LineSegments(partEdges(egm, 25, od.k === 'p', pd), EDGE); grp.add(ln); edges.push(ln);
         const lh = new THREE.LineSegments(ln.geometry, EDGE_HID); lh.visible = false; lh.renderOrder = 1; grp.add(lh); hidEdges.push(lh);
         if (M.mats[pd.m] && M.mats[pd.m].mk) { m.userData.mark = ln.userData.mark = lh.userData.mark = true; markObjs.push(m, ln); }
       }
