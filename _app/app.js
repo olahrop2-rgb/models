@@ -589,7 +589,7 @@ function screwMatrix(n) {
   return new THREE.Matrix4().compose(p, q, ONE);
 }
 function poseAll() {
-  if (LED.on && !TOUCH) LED.n = 0;   // открыли дверь / ящик — свет на деталях пересчитать
+  if (LED.on && LED.baked && !TOUCH) LED.n = 0;   // открыли дверь / ящик — свет на деталях пересчитать (телефон держит готовый)
   for (const pr of moving) {
     const m = new THREE.Matrix4();
     for (const id of pr.chainA) m.multiply(screwMatrix(animNode[id]));   // внешнее слева, внутреннее справа
@@ -3243,7 +3243,8 @@ function cutPart(i, hks, hcont, Brush, ev, SUBTRACTION, ADDITION) {
 // вечернего, лента горит. Компьютер: свет с тенями записывается на поверхности деталей, поэтому вращение ничего не пересчитывает
 // (Алексей 06.11: «источник никуда не меняется — зачем пересчёт»); заново — только при открывании дверей. Яркость и цвет — на лету,
 // свет умножается при показе. Телефон: только свечение ленты с ореолом, без расчёта света.
-const LED_MAX = 4;
+const LED_MAX = TOUCH ? 2 : 4;
+function ledCanBake() { const gl = rend.getContext(); return !!(rend.capabilities.isWebGL2 && (gl.getExtension('EXT_color_buffer_float') || gl.getExtension('EXT_color_buffer_half_float'))); }
 // цвет и вид — из материала ленты (база Алексея: «…теплый свет, 3000К», «COB…», «Neon…», «…RGB…»), в Базисе отдельно не задаётся
 function kelvinColor(K) {
   const k = K / 100, r = k <= 66 ? 255 : 329.7 * Math.pow(k - 60, -0.1332), g = k <= 66 ? 99.47 * Math.log(k) - 161.1 : 288.1 * Math.pow(k - 60, -0.0755), b = k >= 66 ? 255 : k <= 19 ? 0 : 138.5 * Math.log(k - 10) - 305;
@@ -3311,7 +3312,8 @@ function ledPrepare() {
   LED.strips.forEach(ledFacing);
   // линза — полупрозрачная часть светильника, или с самой маленькой глубиной по свету, если прозрачной нет
   for (const s of LED.strips) s.lens = s.fix.flatMap(q => q.meshes).filter(m => m.material.transparent || /линз/i.test(String(parts[m.userData.idx].n)));
-  if (TOUCH) {
+  LED.simple = TOUCH && !ledCanBake();
+  if (LED.simple) {
     const tex = ledGlowTex();
     for (const s of LED.strips) {
       const g = new THREE.Mesh(new THREE.PlaneGeometry(s.len + 120, 300), new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0, side: THREE.DoubleSide }));
@@ -3330,7 +3332,7 @@ function ledPrepare() {
     const cnt = Math.max(1, Math.round(LED_MAX * s.len / total));
     for (let i = 0; i < cnt && LED.lights.length < LED_MAX; i++) {
       const l = new THREE.SpotLight(0xffffff, 0, 2800, 1.3, 1, 1.5);
-      l.castShadow = true; l.shadow.mapSize.set(1536, 1536); l.shadow.camera.near = 3; l.shadow.camera.far = 2800; l.shadow.bias = -0.0004; l.shadow.normalBias = 0.6; l.shadow.radius = 5;
+      l.castShadow = true; l.shadow.mapSize.set(TOUCH ? 1024 : 1536, TOUCH ? 1024 : 1536); l.shadow.camera.near = 3; l.shadow.camera.far = 2800; l.shadow.bias = -0.0004; l.shadow.normalBias = 0.6; l.shadow.radius = 5;
       l.layers.set(1); s.p.g.add(l); s.p.g.add(l.target); LED.lights.push(l); LED.spots.push({ l, s, i, cnt });
     }
   }
@@ -3340,7 +3342,7 @@ function ledPrepare() {
 // Карта света: у каждой плоскости детали своё место на общей большой картинке. Плоскости — по направлению и положению; перевёрнутые
 // Базисом треугольники идут вместе с соседями, поэтому направление у группы одно
 function ledAtlas() {
-  const S = Math.min(4096, rend.capabilities.maxTextureSize), own = new Set(LED.strips.flatMap(s => s.p.meshes.concat(s.fix.flatMap(q => q.meshes))));
+  const S = Math.min(TOUCH ? 1536 : 4096, rend.capabilities.maxTextureSize), own = new Set(LED.strips.flatMap(s => s.p.meshes.concat(s.fix.flatMap(q => q.meshes))));
   const v = i => new THREE.Vector3(), charts = [], A = new THREE.Vector3(), B = new THREE.Vector3(), C = new THREE.Vector3(), e1 = new THREE.Vector3(), e2 = new THREE.Vector3(), nr = new THREE.Vector3();
   const none = g => { if (!g.attributes.uvLed) { g.setAttribute('uvLed', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 2).fill(-2), 2)); g.setAttribute('nLed', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 3), 3)); } };
   const near = box => LED.strips.some(s => { const c = box.clampPoint(s.ctr, new THREE.Vector3()); return c.distanceTo(s.ctr) < 3000 + s.len / 2; });
@@ -3422,7 +3424,7 @@ function ledBakeInit() {
   LED.qp = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), LED.qm); LED.qp.frustumCulled = false; LED.qs.add(LED.qp);
 }
 function ledApply() {
-  const on = LED.on, k = LED.k, d = on ? (TOUCH ? 0.4 : 0.1) : 1;
+  const on = LED.on, k = LED.k, d = on ? (LED.simple ? 0.4 : 0.1) : 1;
   amb.intensity = 1.9 * d; d1.intensity = 1.5 * d; d2.intensity = 0.6 * d; scene.background = on ? LED_NIGHT : null;
   document.body.classList.toggle('night', on);   // вечером панели тёмные: тёмные надписи на чёрном фоне не читались
   ledEmit(); ledUniforms();
@@ -3435,7 +3437,7 @@ function ledApply() {
   need();
 }
 const LED_WHITE = new THREE.Color(0xffffff), LED_BLACK = new THREE.Color(0), LED_NIGHT = new THREE.Color(0x0d0e11);
-const LED_FRAMES = 192, LED_SHOW = 64, LED_BUDGET = 12, ledFrames = () => LED.strips.some(s => s.cob) ? LED_FRAMES * 2 : LED_FRAMES;
+const LED_FRAMES = TOUCH ? 48 : 192, LED_SHOW = TOUCH ? 24 : 64, LED_BUDGET = TOUCH ? 10 : 12, ledFrames = () => LED.strips.some(s => s.cob) ? LED_FRAMES * 2 : LED_FRAMES;
 function ledEmit() {
   for (const s of LED.strips) for (const m of s.p.meshes.concat(s.lens || [])) { m.material.emissive.copy(LED.on ? s.col : LED_BLACK); m.material.emissiveIntensity = LED.on ? 1.2 + LED.k * 1.6 : 0; }
 }
@@ -3472,11 +3474,13 @@ function ledSample() {
     LED.dm.uniforms.t.value = LED.ar.texture; rend.setRenderTarget(LED.dr); rend.render(LED.qs, LED.qc);
     LED.lastShow = LED.n; LED.shown = true; ledUniforms(); need();
   }
+  // телефон: посчитал — черновики сразу из памяти
+  if (TOUCH && LED.n >= ledFrames()) { LED.rt.dispose(); LED.aw.dispose(); LED.ar.dispose(); }
   rend.setRenderTarget(null); rend.autoClear = ac; rend.setClearColor(ccol, ca); scene.background = bg;
 }
 // ползунок и колесо: готовый свет только умножается, ничего не считается заново
-function ledLive() { if (!LED.on) return; ledEmit(); ledUniforms(); if (TOUCH) ledApply(); need(); }
-function ledSet(on) { if (on) ledPrepare(); LED.on = on; LED.n = 0; ledApply(); }
+function ledLive() { if (!LED.on) return; ledEmit(); ledUniforms(); if (LED.simple) ledApply(); need(); }
+function ledSet(on) { if (on) ledPrepare(); LED.on = on; if (!LED.shown) LED.n = 0; ledApply(); }
 // цветовое колесо RGB-ленты: кольцо над кнопкой, тянешь — меняется цвет свечения
 function ledWheel() {
   const c = document.createElement('canvas'); c.id = 'ledW'; c.width = c.height = 240; c.style.cssText = 'display:none;position:fixed;width:120px;height:120px;z-index:30;cursor:pointer;touch-action:none';
@@ -7396,7 +7400,7 @@ function loop() {
     if (flip && TOUCH) fitVisible();                       // повернули телефон — вписать модель заново
   }
   tick();
-  if (LED.on && !TOUCH) ledSample();
+  if (LED.on && LED.baked) ledSample();
   if (!dirty) return;
   dirty = false;
   rend.render(scene, cam);
