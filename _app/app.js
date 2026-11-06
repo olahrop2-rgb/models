@@ -3025,6 +3025,7 @@ const _tri = new THREE.Triangle(), _tb = new THREE.Box3(), _q = new THREE.Vector
 const _ta = new THREE.Vector3(), _tb2 = new THREE.Vector3(), _tc = new THREE.Vector3();
 function holeTouches(p, A, E, R) {
   const L = A.distanceTo(E), n = Math.max(1, Math.ceil(L / Math.min(1, R / 2))), lim = R + 0.5;
+  const step = L / n, _d = E.clone().sub(A).normalize(), _v = new THREE.Vector3();
   _tb.setFromPoints([A, E]).expandByScalar(lim);
   for (const m of p.meshes) {
     if (m.userData.mark) continue;
@@ -3036,7 +3037,10 @@ function holeTouches(p, A, E, R) {
       if (lo[0] > _tb.max.x || hi[0] < _tb.min.x || lo[1] > _tb.max.y || hi[1] < _tb.min.y || lo[2] > _tb.max.z || hi[2] < _tb.min.z) continue;
       for (let s = 0; s <= n; s++) {
         _q.lerpVectors(A, E, s / n); _tri.closestPointToPoint(_q, _c);
-        if (_c.distanceTo(_q) <= lim) return true;
+        // рядом с поверхностью — только поперёк оси; за концом отверстия не считается: конфирмат спинки в 1 мм от тонкого листа «ткань»
+        // (трибуна 002_1) лист не задевает, а считался задевшим — вырез ломал лист
+        _v.subVectors(_c, _q); const ax = Math.abs(_v.dot(_d)), rad = Math.sqrt(Math.max(0, _v.lengthSq() - ax * ax));
+        if (rad <= lim && ax <= step * 0.75) return true;
       }
     }
   }
