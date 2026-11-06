@@ -1717,6 +1717,15 @@ function lineKind(c) {
   if (r > 90 && b > 90 && g < 60) return 'purple';
   return 'black';
 }
+// низ и верх проёма — одна рамка: в одном месте стены вертикаль от низа до верха, из кусков (фартук делит её); от низа, а не от пола
+function isFramed(P, mids) {
+  return P.verts.some(v => {
+    if (v.u < Math.min(mids[0].u0, mids[1].u0) - 30 || v.u > Math.max(mids[0].u1, mids[1].u1) + 30) return false;
+    const col = P.verts.filter(q => Math.abs(q.u - v.u) < 30 && q.y1 > mids[0].y - 30).sort((a, b) => a.y0 - b.y0);
+    let reach = mids[0].y + 30; for (const q of col) if (q.y0 <= reach + 30) reach = Math.max(reach, q.y1);
+    return col.length && col[0].y0 <= mids[0].y + 30 && reach >= mids[1].y - 30;
+  });
+}
 function buildRoom() {
   // линии по слоям помещения («Слой 0», «Слой 0_1»…)
   const byLayer = new Map();
@@ -1768,7 +1777,7 @@ function buildRoom() {
     }
     // вертикали в плоскостях стен (чёрные) — для проверки, что низ и верх проёма — одна рамка
     for (const s of segs) {
-      if (s.kind !== 'black' || Math.abs(s.B.y - s.A.y) < 100) continue;
+      if (!(s.kind === 'black' || s.kind === 'yellow') || Math.abs(s.B.y - s.A.y) < 10) continue;   // фартук делит вертикаль рамки окна на куски (059)
       for (const P of planes) {
         if (offOf(P, s.A) > 40 || offOf(P, s.B) > 40) continue;
         P.verts.push({ u: (s.A.clone().setY(0).sub(P.o).dot(P.d) + s.B.clone().setY(0).sub(P.o).dot(P.d)) / 2, y0: Math.min(s.A.y, s.B.y), y1: Math.max(s.A.y, s.B.y) });
@@ -1780,7 +1789,8 @@ function buildRoom() {
       for (const P of planes) {
         if (Math.abs(P.d.dot(d)) < 0.995 || offOf(P, s.A) > 40 || offOf(P, s.B) > 40) continue;
         const u0 = s.A.clone().setY(0).sub(P.o).dot(P.d), u1 = s.B.clone().setY(0).sub(P.o).dot(P.d);
-        P.lines.push({ u0: Math.min(u0, u1), u1: Math.max(u0, u1), y: (s.A.y + s.B.y) / 2, floor: floor.includes(s), kind: s.kind });
+        const ym = (s.A.y + s.B.y) / 2;
+        P.lines.push({ u0: Math.min(u0, u1), u1: Math.max(u0, u1), y: ym, floor: floor.includes(s), kind: s.kind, low: s.kind === 'red' && Math.abs(ym - fy) < 80 });
       }
     }
     let cyAll = fy + 2500, gotTop = false;
@@ -1803,14 +1813,15 @@ function buildRoom() {
       for (let k = 0; k + 1 < us.length; k++) {
         const ua = us[k], ub = us[k + 1]; if (ub - ua < 1) continue;
         const um = (ua + ub) / 2, cov = P.lines.filter(l => l.u0 <= um + 1 && l.u1 >= um - 1);
-        const hl = cov.filter(l => !l.floor && l.y > fy + 20).sort((a, b) => a.y - b.y);
+        const hl = cov.filter(l => !l.floor && !l.low && l.y > fy + 20).sort((a, b) => a.y - b.y);
         const hs = []; for (const l of hl) if (!hs.length || l.y - hs[hs.length - 1].y > 5) hs.push(l);
         let top = hs.length ? hs[hs.length - 1].y : null;
+        const rawTop = top;
         if (top !== null) {
           const clean = hs.filter(l => l.kind === 'black' && l.y > top - 250 && l.y < top - 5);   // чистовой потолок под черновым
           if (hs[hs.length - 1].kind === 'red' && clean.length) top = clean[clean.length - 1].y;
         }
-        cells.push({ ua, ub, onFloor: cov.some(l => l.floor), hs, top });
+        cells.push({ ua, ub, onFloor: cov.some(l => l.floor), onRed: cov.some(l => l.low), hs, top, rawTop });
       }
       cells.forEach((c, k) => {
         if (c.top !== null) return;
@@ -1820,14 +1831,16 @@ function buildRoom() {
       for (const c of cells) {
         if (c.top === null) continue;
         // проёмы — только по чёрным линиям: красная коробочка коммуникаций под окном (030_6, 72…116 мм) давала «проём» вместо окна
-        const { ua, ub, top } = c, mids = c.hs.filter(l => l.y < top - 5 && l.kind === 'black');
+        const { ua, ub } = c; let top = c.top, mids = c.hs.filter(l => l.y < top - 5 && l.kind === 'black');
+        const midsRaw = c.rawTop === null ? mids : c.hs.filter(l => l.y < c.rawTop - 5 && l.kind === 'black');
+        if (midsRaw.length >= 2 && mids.length < 2 && isFramed(P, midsRaw)) { mids = midsRaw; top = c.rawTop; }
         // окно — только настоящая рамка: низ и верх соединены хотя бы одной вертикалью в плоскости стены (Алексей 30.10)
-        const framed = mids.length >= 2 && P.verts.some(v => v.y0 <= mids[0].y + 30 && v.y1 >= mids[1].y - 30 &&
-          v.u >= Math.min(mids[0].u0, mids[1].u0) - 30 && v.u <= Math.max(mids[0].u1, mids[1].u1) + 30);
+        const framed = mids.length >= 2 && isFramed(P, mids);
         if (c.onFloor) {
           if (framed) { quad(ua, ub, fy, mids[0].y); quad(ua, ub, mids[1].y, top); P.wins.push({ ua, ub, y0: mids[0].y, y1: mids[1].y }); }   // окно
           else quad(ua, ub, fy, top);
         } else if (mids.length) quad(ua, ub, mids[0].y, top);                                     // над проёмом двери
+        else if (c.onRed && ub - ua < 500) quad(ua, ub, fy, top);                                // короткий кусок только с черновым полом, двери нет — стена; шире — проход
         if (top > cyAll || !gotTop) { cyAll = gotTop ? Math.max(cyAll, top) : top; gotTop = true; }
       }
       if (!tri.length) continue;
@@ -1898,7 +1911,10 @@ function buildRoom() {
     }
     // плитка и стекло — замкнутые четырёхугольники своего цвета
     for (const [col, kind] of [['yellow', 'tile'], ['blue', 'glass']]) {
-      for (const loop of loops4(segs.filter(s => s.kind === col))) addQuad(loop[0], loop[1], loop[2], loop[3], kind, cen.clone().sub(loop[0]));
+      const ss = segs.filter(s => s.kind === col), rr = rectsOf(ss, cen), mid = q => q[0].clone().add(q[2]).multiplyScalar(0.5);
+      // старый поиск оставлен для нарисованных не под прямым углом (051_1, 030_6)
+      for (const q of loops4(ss)) if (!rr.some(r => mid(r).distanceTo(mid(q)) < 80)) rr.push(q);
+      for (const loop of rr) addQuad(loop[0], loop[1], loop[2], loop[3], kind, cen.clone().sub(loop[0]));
     }
   }
   syncRoom();
@@ -1918,6 +1934,25 @@ function loops4(segs) {
     if (chain.length === 4 && near(pts[4], pts[0])) { chain.forEach(k => used.add(k)); res.push(pts.slice(0, 4)); }
   }
   return res;
+}
+// прямоугольники из отрезков (фартук, стекло). Они нарисованы коробочкой с толщиной: лицо и тыл в 15 мм, поэтому точки сливаются только
+// вплотную (8 мм), из двух параллельных лиц берётся ближнее к комнате
+function rectsOf(segs, cen) {
+  const pts = [], at = p => { let i = pts.findIndex(q => q.distanceTo(p) < 8); if (i < 0) { i = pts.length; pts.push(p); } return i; };
+  const adj = new Map(), link = (a, b) => { if (a === b) return; if (!adj.has(a)) adj.set(a, new Set()); adj.get(a).add(b); };
+  for (const s of segs) { const a = at(s.A), b = at(s.B); link(a, b); link(b, a); }
+  const out = [], seen = new Set(), ang = (p, q, r) => { const u = pts[p].clone().sub(pts[q]).normalize(), v = pts[r].clone().sub(pts[q]).normalize(); return Math.abs(u.dot(v)); };
+  for (const [a, na] of adj) for (const b of na) for (const c of adj.get(b) || []) {
+    if (c === a || ang(a, b, c) > 0.08) continue;
+    for (const d of adj.get(c) || []) {
+      if (d === b || d === a || !(adj.get(d) || new Set()).has(a) || ang(b, c, d) > 0.08 || ang(c, d, a) > 0.08 || ang(d, a, b) > 0.08) continue;
+      const key = [a, b, c, d].sort((x, y) => x - y).join(','); if (seen.has(key)) continue; seen.add(key);
+      const P = [a, b, c, d].map(i => pts[i]); if (P[0].distanceTo(P[1]) < 100 || P[1].distanceTo(P[2]) < 100) continue;
+      const n = P[1].clone().sub(P[0]).cross(P[3].clone().sub(P[0])).normalize(); if (Math.abs(n.dot(P[2].clone().sub(P[0]).normalize())) > 0.05) continue;
+      out.push({ P, n, c: P[0].clone().add(P[2]).multiplyScalar(0.5) });
+    }
+  }
+  return out.filter(r => !out.some(q => q !== r && Math.abs(q.n.dot(r.n)) > 0.98 && Math.abs(q.c.clone().sub(r.c).dot(r.n)) < 60 && q.c.clone().sub(r.c).length() < 80 && q.c.distanceTo(cen) < r.c.distanceTo(cen))).map(r => r.P);
 }
 // видимость помещения — вместе с линиями своего слоя (погасили «Слой 0» в структуре — пропали и стены); в кресленні — нет
 function syncRoom() {
@@ -3376,7 +3411,7 @@ function ledAtlas() {
   roomSkinInit();
   for (const s of ROOM.surfs) {
     const m = s.m, g = m.geometry; m.frustumCulled = false; m.layers.enable(1); m.castShadow = false; m.receiveShadow = true;
-    if (s.kind === 'wall' || s.kind === 'floor') chart(g); else none(g);
+    if (s.kind === 'wall' || s.kind === 'floor' || s.kind === 'tile') chart(g); else none(g);
   }
   // раскладка рядами: высокие первыми; не влезло — крупнее клетка
   charts.sort((p, q) => q.H - p.H);
@@ -3521,7 +3556,8 @@ function wireLed() {
 // ---------------- комната с покрытием (06.11, для показа заказчику) ----------------
 // Пол и стены из линий «Слоя 0» обычно бледные, для замеров. Кнопка-домик делает их настоящими: набор полов и цвет стен выбирается на
 // странице, в Базисе ничего не задаётся. Картинки полов рисуются здесь же, файлов не нужно. Ближняя стена по-прежнему не мешает смотреть.
-const SKIN = { on: false, floor: 0, wall: 0, mats: {}, tex: [] };
+const SKIN = { on: false, floor: 0, wall: 0, tile: 1, mats: {}, tex: [] };
+const ROOM_TILES = [['білий', 0xf2f0ea], ['сірий', 0x9ea2a8], ['чорний', 0x2a2b2e], ['беж', 0xd9cdb8]];
 const ROOM_FLOORS = [['дуб світлий', 'plank', ['#cdaa7d', '#c19a6b', '#d8ba90', '#bb9262']], ['дуб темний', 'plank', ['#5d4432', '#6b4f3a', '#513b2b', '#74563f']], ['бетон', 'conc', ['#9b9c9b']], ['плитка', 'tile', ['#d9d6cf']]];
 const ROOM_WALLS = [['білий', 0xece9e3], ['сірий', 0xb9bcc0], ['беж', 0xd8cbb6], ['графіт', 0x55585e]];
 function floorTex(i) {
@@ -3554,6 +3590,7 @@ function roomSkinInit() {
   SKIN.mats.wall = new THREE.MeshLambertMaterial({ color: ROOM_WALLS[0][1], side: THREE.FrontSide });
   SKIN.mats.reveal = new THREE.MeshLambertMaterial({ color: ROOM_WALLS[0][1], side: THREE.DoubleSide });
   SKIN.mats.floor = new THREE.MeshLambertMaterial({ map: floorTex(0), side: THREE.FrontSide });
+  SKIN.mats.tile = new THREE.MeshLambertMaterial({ color: ROOM_TILES[1][1], side: THREE.DoubleSide });
   for (const s of ROOM.surfs) {
     s.m0 = s.m.material; const g = s.m.geometry; if (!g.attributes.normal) g.computeVertexNormals();
     if (s.kind === 'floor') { const P = g.attributes.position, U = new Float32Array(P.count * 2); for (let i = 0; i < P.count; i++) { U[i * 2] = P.getX(i) / 1520; U[i * 2 + 1] = P.getZ(i) / 1520; } g.setAttribute('uv', new THREE.BufferAttribute(U, 2)); }
@@ -3562,15 +3599,17 @@ function roomSkinInit() {
 function roomSkin() {
   roomSkinInit();
   SKIN.mats.floor.map = floorTex(SKIN.floor); SKIN.mats.floor.needsUpdate = true;
-  SKIN.mats.wall.color.setHex(ROOM_WALLS[SKIN.wall][1]); SKIN.mats.reveal.color.setHex(ROOM_WALLS[SKIN.wall][1]);
+  SKIN.mats.wall.color.setHex(ROOM_WALLS[SKIN.wall][1]); SKIN.mats.reveal.color.setHex(ROOM_WALLS[SKIN.wall][1]); SKIN.mats.tile.color.setHex(ROOM_TILES[SKIN.tile][1]);
   for (const s of ROOM.surfs) {
     if (s.kind === 'floor') s.m.material = SKIN.on ? SKIN.mats.floor : s.m0;
     else if (s.kind === 'wall') s.m.material = SKIN.on ? (s.m0 === ROOM_MAT.reveal ? SKIN.mats.reveal : SKIN.mats.wall) : s.m0;
-    s.m.renderOrder = SKIN.on ? 0 : (s.kind === 'floor' ? -2 : -1);
+    else if (s.kind === 'tile') s.m.material = SKIN.on ? SKIN.mats.tile : s.m0;
+    if (s.kind !== 'glass') s.m.renderOrder = SKIN.on ? 0 : (s.kind === 'floor' ? -2 : -1);
   }
-  $('bRoom').classList.toggle('on', SKIN.on); $('roomP').style.display = SKIN.on ? '' : 'none';
+  $('bRoom').classList.toggle('on', SKIN.on); if (!SKIN.on) roomPanel(false);
   need();
 }
+function roomPanel(show) { SKIN.panel = show; $('roomP').style.display = show ? '' : 'none'; }
 function wireRoom() {
   if (!ROOM.surfs.some(s => s.kind === 'floor')) return;
   const b = $('bRoom'); b.style.display = '';
@@ -3581,9 +3620,11 @@ function wireRoom() {
     list.forEach((it, i) => { const q = document.createElement('button'); q.textContent = it[0]; q.style.cssText = 'padding:4px 8px;border-radius:7px;border:1px solid #bbb;background:' + (i === SKIN[key] ? '#2b6cb0;color:#fff' : '#fff'); q.onclick = () => { SKIN[key] = i; [...d.querySelectorAll('button')].forEach((z, n) => { z.style.background = n === i ? '#2b6cb0' : '#fff'; z.style.color = n === i ? '#fff' : '#222'; }); roomSkin(); }; d.appendChild(q); });
     p.appendChild(d);
   };
-  row('підлога', ROOM_FLOORS, 'floor'); row('стіни', ROOM_WALLS, 'wall');
+  row('підлога', ROOM_FLOORS, 'floor'); row('стіни', ROOM_WALLS, 'wall'); if (ROOM.surfs.some(s => s.kind === 'tile')) row('фартук', ROOM_TILES, 'tile');
   document.body.appendChild(p);
-  b.onclick = () => { SKIN.on = !SKIN.on; roomSkin(); };
+  // домик: включить с выбором; выбор спрятан — показать; показан — выключить комнату. Коснулся модели — выбор прячется, комната остаётся
+  b.onclick = () => { if (!SKIN.on) { SKIN.on = true; roomSkin(); roomPanel(true); } else if (!SKIN.panel) roomPanel(true); else { SKIN.on = false; roomSkin(); } };
+  rend.domElement.addEventListener('pointerdown', () => { if (SKIN.panel) roomPanel(false); });
 }
 
 function wireFull() {
