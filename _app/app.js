@@ -2163,7 +2163,7 @@ function drawerDims(i) {
   const top = parts[i].chainA[0], nd = animNode[top];
   // детали фасада ящика (блоки типа «фасад»/«фронт», метка двери) в коробку не берём: кромка рамочного фасада
   // оказывалась «самой нижней плоской» и считалась дном — «корисна висота 12» (050_8, 29.09)
-  const inFac = j => parts[j].isDoor || chainFt(j).some(t => t === 'фасад' || t === 'фронт');
+  const inFac = j => parts[j].isDoor || chainFt(j).some(t => t === 'фасад' || /^фронт/i.test(t));
   const all = partsUnder(top).filter(j => !parts[j].isF && !parts[j].isL && !parts[j].isB);
   const own = all.filter(j => !inFac(j));
   if (own.length < 3) return null;
@@ -3199,24 +3199,114 @@ async function cutHolesSoon() {
     // касание торцом (шкант соседней перегородки у края полки) — мимо
     boxes.forEach((b, i) => { if (b && b.intersectsBox(tb) && segIn(A, E, b, 0.2) > 0.3 && holeTouches(parts[i], A, E, R)) { if (!jobs.has(i)) jobs.set(i, []); jobs.get(i).push(hk); } });
   });
-  const list = [...jobs]; CUT.all = list.length; let k = 0;
+  // тяжёлые детали первыми — ядра загружены ровнее
+  const list = [...jobs].sort((a, b) => b[1].length - a[1].length); CUT.all = list.length;
+  const jobOf = ([i, hks]) => ({ i, geoms: parts[i].meshes.filter(m => !m.userData.mark).map(m => { const a = m.geometry.attributes; return { p: a.position.array, n: a.normal ? a.normal.array : null, u: a.uv ? a.uv.array : null }; }),
+    hs: hks.map(hk => [M.holes[hk], hcont.get(hk) || null]) });
+  // результаты кладём в модель, только когда чертёжный стол закрыт (как раньше: на столе деталь не меняется под руками)
+  const pend = []; let waitDraw = false;
+  const flush = () => {
+    if (drawOn) { if (!waitDraw) { waitDraw = true; setTimeout(() => { waitDraw = false; flush(); }, 800); } return; }
+    while (pend.length) { const r = pend.shift(); try { cutApply(r.i, r.r); } catch (e) { console.warn('вырезы: деталь', r.i, e && e.message); } CUT.done++; }
+    need();
+  };
+  // Алексей 10.11: остров 002_7 (2584 отверстия) держал вращение — одна деталь режется до 40 с подряд. Режут помощники на других ядрах,
+  // сюда приходит готовая форма детали; не завелись помощники — режем здесь, как раньше
+  const ws = await cutWorkers(Math.min(list.length, cutCores()));
+  if (ws) {
+    let next = 0;
+    const feed = w => { if (next >= list.length) { w.terminate(); return; } const j = jobOf(list[next++]); w.postMessage(j); };
+    for (const w of ws) {
+      w.onmessage = e => {
+        const d = e.data; if (d.err) console.warn('вырезы: деталь', d.i, d.err);
+        if (d.ms != null) { CUT.ms = (CUT.ms || 0) + d.ms; if (!CUT.max || d.ms > CUT.max[0]) CUT.max = [Math.round(d.ms), d.i, d.n]; }
+        pend.push({ i: d.i, r: d.r }); flush(); feed(w);
+      };
+      w.onerror = e => console.warn('вырезы: помощник упал —', e && e.message);
+      feed(w);
+    }
+    return;
+  }
+  const lib2 = Object.assign({}, lib); let k = 0;
   const step = () => {
     const t0 = performance.now();
     while (k < list.length && !drawOn && performance.now() - t0 < 30) {
-      const t1 = performance.now();
-      try { cutPart(list[k][0], list[k][1], hcont, Brush, ev, SUBTRACTION, ADDITION); } catch (e) { console.warn('вырезы: деталь', list[k][0], e && e.message); }
-      const dt = performance.now() - t1; CUT.ms = (CUT.ms || 0) + dt; if (!CUT.max || dt > CUT.max[0]) CUT.max = [Math.round(dt), list[k][0], list[k][1].length];
-      k++; CUT.done = k;
+      const t1 = performance.now(), j = jobOf(list[k]);
+      let r = null; try { r = cutCompute(j.geoms, j.hs, lib2); } catch (e) { console.warn('вырезы: деталь', j.i, e && e.message); }
+      const dt = performance.now() - t1; CUT.ms = (CUT.ms || 0) + dt; if (!CUT.max || dt > CUT.max[0]) CUT.max = [Math.round(dt), j.i, j.hs.length];
+      pend.push({ i: j.i, r }); k++;
     }
-    need();
+    flush();
     if (k < list.length) setTimeout(step, drawOn ? 800 : 0);
   };
   setTimeout(step, 300);
 }
-function cutPart(i, hks, hcont, Brush, ev, SUBTRACTION, ADDITION) {
-  const p = parts[i], ms = p.meshes.filter(m => !m.userData.mark); if (!ms.length) return;
-  const tools = hks.map(hk => holeTool(M.holes[hk], hcont.get(hk))).filter(Boolean); if (!tools.length) return;
-  const mats = ms.map(m => m.material);
+// сколько ядер отдать вырезам: все, кроме двух (одно — вращению модели, одно — системе), не больше 8
+function cutCores() { return Math.max(1, Math.min(8, (navigator.hardwareConcurrency || 4) - 2)); }
+// помощники на других ядрах: та же библиотека вырезов и те же функции расчёта, что здесь (текст функций берётся отсюда же — одна копия)
+async function cutWorkers(n) {
+  if (!window.Worker || !window.Blob || !(n > 0)) return null;
+  const made = [];
+  try {
+    const im = document.querySelector('script[type=importmap]');
+    const threeU = new URL(JSON.parse(im.textContent).imports.three, document.baseURI).href;
+    const csgU = window.__CSG || new URL('./lib/csg.module.js', import.meta.url).href;
+    // библиотека вырезов берёт части three по имени модуля — у помощника такого имени нет: её ссылки на three заменяем
+    // на одну общую выдачу в самом начале (сам three помощник грузит до неё)
+    const binds = [];
+    const csgTxt = 'const {' + '\u0000' + '} = self.THREE;\n' + (await (await fetch(csgU)).text()).replace(/import\s*\{([^}]*)\}\s*from\s*["']three["']\s*;?/g,
+      (_, b) => { binds.push(b.replace(/([\w$]+)\s+as\s+([\w$]+)/g, '$1: $2')); return ''; });
+    const csgFull = csgTxt.replace('\u0000', binds.join(', '));
+    // страница с диска (file://): браузер пускает помощника только из ссылки-«data:», из интернета — обычным путём
+    const disk = location.protocol === 'file:';
+    const asUrl = s => disk ? 'data:text/javascript,' + encodeURIComponent(s) : URL.createObjectURL(new Blob([s], { type: 'text/javascript' }));
+    const csgB = asUrl(csgFull);
+    const src = [
+      'import * as THREE from ' + JSON.stringify(threeU) + ';',
+      'self.THREE = THREE;',
+      // приём сообщений — сразу, библиотека догружается следом (иначе первое сообщение теряется, проба 10.11 по ссылке из интернета)
+      'const ready = import(' + JSON.stringify(csgB) + ').then(CSG => Object.assign({}, CSG));',
+      'const v3a = ' + v3a.toString() + ';',
+      'const _ta = new THREE.Vector3(), _tb2 = new THREE.Vector3(), _tc = new THREE.Vector3();',
+      contourLoops.toString(), holeTool.toString(), rimLines.toString(), mergeGeoms.toString(), cutCompute.toString(),
+      'onmessage = async e => { const j = e.data; let lib;',
+      '  try { lib = await ready; } catch (err) { postMessage({ fail: String(err && err.message || err) }); return; }',
+      '  if (j === "ping") { postMessage("pong"); return; } const t = performance.now();',
+      '  try { const r = cutCompute(j.geoms, j.hs, lib), tr = [];',
+      '    if (r && r.out) { for (const o of r.out) tr.push(o.P.buffer, o.N.buffer, o.U.buffer); tr.push(r.rim.buffer); }',
+      '    postMessage({ i: j.i, r, ms: performance.now() - t, n: j.hs.length }, tr); }',
+      '  catch (err) { postMessage({ i: j.i, r: null, err: String(err && err.message || err), ms: performance.now() - t, n: j.hs.length }); } };'
+    ].join('\n');
+    const url = asUrl(src);
+    for (let k = 0; k < n; k++) made.push(new Worker(url, { type: 'module' }));
+    // помощник поднялся — отвечает; не ответил за 15 с (не загрузилась библиотека) — режем по-старому
+    await Promise.all(made.map(w => new Promise((ok, bad) => {
+      const tm = setTimeout(() => bad(new Error('помощник не ответил')), 15000);
+      w.onmessage = e => { if (e.data === 'pong') { clearTimeout(tm); ok(); } else if (e.data && e.data.fail) { clearTimeout(tm); bad(new Error(e.data.fail)); } };
+      w.onerror = e => { clearTimeout(tm); bad(new Error(e && e.message || 'не загрузился')); };
+      w.postMessage('ping');
+    })));
+    return made;
+  } catch (e) {
+    for (const w of made) w.terminate();
+    console.warn('вырезы: помощники не завелись, режу здесь —', e && e.message); return null;
+  }
+}
+// расчёт выреза одной детали — без сцены: на входе куски детали (точки, нормали, развёртка) и отверстия, на выходе новые куски
+// по номеру исходного куска + обвод краёв отверстий. Работает и у помощника на другом ядре, и здесь запасным путём
+function cutCompute(geoms, hs, lib) {
+  if (!geoms.length) return null;
+  const { Brush, SUBTRACTION, ADDITION } = lib;
+  if (!lib.ev) { lib.ev = new lib.Evaluator(); lib.ev.useGroups = true; lib.ev.attributes = ['position', 'uv', 'normal']; }
+  const ev = lib.ev;
+  const tools = hs.map(([h, c]) => holeTool(h, c)).filter(Boolean); if (!tools.length) return null;
+  // куски детали; материал — метка с номером куска (настоящие материалы подставляются при раскладке в модель)
+  const src = geoms.map(q => {
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(q.p, 3));
+    if (q.n) g.setAttribute('normal', new THREE.BufferAttribute(q.n, 3)); if (q.u) g.setAttribute('uv', new THREE.BufferAttribute(q.u, 2));
+    g.computeBoundingBox(); return g;
+  });
+  const mats = src.map((g, k) => { const m = new THREE.MeshBasicMaterial(); m.userData.k = k; return m; });
   // пересекающиеся свёрла (карман Cabineo — три ⌀15 внахлёст) сначала сливаются, иначе вырез считается неверно
   const groups = [];
   for (const g of tools) {
@@ -3231,30 +3321,25 @@ function cutPart(i, hks, hcont, Brush, ev, SUBTRACTION, ADDITION) {
     for (let q = 1; q < G.geoms.length; q++) { const t = new Brush(G.geoms[q], mats[0]); t.updateMatrixWorld(); b = ev.evaluate(b, t, ADDITION); }
     const g = b.geometry.index ? b.geometry.toNonIndexed() : b.geometry; return g;
   });
-  const A = new Brush(mergeGeoms(ms.map(m => m.geometry), ms.map((m, k) => k)), mats);
+  const A = new Brush(mergeGeoms(src, src.map((g, k) => k)), mats);
   const B = new Brush(mergeGeoms(toolGeoms), mats[0]);
   A.updateMatrixWorld(); B.updateMatrixWorld();
   const res = ev.evaluate(A, B, SUBTRACTION), rg = res.geometry, rm = Array.isArray(res.material) ? res.material : [res.material];
-  if (!rg.attributes.position.count) return;
+  if (!rg.attributes.position.count) return null;
   // вырез не должен съедать деталь: отверстие снимает крохи площади, а тонкий гнутый лист он терял целиком (трибуна 002_1, «ткань»: вырез
   // под конфирмат убрал 1,48 м² из 2,26). Площадь упала — деталь остаётся целой, без выреза
   { const sq = g => { const P = g.attributes.position; let s = 0; for (let q = 0; q + 2 < P.count; q += 3) { _ta.fromBufferAttribute(P, q); _tb2.fromBufferAttribute(P, q + 1); _tc.fromBufferAttribute(P, q + 2); s += _tb2.sub(_ta).cross(_tc.sub(_ta)).length() / 2; } return s; };
-    const was = ms.reduce((s, m) => s + sq(m.geometry), 0), now = sq(rg);
-    if (now < was * 0.9) { CUT.kept = (CUT.kept || 0) + 1; console.warn('вырез пропущен, деталь', i, Math.round(was / 1e4) / 100, '→', Math.round(now / 1e4) / 100); return; } }
-  // результат — снова по детали на материал (остальной проигрыватель ждёт у детали один материал на кусок)
+    const was = src.reduce((s, g) => s + sq(g), 0), now = sq(rg);
+    if (now < was * 0.9) return { kept: [was, now] }; }
+  // результат — снова по куску на материал (остальной проигрыватель ждёт у детали один материал на кусок)
   const byMat = new Map();
   for (const gr of rg.groups.length ? rg.groups : [{ start: 0, count: rg.attributes.position.count, materialIndex: 0 }]) {
-    const mt = rm[gr.materialIndex] || mats[0];
-    if (!byMat.has(mt)) byMat.set(mt, []);
-    byMat.get(mt).push([gr.start, gr.count]);
+    const mt = rm[gr.materialIndex], k = mt && mt.userData && mt.userData.k != null ? mt.userData.k : 0;
+    if (!byMat.has(k)) byMat.set(k, []);
+    byMat.get(k).push([gr.start, gr.count]);
   }
-  const old = new Set(ms);
-  for (const m of ms) { p.g.remove(m); const k2 = picks.indexOf(m); if (k2 >= 0) picks.splice(k2, 1); }
-  const keep = p.meshes.filter(m => !old.has(m)); p.meshes.length = 0; p.meshes.push(...keep);
-  { const box = rawBox({ meshes: ms }), rg2 = rimLines(tools, box);
-    const ln = new THREE.LineSegments(rg2, EDGE); p.g.add(ln); p.edges.push(ln);
-    const lh = new THREE.LineSegments(rg2, EDGE_HID); lh.visible = curMode === 3; lh.renderOrder = 1; p.g.add(lh); hidEdges.push(lh); }
-  for (const [mt, ranges] of byMat) {
+  const out = [];
+  for (const [k, ranges] of byMat) {
     let n = 0; for (const [, c] of ranges) n += c;
     const P = new Float32Array(n * 3), N = new Float32Array(n * 3), U = new Float32Array(n * 2); let o = 0;
     for (const [s, c] of ranges) {
@@ -3263,8 +3348,29 @@ function cutPart(i, hks, hcont, Brush, ev, SUBTRACTION, ADDITION) {
       if (rg.attributes.uv) U.set(rg.attributes.uv.array.subarray(s * 2, (s + c) * 2), o * 2);
       o += c;
     }
+    out.push({ k, P, N, U });
+  }
+  const box = new THREE.Box3(); for (const g of src) box.union(g.boundingBox);
+  return { out, rim: new Float32Array(rimLines(tools, box).attributes.position.array) };
+}
+// готовый вырез — в модель: старые куски детали долой, новые с её же материалами, обвод краёв отверстий
+function cutApply(i, r) {
+  const p = parts[i], ms = p.meshes.filter(m => !m.userData.mark);
+  if (!r || !ms.length) return;
+  if (r.kept) { CUT.kept = (CUT.kept || 0) + 1; console.warn('вырез пропущен, деталь', i, Math.round(r.kept[0] / 1e4) / 100, '→', Math.round(r.kept[1] / 1e4) / 100); return; }
+  // куски с одним материалом — в один (как было)
+  const byMat = new Map();
+  for (const o of r.out) { const mt = (ms[o.k] || ms[0]).material; if (!byMat.has(mt)) byMat.set(mt, []); byMat.get(mt).push(o); }
+  const old = new Set(ms);
+  for (const m of ms) { p.g.remove(m); const k2 = picks.indexOf(m); if (k2 >= 0) picks.splice(k2, 1); }
+  const keep = p.meshes.filter(m => !old.has(m)); p.meshes.length = 0; p.meshes.push(...keep);
+  { const rg2 = new THREE.BufferGeometry(); rg2.setAttribute('position', new THREE.BufferAttribute(r.rim, 3));
+    const ln = new THREE.LineSegments(rg2, EDGE); p.g.add(ln); p.edges.push(ln);
+    const lh = new THREE.LineSegments(rg2, EDGE_HID); lh.visible = curMode === 3; lh.renderOrder = 1; p.g.add(lh); hidEdges.push(lh); }
+  for (const [mt, os] of byMat) {
+    const cat = key => { if (os.length === 1) return os[0][key]; let n = 0; for (const o of os) n += o[key].length; const a = new Float32Array(n); let s = 0; for (const o of os) { a.set(o[key], s); s += o[key].length; } return a; };
     const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(P, 3)); g.setAttribute('normal', new THREE.BufferAttribute(N, 3)); g.setAttribute('uv', new THREE.BufferAttribute(U, 2));
+    g.setAttribute('position', new THREE.BufferAttribute(cat('P'), 3)); g.setAttribute('normal', new THREE.BufferAttribute(cat('N'), 3)); g.setAttribute('uv', new THREE.BufferAttribute(cat('U'), 2));
     g.computeBoundingBox();
     const m = new THREE.Mesh(g, mt); m.userData.idx = i; p.g.add(m); p.meshes.push(m); picks.push(m);
   }
