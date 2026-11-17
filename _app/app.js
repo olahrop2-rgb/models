@@ -6,6 +6,24 @@ const $ = id => document.getElementById(id);
 // телефон/планшет: палец вместо мыши — свои жесты, компактные кнопки, структура снизу
 const TOUCH = matchMedia('(pointer: coarse)').matches;
 if (TOUCH) document.documentElement.classList.add('touch');
+// ссылка открыта внутри Телеграма (его встроенный браузер дёргается) — переоткрыть в обычном браузере телефона:
+// Андроид — Chrome через intent://, айфон — Safari через x-safari-https://. Одна попытка за вкладку (без петли);
+// не вышло — остаёмся в Телеграме, всё работает как раньше. Страница с диска (file://) не трогается.
+(() => {
+  try {
+    if (!/^https?:$/.test(location.protocol) || sessionStorage.getItem('tgOut')) return;
+    const ua = navigator.userAgent || '';
+    if (!(window.TelegramWebview || window.TelegramWebviewProxy || /Telegram/i.test(ua))) return;
+    const rest = location.host + location.pathname + location.search + location.hash;
+    let url = null;
+    // в intent «#» — начало служебной части, хвост адреса после «#» туда не берём
+    if (/android/i.test(ua)) url = 'intent://' + location.host + location.pathname + location.search + '#Intent;scheme=https;action=android.intent.action.VIEW;end';
+    else if (/iphone|ipad|ipod/i.test(ua)) url = 'x-safari-' + location.protocol.replace(':', '') + '://' + rest;
+    if (!url) return;
+    sessionStorage.setItem('tgOut', '1');
+    location.href = url;
+  } catch (e) { /* остаёмся в Телеграме */ }
+})();
 // страница не масштабируется и не уезжает — все касания забирает модель
 (() => {
   let vp = document.querySelector('meta[name=viewport]');
@@ -158,6 +176,8 @@ const need = () => { dirty = true; };
 // Рёбра деталей: видимые — тёмные (контрастнее прежнего серого, замечание 29.09); в режиме «линии» ещё и
 // скрытые за деталями — светлые, как у Базиса: сразу видно, что спереди, а что сзади.
 const EDGE = new THREE.LineBasicMaterial({ color: 0x0c0e11, transparent: true, opacity: 0.92 });
+// невидимые рисуются раньше видимых (renderOrder −1): задняя линия, легшая на экране ровно под передней, не закрывает её
+// серым (Алексей 11.11: живой вид спереди стола и кашпо был почти весь серым)
 const EDGE_HID = new THREE.LineBasicMaterial({ color: 0x9aa4ae, transparent: true, opacity: 0.45, depthWrite: false, depthFunc: THREE.GreaterDepth });
 let M;                 // модель
 const parts = [];      // деталь/единица фурнитуры: {g, meshes, edges, h, n, mat, isF, hidden, i}
@@ -528,7 +548,7 @@ function build() {
         if (pd.xl) { m.material.polygonOffset = true; m.material.polygonOffsetFactor = 1; m.material.polygonOffsetUnits = 2; }
         const egm = pd.ev ? { attributes: { position: { array: new Float32Array(pd.ev) } } } : g; delete pd.ev;
         const ln = new THREE.LineSegments(partEdges(egm, 25, od.k === 'p', pd), EDGE); grp.add(ln); edges.push(ln);
-        const lh = new THREE.LineSegments(ln.geometry, EDGE_HID); lh.visible = false; lh.renderOrder = 1; grp.add(lh); hidEdges.push(lh);
+        const lh = new THREE.LineSegments(ln.geometry, EDGE_HID); lh.visible = false; lh.renderOrder = -1; grp.add(lh); hidEdges.push(lh);
         if (M.mats[pd.m] && M.mats[pd.m].mk) { m.userData.mark = ln.userData.mark = lh.userData.mark = true; markObjs.push(m, ln); }
       }
     }
@@ -764,7 +784,7 @@ function initCube() {
     if (!st) return;
     const dx = e.clientX - st.x, dy = e.clientY - st.y;
     if (!cubeMoved && Math.hypot(dx, dy) < 5) return;
-    if (drawOn && drawLines) return;                       // креслення: только строгие виды, кубик не вращает
+    if (drawOn && (drawLines || metalCur !== null)) return;   // креслення: только строгие виды, кубик не вращает (и на листе в цвете)
     if (!cubeMoved) try { w.setPointerCapture(e.pointerId); } catch (er) {}
     cubeMoved = true; st = { x: e.clientX, y: e.clientY };
     if (view.strict) view.strict = false;
@@ -1453,7 +1473,8 @@ function edgeAt(cx, cy) {
     return Math.hypot(sx - cx, sy - cy) <= r * pxPerMm(persp ? depth - r : 1) + R;
   };
   const cand = [];
-  for (const pr of parts) {
+  for (let pi = 0; pi < parts.length; pi++) {
+    const pr = parts[pi];
     // в кресленні цепляемся ещё за рёбра фурнитуры (ножка) и отрезки помещения (линия чистого пола)
     const src = drawOn ? (pr.isL ? pr.g.children.filter(o => o.isLineSegments) : pr.edges.concat(pr.dEdges || [])) : pr.edges;
     if (!pr.g.visible || !src.length) continue;
@@ -1469,15 +1490,17 @@ function edgeAt(cx, cy) {
         if (L2 < 4) continue;                                   // ребро смотрит на нас — точка, не линия
         const t = Math.max(0, Math.min(1, ((cx - ax) * vx + (cy - ay) * vy) / L2));
         const d = Math.hypot(ax + vx * t - cx, ay + vy * t - cy);
-        if (d <= R) cand.push({ d, a: A.clone(), b: B.clone(), t });
+        if (d <= R) { const z = A.clone().lerp(B, t).sub(cam.position).dot(fwd); cand.push({ d, a: A.clone(), b: B.clone(), t, z, pi }); }
       }
     }
   }
-  cand.sort((p, q) => p.d - q.d);
+  // линии, легшие на экране одна на другую (в строгом виде их десятки — Алексей 11.11: «непонятно, за что цепляется»):
+  // из почти одинаково близких к курсору (полтора пикселя) берётся ближняя к глазу — та, что и видна на листе
+  cand.sort((p, q) => Math.abs(p.d - q.d) < 1.5 ? p.z - q.z : p.d - q.d);
   for (const k of cand.slice(0, 40)) {
     const p = k.a.clone().lerp(k.b, k.t);
     if (cutAway(p) || !pointVisible(p)) continue;
-    return { a: k.a, b: k.b, p, dir: k.b.clone().sub(k.a).normalize() };
+    return { a: k.a, b: k.b, p, dir: k.b.clone().sub(k.a).normalize(), pi: k.pi };
   }
   return null;
 }
@@ -2556,7 +2579,7 @@ function hover(cx, cy) {
   else if (!rp.length) $('st').textContent = 'рулетка: вкажіть першу точку';
 }
 function finishPlacing() { placing = null; $('st').textContent = RHINT[rmode]; }
-function hideHover() { const mk = $('snapmk'); if (mk) mk.style.display = 'none'; }
+function hideHover() { const mk = $('snapmk'); if (mk) mk.style.display = 'none'; if (snapNow) { snapNow = null; if (drawOn) requestAnimationFrame(drawOverlay); } }
 
 // ---------------- мышь ----------------
 const ray = new THREE.Raycaster();
@@ -2589,6 +2612,15 @@ function orbit(dx, dy) {
   // считается только при включённой рулетке: «до стін» запоминается и при выключенных размерах (бой 28.10)
   const lo = !TOUCH || (ruler && rmode === 'wall') ? -Math.PI / 2 : Math.min(0, view.pitch);
   view.pitch = Math.max(lo, Math.min(Math.PI / 2, view.pitch + dy * 0.006));
+}
+// вращение вокруг точки P: вся камера поворачивается вокруг неё на тот же угол, что и взгляд (точка на экране стоит на месте)
+function rotAround(P, y0, p0, y1, p1) {
+  if (!P) return;
+  const d = (y, p) => new THREE.Vector3(Math.cos(p) * Math.sin(y), Math.sin(p), Math.cos(p) * Math.cos(y));
+  const q1 = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), y1 - y0);
+  const q2 = new THREE.Quaternion().setFromUnitVectors(d(y1, p0), d(y1, p1));
+  const v = view.target.clone().sub(P).applyQuaternion(q1).applyQuaternion(q2);   // сначала сдвиг, потом — новая цель
+  view.target.copy(P).add(v);
 }
 function panBy(dx, dy) {
   const k = viewHeight() / innerHeight;
@@ -2732,6 +2764,11 @@ cv.addEventListener('pointerdown', e => {
   if (e.pointerType === 'touch') { touchDown(e); return; }
   try { cv.setPointerCapture(e.pointerId); } catch (err) {}
   drag = { b: e.button, x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY };
+  // точка вращения (Алексей 11.11, как у Юдина): там, где нажал на деталь; мимо деталей — середина выделенного; иначе как было
+  if (e.button === 0 && !(drawOn && (drawLines || metalCur !== null))) {
+    const h = pick(e.clientX, e.clientY);
+    drag.piv = h ? h.point.clone() : selSet.length ? visibleBox(true).getCenter(new THREE.Vector3()) : null;
+  }
   // креслення, щелчковая цепочка: нажали на модуль/фасад/проём — это размер, а не сдвиг листа
   if (drawOn && e.button === 0 && PRESS.has(drawTool)) { const t = pressTarget(e.clientX, e.clientY); if (t) drag.press = { t, ax: null, line: 0 }; }
   if (e.button === 1) {
@@ -2758,10 +2795,13 @@ cv.addEventListener('pointermove', e => {
   }
   if (drag.press) { pressMove(drag, e.clientX, e.clientY); return; }
   const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY;
-  if (drag.b === 0 && drawOn && drawLines) { panBy(dx, dy); place(); cv.style.cursor = 'grabbing'; }   // креслення: лист двигается, не вращается
+  // креслення: лист двигается, не вращается; лист «свой» / металл — тоже и в цвете (Алексей 11.11: «один вращается, другой двигается»)
+  if (drag.b === 0 && drawOn && (drawLines || metalCur !== null)) { panBy(dx, dy); place(); cv.style.cursor = 'grabbing'; }
   else if (drag.b === 0) {
+    const y0 = view.yaw, p0 = view.pitch;
     view.yaw -= dx * 0.006;
     view.pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, view.pitch + dy * 0.006));
+    rotAround(drag.piv, y0, p0, view.yaw, view.pitch);
     place();
   } else if (drag.b === 2) {
     const k = viewHeight() / innerHeight;
@@ -2780,7 +2820,7 @@ cv.addEventListener('pointerup', e => {
   if (!d || Math.abs(e.clientX - d.x0) > 4 || Math.abs(e.clientY - d.y0) > 4) return;
   // креслення с инструментом: левая — точка, правая — закончить цепочку (габаритный и «без инструмента» — выделение, как обычно)
   if (drawOn && snapTool()) { if (d.b === 2) endTool(); else if (d.b === 0) toolClick(e.clientX, e.clientY); return; }
-  if (drawOn && d.b === 0 && (selDim || selSec)) { selDim = selSec = null; drawOverlay(); }
+  if (drawOn && d.b === 0 && (selDim || selSec || selNote)) { selDim = selSec = selNote = null; drawOverlay(); }
   if (drawOn && PRESS.has(drawTool)) return;                // щелчок мимо модуля/проёма — ничего не выделяем
   if (d.b === 2) { if (ruler && (rp.length || face1 || edge1 || wall1)) cancelPoint(); return; }   // правая кнопка без сдвига — убрать первую точку
   if (d.b !== 0) return;
@@ -2821,6 +2861,7 @@ addEventListener('keydown', e => {
     if (ctl && e.code === 'KeyY') { e.preventDefault(); drawRedo(); return; }
     if (e.key === 'Delete' && selDim) { pushUndo(); removeDim(selDim); drawOverlay(); return; }
     if (e.key === 'Delete' && selSec) { secAct('del', selSec); return; }
+  if (e.key === 'Delete' && selNote) { pushUndo(); noteDel(selNote); return; }
     if (e.key === 'Delete' && metalSelV && metalCur !== null) { const un = metalData().all.find(x => x.u === metalCur); if (un) metalDelView(un, metalSelV); return; }
     if (e.key === 'Enter') { if (drawTool === 'gab') gabCommit(); else if (drawTool) endTool(); return; }
     if (e.key === 'Escape') {
@@ -3366,7 +3407,7 @@ function cutApply(i, r) {
   const keep = p.meshes.filter(m => !old.has(m)); p.meshes.length = 0; p.meshes.push(...keep);
   { const rg2 = new THREE.BufferGeometry(); rg2.setAttribute('position', new THREE.BufferAttribute(r.rim, 3));
     const ln = new THREE.LineSegments(rg2, EDGE); p.g.add(ln); p.edges.push(ln);
-    const lh = new THREE.LineSegments(rg2, EDGE_HID); lh.visible = curMode === 3; lh.renderOrder = 1; p.g.add(lh); hidEdges.push(lh); }
+    const lh = new THREE.LineSegments(rg2, EDGE_HID); lh.visible = curMode === 3; lh.renderOrder = -1; p.g.add(lh); hidEdges.push(lh); }
   for (const [mt, os] of byMat) {
     const cat = key => { if (os.length === 1) return os[0][key]; let n = 0; for (const o of os) n += o[key].length; const a = new Float32Array(n); let s = 0; for (const o of os) { a.set(o[key], s); s += o[key].length; } return a; };
     const g = new THREE.BufferGeometry();
@@ -4354,7 +4395,7 @@ function drawEdgesFor(p) {
     let g = fEdges.get(m.geometry);
     if (!g) { g = new THREE.EdgesGeometry(m.geometry, 30); fEdges.set(m.geometry, g); }
     const ln = new THREE.LineSegments(g, EDGE); ln.visible = false; m.parent.add(ln); p.dEdges.push(ln);
-    const lh = new THREE.LineSegments(g, EDGE_HID); lh.visible = false; lh.renderOrder = 1; m.parent.add(lh); p.dHid.push(lh);   // за деталью — светлой
+    const lh = new THREE.LineSegments(g, EDGE_HID); lh.visible = false; lh.renderOrder = -1; m.parent.add(lh); p.dHid.push(lh);   // за деталью — светлой
   }
   return p.dEdges;
 }
@@ -4396,7 +4437,7 @@ function setDraw(on) {
   setTool(null);
   for (const dm of dims) if (dm.g) dm.g.visible = dimsShown && !on;
   syncRoom();                                               // стены помещения — в кресленні не рисуются
-  if (on) { frameName = L('n_front'); renderPanel(); applyLook(); layout(); strictView(0, 0); checkFolders(); }
+  if (on) { frameName = L('n_front'); renderPanel(); applyLook(); layout(); strictView(0, 0); checkFolders(); freeLoad(); }
   else { selDim = null; closeFly(); applyLook(); $('dpanel').replaceChildren(); $('dsvg').replaceChildren(); placeCtx(); layout(); updRuler(); }
   syncTools(); need();
 }
@@ -4559,14 +4600,16 @@ function drawOverlay() {
   const k = pxPerPaper();
   let h = '';
   if (dimsShown) dims.forEach((dm, i) => { if (!dimHere(dm)) return; const g = dimPrims(dm, toScr, k); if (g) h += dimSvg(g, k, { i, sel: dm === selDim }); });
-  if (preview) { const g = dimPrims(preview, toScr, k); if (g) h += dimSvg(g, k, { prev: true }); }
-  if (metalCur !== null && sheetC) {                        // лист металла: выноски и колонка примечаний
-    for (const n of mnotes) if (n.mk === metalCur && n.vk === viewKey()) h += noteSvg(n, toScr, k);
+  if (preview && !preview.lead) { const g = dimPrims(preview, toScr, k); if (g) h += dimSvg(g, k, { prev: true }); }
+  // выноски этого листа и этого вида: автоматические металла и поставленные рукой (тема 60) — и на обычном листе
+  if (sheetC) { const vk = viewKey(); mnotes.forEach((n, i) => { if ((n.mk ?? null) === metalCur && n.vk === vk) h += noteSvg(n, toScr, k, false, i); }); }
+  if (tpts.length && drawTool === 'lead' && preview && preview.lead) { const a = toScr(tpts[0]), b = preview.lead; h += `<path d="M${a[0]} ${a[1]}L${b[0]} ${b[1]}" stroke="#7aa7e0" stroke-width="1.5" stroke-dasharray="6 3" fill="none"/>`; }
+  if (metalCur !== null && sheetC) {                        // лист металла: колонка примечаний
     const un = metal && metal.units.find(x => x.u === metalCur);
     if (un && un.marks) for (const m of un.marks[viewKey()] || []) h += holeMarkSvg(m, toScr, k);
     const S = sheetRect();
     if (!joinCur && !texCur) { const mu = metalData().all.find(x => x.u === metalCur); if (mu && mu.lay) h = metalViewsSvg(mu, S) + h; }
-    h += joinCur ? joinBlockSvg([S.x0, S.y0], S.w / SHEET_W) + joinNumsSvg(joinCur, toScr, k) : texCur ? texBlockSvg([S.x0, S.y0], S.w / SHEET_W) + texHolesSvg(texCur, toScr, k) + texNotesSvg(texCur, toScr, k) : metalBlockSvg([S.x0, S.y0], S.w / SHEET_W, true);
+    h += joinCur ? joinBlockSvg([S.x0, S.y0], S.w / SHEET_W) + joinNumsSvg(joinCur, toScr, k) + texHolesSvg(joinCur, toScr, k) : texCur ? texBlockSvg([S.x0, S.y0], S.w / SHEET_W) + texHolesSvg(texCur, toScr, k) + texNotesSvg(texCur, toScr, k) : metalBlockSvg([S.x0, S.y0], S.w / SHEET_W, true);
   }
   const o = sheetC ? toScr(sheetC) : [0, 0];
   if (sheetC) secs.forEach((sc, i) => { if (secHere(sc)) h += secSvg(secPrims(sc, o, k, toScr), k, { i, sel: sc === selSec }); });
@@ -4589,19 +4632,35 @@ function drawOverlay() {
     const g = dimPrims(selDim, toScr, k);
     if (g) for (const [p, n] of [[g.pa, 'a'], [g.pb, 'b'], [g.tp, 'm']]) h += `<rect class="grip" data-g="${n}" x="${p[0] - 5}" y="${p[1] - 5}" width="10" height="10"/>`;
   }
+  h += snapSvg();
   sv.innerHTML = h;
+  freeSaveSoon();
   placeCtx();
 }
 // ---------- прилипание точки: угол детали → линия (ребро, отрезок помещения) → просто место на виде ----------
 function snapDraw(x, y) {
   const c = snapAt(x, y, [12]); if (c) return { p: c, kind: 'pt' };
-  const e = edgeAt(x, y); if (e) return { p: e.p, kind: 'edge' };
+  const e = edgeAt(x, y); if (e) return { p: e.p, kind: 'edge', e };
   return { p: onTargetPlane(x, y) || V3(), kind: 'free' };
 }
+// что сейчас поймано (Алексей 11.11): линия подсвечивается целиком оранжевым, угол — кольцом; внизу — чья линия и её длина
+let snapNow = null;
 function showSnap(s) {
   const mk = $('snapmk'), [x, y] = toScr(s.p);
   mk.style.display = 'block'; mk.style.left = x + 'px'; mk.style.top = y + 'px';
   mk.classList.toggle('snapped', s.kind === 'pt'); mk.classList.toggle('edge', s.kind === 'edge');
+  snapNow = s;
+  const st = $('st');
+  if (st && drawOn && drawTool) {
+    const who = s.e && s.e.pi !== undefined && M.objs[s.e.pi] ? ' — ' + (M.objs[s.e.pi].n || '') : '';
+    st.textContent = s.kind === 'pt' ? L('sn_pt') : s.kind === 'edge' ? L('sn_edge') + ' ' + fmtN(s.e.a.distanceTo(s.e.b)) + ' ' + L('sn_mm') + who : L('h_' + drawTool);
+  }
+}
+function snapSvg() {
+  if (!drawOn || !snapNow || !snapTool() || snapNow.kind === 'free') return '';
+  if (snapNow.kind === 'pt') { const [x, y] = toScr(snapNow.p); return `<circle class="snapc" cx="${x}" cy="${y}" r="9"/>`; }
+  const [ax, ay] = toScr(snapNow.e.a), [bx, by] = toScr(snapNow.e.b);
+  return `<path class="snapl" d="M${ax} ${ay}L${bx} ${by}"/>`;
 }
 // ---------- ручки размера ----------
 // середина (число, линия) — отводит размерную линию поперёк; конец — прилипает к углу/линии, число пересчитывается,
@@ -4640,6 +4699,12 @@ function wireOverlay() {
       if (e.button === 0) clipDrag = { x: e.clientX, y: e.clientY, c0: clipPl.constant };
       return;
     }
+    const vx = e.target.closest && e.target.closest('[data-vx]');
+    if (vx && metalCur !== null) {                            // крестик на рамке вида — убрать вид с листа
+      e.preventDefault(); e.stopPropagation();
+      const un = metalData().all.find(x => x.u === metalCur); if (un && e.button === 0) metalDelView(un, vx.dataset.vx);
+      return;
+    }
     const vwv = e.target.dataset.vw || e.target.dataset.vws;
     if (vwv && metalCur !== null) {                           // лист металла: вид-блок — тянуть, за угол — масштаб листа, правая — удалить
       e.preventDefault(); e.stopPropagation();
@@ -4658,6 +4723,15 @@ function wireOverlay() {
       const G = metalBlockGeo(un, drawN), I = metalIsoGeo(un);
       dr = { blk: bi, un, x: e.clientX, y: e.clientY, moved: false, p0: bi.startsWith('blk') ? { x: G.x0, y: G.y0, s: G.s, w: G.x1 - G.x0 } : { x: I.x, y: I.y, s: I.s } };
       return;
+    }
+    const ni = e.target.dataset.n;
+    if (ni !== undefined) {                                   // выноска: щелчок — выделить (плашка), тянуть за полку — двигать, правая — удалить
+      e.preventDefault(); e.stopPropagation();
+      const n = mnotes[+ni]; if (!n) return;
+      if (e.button === 2) { pushUndo(); noteDel(n); return; }
+      if (e.button !== 0) return;
+      selNote = n; selDim = null; selSec = null; ctxFor = null;
+      dr = { note: n, x: e.clientX, y: e.clientY, q0: noteQ(n), moved: false }; drawOverlay(); return;
     }
     if (si !== undefined) {                                   // сечение: щелчок — выделить (плашка), тянуть — двигать, правая — удалить
       e.preventDefault(); e.stopPropagation();
@@ -4688,6 +4762,7 @@ function wireOverlay() {
       drawOverlay(); return;
     }
     if (!dr.moved) { dr.moved = true; pushUndo(); }
+    if (dr.note) { const k = pxPerPaper(); noteHand(dr.note); dr.note.q = [dr.q0[0] + (e.clientX - dr.x) / k, dr.q0[1] + (e.clientY - dr.y) / k]; drawOverlay(); return; }
     if (dr.sc) { const k = pxPerPaper(); dr.sc.pos = [dr.p0[0] + (e.clientX - dr.x) / k, dr.p0[1] + (e.clientY - dr.y) / k]; drawOverlay(); return; }
     if (dr.blk) {
       const k = pxPerPaper(), dx = (e.clientX - dr.x) / k, dy = (e.clientY - dr.y) / k, p = dr.p0, un = dr.un;
@@ -4737,7 +4812,32 @@ function orient(p1, p2, x, y) {
   return dx >= dy ? R : U;
 }
 function mkPrev(a, b, axis, line) { const w = perpAxis(axis); return { a, b, axis, off: w.multiplyScalar(line - a.dot(w)), text: null }; }
+// ---------- выноска рукой (тема 60, Алексей 11.11): щелчок по детали — точка, второй — полка; текст — обозначение и имя ----------
+function leadText(i) {
+  const o = M.objs[i]; if (!o) return [L('lead')];
+  const nm = o.k === 'f' ? cleanFast(o.n) : String(o.n || '').replace(/^\[[^\]]*\]\s*/, '');
+  return [((o.d || '') + ' ' + nm).trim() || L('lead')];
+}
+function leadHover(x, y) {
+  if (!tpts.length) { const s = snapDraw(x, y); showSnap(s); preview = null; drawOverlay(); return; }
+  hideHover(); preview = { lead: [x, y] }; drawOverlay();
+}
+function leadClick(x, y) {
+  if (!tpts.length) {
+    const h = pick(x, y); if (!h) { toast(L('h_lead')); return; }
+    const s = snapDraw(x, y);
+    tpts.push(s.kind === 'free' ? h.point.clone() : s.p.clone()); tpts.pi = h.object.userData.idx;
+    $('st').textContent = L('h_lead2'); return;
+  }
+  const a = toScr(tpts[0]), k = pxPerPaper();
+  pushUndo();
+  const n = { mk: metalCur, vk: viewKey(), p: tpts[0].clone(), pi: tpts.pi, q: [(x - a[0]) / k, (y - a[1]) / k], txt: leadText(tpts.pi), hand: true };
+  mnotes.push(n); selNote = n; selDim = selSec = null; ctxFor = null;
+  tpts = []; preview = null; $('st').textContent = L('h_lead'); drawOverlay();
+}
+function noteDel(n) { const i = mnotes.indexOf(n); if (i >= 0) mnotes.splice(i, 1); if (selNote === n) selNote = null; drawOverlay(); }
 function toolHover(x, y) {
+  if (drawTool === 'lead') { leadHover(x, y); return; }
   if (drawTool === 'ang') { angHover(x, y); return; }
   if (drawTool === 'sect') { secHover(x, y); return; }
   if (drawTool === 'clip') { clipHover(x, y); return; }
@@ -4777,6 +4877,7 @@ function angClick(x, y) {
   endTool();
 }
 function toolClick(x, y) {
+  if (drawTool === 'lead') { leadClick(x, y); return; }
   if (drawTool === 'ang') { angClick(x, y); return; }
   if (drawTool === 'easy') { pushUndo(); easyPick(x, y); drawOverlay(); return; }
   if (drawTool === 'sect') { secClick(x, y); return; }
@@ -4912,7 +5013,44 @@ function secPrims(sc, o, k, toP, noSec) {
   for (const S of sh) for (const s of secHatch(S, step)) g.H.push(W(s));
   g.box = [o[0] + x0 * k, o[1] + y0 * k, o[0] + x1 * k, o[1] + y1 * k];
   g.lab = { x: (g.box[0] + g.box[2]) / 2, y: g.box[1] - 3 * k, t: secLabel(sc) };
+  if (sc.auto) secAutoDims(sc, g, mp, W, k);
   return g;
+}
+// размеры местного разреза столярки (Алексей 16.11): вдоль линии — края деталей, что целиком в разрезе (бруски и зазор между
+// ними; обрез панели концами линии — не край), поперёк — толщины слоёв (наполнение, брусок) и общий. До полмиллиметра.
+function secAutoDims(sc, g, mp, W, k) {
+  const B = sc.G.map(part => { let a = Infinity, b = -Infinity, c = Infinity, d = -Infinity; for (const s of part) { a = Math.min(a, s[0], s[2]); b = Math.max(b, s[0], s[2]); c = Math.min(c, s[1], s[3]); d = Math.max(d, s[1], s[3]); } return [a, b, c, d]; });
+  const [u0, v0, u1, v1] = sc.box, uniq = v => { v.sort((p, q) => p - q); return v.filter((q, i) => !i || q - v[i - 1] > 0.3); };
+  const us = uniq(B.filter(q => q[0] > u0 + 0.5 && q[1] < u1 - 0.5).flatMap(q => [q[0], q[1]]));
+  const vs = uniq(B.flatMap(q => [q[2], q[3]]));
+  const txt = joinMm, FS = 3.2;
+  g.DL = []; g.DT = [];
+  const dim = (pA, pB, off, ext0) => {                       // pA, pB — мм бумаги; off — сдвиг размерной линии; ext0 — откуда выносные
+    const a2 = [pA[0] + off[0], pA[1] + off[1]], b2 = [pB[0] + off[0], pB[1] + off[1]];
+    g.DL.push(W([a2[0], a2[1], b2[0], b2[1]]), W([ext0(pA)[0], ext0(pA)[1], a2[0] + off[0] * 0.15, a2[1] + off[1] * 0.15]), W([ext0(pB)[0], ext0(pB)[1], b2[0] + off[0] * 0.15, b2[1] + off[1] * 0.15]));
+    for (const p of [a2, b2]) g.DL.push(W([p[0] - 0.7, p[1] + 0.7, p[0] + 0.7, p[1] - 0.7]));   // засечки
+    return [(a2[0] + b2[0]) / 2, (a2[1] + b2[1]) / 2];
+  };
+  if (us.length > 1) {
+    const yb = mp(u0, v0)[1];
+    for (let i = 0; i + 1 < us.length; i++) {
+      const pA = mp(us[i], v0), pB = mp(us[i + 1], v0), m = dim(pA, pB, [0, 5], p => [p[0], p[1] + 1]);
+      const w = Math.abs(pB[0] - pA[0]), t = txt(us[i + 1] - us[i]), tw = t.length * FS * 0.55;
+      g.DT.push({ x: W([w < tw + 1 ? Math.max(pA[0], pB[0]) + tw / 2 + 1.2 : m[0], 0, 0, 0])[0], y: o_y(W, yb + 5 - 0.9), t });
+    }
+  }
+  if (vs.length > 1) {
+    const xr = mp(u1, v0)[0], rows = vs.length > 2 ? [[vs], [[vs[0], vs[vs.length - 1]]]] : [[vs]];
+    rows.forEach(([v], ri) => {
+      for (let i = 0; i + 1 < v.length; i++) {
+        const pA = [xr, mp(u1, v[i])[1]], pB = [xr, mp(u1, v[i + 1])[1]], dx = 5 + ri * 7;
+        dim(pA, pB, [dx, 0], p => [p[0] + 1, p[1]]);
+        g.DT.push({ x: W([xr + dx + 1, 0, 0, 0])[0], y: o_y(W, (pA[1] + pB[1]) / 2 + 1.1), t: txt(v[i + 1] - v[i]), a: 'start' });
+      }
+    });
+  }
+  function o_y(Wf, y) { return Wf([0, y, 0, 0])[1]; }
+  g.DFS = FS * k;
 }
 function secSvg(g, k, o) {
   const col = o.sel ? '#e0301e' : o.prev ? '#7aa7e0' : '#000000', f = v => String(Math.round(v * 100) / 100);
@@ -4927,6 +5065,10 @@ function secSvg(g, k, o) {
     if (g.H.length) s += `<path d="${seg(g.H)}" fill="none" stroke="${col}" stroke-width="${w(0.18, 0.7)}"/>`;
     s += `<path d="${seg(g.S)}" fill="none" stroke="${col}" stroke-width="${w(0.5, 1.4)}" stroke-linecap="round"/>`;
     s += `<text x="${f(g.lab.x)}" y="${f(g.lab.y)}" font-family="${DFONT}" font-size="${f(5 * k)}" fill="${col}" text-anchor="middle">${g.lab.t}</text>`;
+    if (g.DL) {
+      s += `<path d="${seg(g.DL)}" fill="none" stroke="${col}" stroke-width="${w(0.18, 0.8)}"/>`;
+      for (const t of g.DT) s += `<text x="${f(t.x)}" y="${f(t.y)}" font-family="${DFONT}" font-size="${f(g.DFS)}" fill="${col}" text-anchor="${t.a || 'middle'}">${t.t}</text>`;
+    }
     if (!o.exp && !o.prev) { const b = g.box, m = 6; s += `<rect class="sh" data-s="${o.i}" x="${f(b[0] - m)}" y="${f(b[1] - m - 5 * k)}" width="${f(b[2] - b[0] + 2 * m)}" height="${f(b[3] - b[1] + 2 * m + 5 * k)}"/>`; }
   }
   return s;
@@ -5241,9 +5383,11 @@ function gabCommit() {
 // ---------- Ctrl+Z / Ctrl+Y: размеры, спрятанное, фасады ----------
 const undoS = [], redoS = [];
 function stateNow() {
-  return { dims: dims.map(d => ({ a: d.a.toArray(), b: d.b.toArray(), axis: d.axis, off: d.off.toArray(), label: d.label, text: d.text, vdir: d.vdir ? d.vdir.toArray() : null, auto: d.auto, chain: d.chain, fs: d.fs, ang: d.ang ? { c: d.ang.c.toArray(), p: d.ang.p.toArray() } : null })),
+  // mk — чей лист: без него отмена отдавала размеры и сечения всех листов тому, что открыт (тема 60, 11.11)
+  return { dims: dims.map(d => ({ a: d.a.toArray(), b: d.b.toArray(), axis: d.axis, off: d.off.toArray(), label: d.label, text: d.text, vdir: d.vdir ? d.vdir.toArray() : null, auto: d.auto, chain: d.chain, fs: d.fs, mk: d.mk ?? null, ang: d.ang ? { c: d.ang.c.toArray(), p: d.ang.p.toArray() } : null })),
            ph: parts.map(p => p.hidden ? '1' : '0').join(''), nh: Object.keys(nodes).filter(k => nodes[k].hidden), fac: hideFac, af: JSON.stringify(autoFlags),
-           secs: secs.map(q => ({ a: q.a.toArray(), b: q.b.toArray(), s: q.s, vdir: q.vdir.toArray(), fs: q.fs, letter: q.letter, sN: q.sN, rot: q.rot, pos: q.pos.slice(), pi: q.pi })) };
+           secs: secs.map(q => ({ a: q.a.toArray(), b: q.b.toArray(), s: q.s, vdir: q.vdir.toArray(), fs: q.fs, letter: q.letter, sN: q.sN, rot: q.rot, pos: q.pos.slice(), pi: q.pi, mk: q.mk ?? null })),
+           notes: mnotes.filter(n => n.hand).map(n => Object.assign({}, n, { p: n.p.toArray(), q: n.q.slice(), txt: n.txt.slice() })) };   // выноски рукой (тема 60)
 }
 function pushUndo() { if (!drawOn) return; undoS.push(stateNow()); if (undoS.length > 80) undoS.shift(); redoS.length = 0; }
 function restoreState(s) {
@@ -5251,7 +5395,7 @@ function restoreState(s) {
   while (dims.length) removeDim(dims[0]);
   easyDims.length = 0; partDims.length = 0; gabDims.length = 0;
   for (const q of s.dims) {
-    const dm = addDim(new THREE.Vector3().fromArray(q.a), new THREE.Vector3().fromArray(q.b), { label: q.label, text: q.text, fs: q.fs });
+    const dm = addDim(new THREE.Vector3().fromArray(q.a), new THREE.Vector3().fromArray(q.b), { label: q.label, text: q.text, fs: q.fs, mk: q.mk === undefined ? undefined : q.mk });
     dm.axis = q.axis; dm.off = new THREE.Vector3().fromArray(q.off); dm.vdir = q.vdir ? new THREE.Vector3().fromArray(q.vdir) : null; dm.auto = q.auto; dm.chain = q.chain;
     if (q.ang) dm.ang = { c: new THREE.Vector3().fromArray(q.ang.c), p: new THREE.Vector3().fromArray(q.ang.p) };
     buildDim(dm);
@@ -5266,9 +5410,19 @@ function restoreState(s) {
   selSec = null; secs.length = 0;
   for (const q of s.secs || []) {
     const sc = { a: new THREE.Vector3().fromArray(q.a), b: new THREE.Vector3().fromArray(q.b), s: q.s, vdir: new THREE.Vector3().fromArray(q.vdir), fs: q.fs,
-                 letter: q.letter, sN: q.sN, rot: q.rot, pos: q.pos.slice(), pi: q.pi };
+                 letter: q.letter, sN: q.sN, rot: q.rot, pos: q.pos.slice(), pi: q.pi, mk: q.mk ?? null };
     const was = old.get(q.letter + q.a + q.b + q.s); if (was) { sc.G = was.G; sc.box = was.box; }
     secs.push(sc);
+  }
+  if (s.notes) {                                            // выноски рукой — как были; автоматические перетянутые снова прячутся за ручными
+    const was = mnotes.filter(n => n.hand);
+    for (let i = mnotes.length - 1; i >= 0; i--) if (mnotes[i].hand) mnotes.splice(i, 1);
+    for (const n of s.notes) mnotes.push(Object.assign({}, n, { p: new THREE.Vector3().fromArray(n.p), q: n.q.slice(), txt: n.txt.slice() }));
+    // отменили первое перетаскивание автоматической выноски металла — она возвращается автоматической, со своим текстом
+    for (const n of was) if (n.src && !s.notes.some(o => o.src === n.src)) {
+      delete n.hand; delete n.q; n.txt = n.src.split('|').slice(2).join('|').split('\n'); delete n.src; mnotes.push(n);
+    }
+    selNote = null;
   }
   applyVis(); renderTree(); syncPanel(); drawOverlay();
 }
@@ -5335,6 +5489,7 @@ const DIC = {
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/>',
   dimfly: '<path d="M3 6v12M21 6v12M3 12h18"/>',
   metal: '<rect x="3" y="7" width="18" height="10"/><rect x="5.5" y="9.5" width="13" height="5"/><circle cx="8" cy="12" r=".9" fill="currentColor"/><circle cx="16" cy="12" r=".9" fill="currentColor"/>',
+  free: '<rect x="3" y="4" width="18" height="16"/><rect x="5.5" y="6.5" width="6.5" height="5.5"/><rect x="14" y="6.5" width="4.5" height="5.5"/><rect x="5.5" y="14" width="6.5" height="3.5"/>',
   tex: '<rect x="3" y="4" width="8" height="16"/><rect x="13" y="4" width="8" height="16"/><path d="M5 7c2 3 2 7 0 10M8.5 6c1.5 4 1.5 8 0 12M15 7c2 3 2 7 0 10M18.5 6c1.5 4 1.5 8 0 12"/>',
   join: '<rect x="3" y="3" width="18" height="18"/><rect x="7" y="7" width="10" height="10"/><path d="M3 3l4 4M21 3l-4 4M3 21l4-4M21 21l-4-4"/>',
 };
@@ -5388,10 +5543,14 @@ const DTXT = {
     t_refresh: 'Перечитать, что лежит в папках отчёта', t_dimfly: 'Линейный, цепочка, от базы, габаритный',
     t_autofly: 'Модули, фасады, проёмы', t_endfly: 'Засечки или стрелки',
     t_sect: 'Профиль детали по линии А–А: срез со штриховкой рядом на листе, в своём масштабе',
+    sn_pt: 'Угол — размер пойдёт от этой точки', sn_edge: 'Линия', sn_mm: 'мм', v_x: 'Убрать вид с листа',
+    t_lead: 'Щелчок по детали — точка выноски, второй щелчок — где полка с текстом. Текст — обозначение и имя детали, правится',
+    h_lead: 'Выноска: щёлкни по детали', h_lead2: 'Выноска: щёлкни, где поставить полку с текстом', e_ntext: 'Текст (строки через /)',
     h_sect: 'Сечение: первая точка линии А–А', h_sect2: 'Сечение: вторая точка линии (почти ровная — выпрямится)',
     h_sect3: 'Сечение: щелчок с той стороны, куда смотреть', h_sect4: 'Сечение: щелчок — положить на лист. Потом щелчок по сечению — масштаб, поворот',
     sect_empty: 'линия не пересекает ни одной детали', s_view: 'как вид', s_rot: 'Повернуть',
     metal: 'Металл', g_metal: 'Металлоизделия', t_metal: 'Лист на каждый металлический полуфабрикат: размеры и подписи по модели',
+    free: 'Свой лист', g_free: 'Конструктор', t_free: 'Лист из выделенных деталей (или всего видимого): несколько видов, размеры, сечения — и картинкой в отчёт',
     tex: 'Переход текстуры', g_tex: 'Шпон', t_tex: 'Лист на каждую группу шпона (окно «Раскладка по текстуре», галочка «Шпон»): панели как стоят, зазоры, выноски под номера Вияра',
     join: 'Столярка', g_join: 'Рамочные фасады', t_join: 'Лист на изделие с рамочными фасадами: фасады как стоят, размеры, таблица, сечение рамки, отделка (двойной щелчок — вписать)',
   },
@@ -5444,10 +5603,14 @@ const DTXT = {
     t_refresh: 'Перечитати, що лежить у теках звіту', t_dimfly: 'Лінійний, ланцюжок, від бази, габаритний',
     t_autofly: 'Модулі, фасади, прорізи', t_endfly: 'Засічки або стрілки',
     t_sect: 'Профіль деталі по лінії А–А: зріз зі штрихуванням поруч на аркуші, у своєму масштабі',
+    sn_pt: 'Кут — розмір піде від цієї точки', sn_edge: 'Лінія', sn_mm: 'мм', v_x: 'Прибрати вид з аркуша',
+    t_lead: 'Клік по деталі — точка виноски, другий клік — де полиця з текстом. Текст — позначення й ім’я деталі, правиться',
+    h_lead: 'Виноска: клікни по деталі', h_lead2: 'Виноска: клікни, де поставити полицю з текстом', e_ntext: 'Текст (рядки через /)',
     h_sect: 'Переріз: перша точка лінії А–А', h_sect2: 'Переріз: друга точка лінії (майже рівна — випрямиться)',
     h_sect3: 'Переріз: клік з того боку, куди дивитися', h_sect4: 'Переріз: клік — покласти на аркуш. Потім клік по перерізу — масштаб, поворот',
     sect_empty: 'лінія не перетинає жодної деталі', s_view: 'як вид', s_rot: 'Повернути',
     metal: 'Метал', g_metal: 'Металовироби', t_metal: 'Аркуш на кожен металевий напівфабрикат: розміри й підписи за моделлю',
+    free: 'Свій аркуш', g_free: 'Конструктор', t_free: 'Аркуш з виділених деталей (або всього видимого): кілька видів, розміри, перерізи — і картинкою у звіт',
     tex: 'Перехід текстури', g_tex: 'Шпон', t_tex: 'Аркуш на кожну групу шпону (вікно «Раскладка по текстуре», галочка «Шпон»): панелі як стоять, зазори, виноски під номери Віяра',
     join: 'Столярка', g_join: 'Рамкові фасади', t_join: 'Аркуш на виріб з рамковими фасадами: фасади як стоять, розміри, таблиця, переріз рамки, оздоблення (подвійний клік — вписати)',
   },
@@ -5466,7 +5629,8 @@ function curView() {
 }
 function setView(k) {
   // лист металла: кнопка вида делает живым этот вид листа (лист не перекладывается)
-  if (metalCur !== null && !texCur && !joinCur) { const un = metalData().all.find(x => x.u === metalCur); if (un && un.lay && metalViews(un).some(w => w.v === k)) { metalShow(un.u, k, true); return; } }
+  if (metalCur !== null && !texCur && !joinCur) { const un = metalData().all.find(x => x.u === metalCur); if (un && un.lay && metalViews(un).some(w => w.v === k)) { metalShow(un.u, k, true); return; }
+    if (un && un.free) { freeAddView(un, k); return; } }    // свой лист: кнопка вида, которого на листе нет, — добавляет его
   const [y, p] = DVIEWS[k]; selDim = null; endTool(); strictView(y, p);
   frameName = L('n_' + k) + (hideFac ? L('n_nofac') : ''); const nm = $('dName'); if (nm) nm.value = frameName;
 }
@@ -5478,7 +5642,8 @@ const DCMD = {
   exit: { act: () => setDraw(false) },
   front: { act: () => setView('front'), on: () => curView() === 'front' }, back: { act: () => setView('back'), on: () => curView() === 'back' },
   left: { act: () => setView('left'), on: () => curView() === 'left' }, right: { act: () => setView('right'), on: () => curView() === 'right' },
-  top: { act: () => setView('top'), on: () => curView() === 'top' }, iso: { act: () => setView('iso'), on: () => curView() === 'iso', show: () => !drawLines },
+  top: { act: () => setView('top'), on: () => curView() === 'top' }, iso: { act: () => setView('iso'), on: () => curView() === 'iso', show: () => !drawLines || !!freeNow() },
+  free: { act: () => freeMenu(document.querySelector('#drib [data-c="free"]')), on: () => !!freeNow() },
   lines: { act: () => setLook(true), on: () => drawLines }, color: { act: () => setLook(false), on: () => !drawLines },
   clip: { act: () => setTool(drawTool === 'clip' ? null : 'clip'), on: isT('clip') },
   clipflip: { act: () => clipFlip(), dis: () => !clipPl }, clipoff: { act: () => clipOff(), dis: () => !clipPl },
@@ -5492,14 +5657,16 @@ const DCMD = {
   all: { act: () => { pushUndo(); const F = flags(); F.all = !F.all; autoDims(); }, on: () => flags().all },
   tick: { act: () => setEnd('tick'), on: () => dimEnd === 'tick' }, arrow: { act: () => setEnd('arrow'), on: () => dimEnd === 'arrow' },
   undo: { act: () => drawUndo(), dis: () => !undoS.length }, redo: { act: () => drawRedo(), dis: () => !redoS.length },
-  clr: { act: () => { pushUndo(); for (const dm of dims.filter(dimHere)) removeDim(dm); for (const q of secs.filter(secHere)) secs.splice(secs.indexOf(q), 1); const F = flags(); F.mod = F.all = false; selDim = selSec = null; drawOverlay(); } },
+  clr: { act: () => { pushUndo(); for (const dm of dims.filter(dimHere)) removeDim(dm); for (const q of secs.filter(secHere)) secs.splice(secs.indexOf(q), 1);
+    { const vk = viewKey(); for (let i = mnotes.length - 1; i >= 0; i--) if (mnotes[i].hand && (mnotes[i].mk ?? null) === metalCur && mnotes[i].vk === vk) mnotes.splice(i, 1); selNote = null; } const F = flags(); F.mod = F.all = false; selDim = selSec = null; drawOverlay(); } },
   sect: { act: () => setTool(drawTool === 'sect' ? null : 'sect'), on: isT('sect') },
-  dia: soon, rad: soon, lead: soon, pos: soon, cut: soon, detail: soon,
+  lead: { act: () => setTool(drawTool === 'lead' ? null : 'lead'), on: isT('lead') },
+  dia: soon, rad: soon, pos: soon, cut: soon, detail: soon,
   svg: { act: () => saveSheet() }, png: { act: () => saveShot() }, refresh: { act: () => refreshList() },
   th_light: { act: () => setTheme('light'), on: () => dTheme === 'light' }, th_dark: { act: () => setTheme('dark'), on: () => dTheme === 'dark' },
   th_blue: { act: () => setTheme('blue'), on: () => dTheme === 'blue' },
   ru: { act: () => setLang('ru'), on: () => dLang === 'ru' }, uk: { act: () => setLang('uk'), on: () => dLang === 'uk' },
-  metal: { act: () => metalMenu(document.querySelector('#drib [data-c="metal"]')), on: () => metalCur !== null && !texCur },
+  metal: { act: () => metalMenu(document.querySelector('#drib [data-c="metal"]')), on: () => metalCur !== null && !texCur && !joinCur && !freeNow() },
   tex: { act: () => texMenu(document.querySelector('#drib [data-c="tex"]')), on: () => !!texCur },
   join: { act: () => joinMenu(document.querySelector('#drib [data-c="join"]')), on: () => !!joinCur },
 };
@@ -5512,7 +5679,7 @@ function setLang(l) {
 }
 // вкладка → группы: [подпись группы, вид кнопок ('big' — значок над подписью, 'sm' — строчкой, столбиком по три), кнопки]
 const RIB = {
-  view: [['metal', 'big', ['metal']], ['tex', 'big', ['tex']], ['join', 'big', ['join']], ['views', 'sm', ['front', 'back', 'left', 'right', 'top', 'iso']], ['look', 'big', ['lines', 'color', 'hid']], ['fac', 'big', ['nofac']],
+  view: [['free', 'big', ['free']], ['metal', 'big', ['metal']], ['tex', 'big', ['tex']], ['join', 'big', ['join']], ['views', 'sm', ['front', 'back', 'left', 'right', 'top', 'iso']], ['look', 'big', ['lines', 'color', 'hid']], ['fac', 'big', ['nofac']],
          ['clipg', 'big', ['clip', 'clipflip', 'clipoff']],
          ['scale', 'scale'], ['show', 'big', ['showall', 'tree']]],
   dims: [['put', 'big', ['sel', 'lin', 'chain', 'base', 'gab', 'ang']], ['auto', 'big', ['mod', 'fac', 'easy', 'all']], ['ends', 'sm', ['tick', 'arrow']],
@@ -5552,7 +5719,7 @@ function renderRibbon() {
     };
   }
   const nm = $('dName');
-  if (nm) { nm.value = frameName; nm.oninput = () => { frameName = nm.value; }; nm.onkeydown = e => { if (e.key === 'Enter') saveSheet(); }; }
+  if (nm) { nm.value = frameName; nm.oninput = () => { frameName = nm.value; const fu = freeNow(); if (fu && nm.value.trim()) fu.name = nm.value.trim(); }; nm.onkeydown = e => { if (e.key === 'Enter') saveSheet(); }; }
 }
 function renderStrip() {
   const sb = id => `<button class="sb" data-c="${id}" data-tip="${id}">${DS(DIC[id], 20)}</button>`;
@@ -5621,6 +5788,16 @@ function placeCtx() {
     el.style.top = Math.max(ribBottom() + 4, y) + 'px';
     return;
   }
+  const nt = drawOn && sheetC && selNote && mnotes.includes(selNote) && (selNote.mk ?? null) === metalCur && selNote.vk === viewKey() ? selNote : null;
+  if (nt) {                                                 // плашка выноски: текст, удалить
+    if (ctxFor !== nt) { ctxFor = nt; noteEdit = false; noteCtxFill(nt); }
+    el.classList.add('show');
+    const k = pxPerPaper(), p = toScr(nt.p), Q = noteQ(nt), qx = p[0] + Q[0] * k, qy = p[1] + Q[1] * k, w = el.offsetWidth, h = el.offsetHeight;
+    let y = qy + 8 * k + 10; if (y + h > barTop() - 6) y = qy - 8 * k - h - 10;
+    el.style.left = Math.max(6, Math.min(innerWidth - w - 6, qx - w / 2)) + 'px';
+    el.style.top = Math.max(ribBottom() + 4, y) + 'px';
+    return;
+  }
   const dm = drawOn && selDim && dims.includes(selDim) && dimHere(selDim) ? selDim : null;
   const g = dm && dimPrims(dm, toScr, pxPerPaper());
   if (!g) { el.classList.remove('show'); ctxFor = null; ctxEdit = false; return; }
@@ -5630,6 +5807,26 @@ function placeCtx() {
   let y = g.tp[1] + 20; if (y + h > barTop() - 6) y = g.tp[1] - h - 28;
   el.style.left = Math.max(6, Math.min(innerWidth - w - 6, g.tp[0] - w / 2)) + 'px';
   el.style.top = Math.max(ribBottom() + 4, y) + 'px';
+}
+let noteEdit = false;
+function noteCtxFill(n) {
+  const el = $('dctx');
+  if (noteEdit) {
+    el.innerHTML = '<input id="dctxIn">';
+    const i = $('dctxIn'); i.value = n.txt.join(' / ');
+    i.onkeydown = e => {
+      e.stopPropagation();
+      if (e.key === 'Enter') { pushUndo(); noteHand(n); const t = i.value.split('/').map(s => s.trim()).filter(Boolean); if (t.length) n.txt = t; noteEdit = false; noteCtxFill(n); drawOverlay(); }
+      if (e.key === 'Escape') { noteEdit = false; noteCtxFill(n); drawOverlay(); }
+    };
+    setTimeout(() => { i.focus(); i.select(); });
+    return;
+  }
+  el.innerHTML = [['e_ntext', 'edit'], ['e_del', 'del']].map(([k, ic]) => `<button data-x="${k}">${DS(DIC[ic], 18)}<span>${L(k)}</span></button>`).join('');
+  el.querySelectorAll('[data-x]').forEach(b => { b.onclick = e => {
+    e.stopPropagation();
+    if (b.dataset.x === 'e_ntext') { noteEdit = true; noteCtxFill(n); placeCtx(); } else { pushUndo(); noteDel(n); }
+  }; });
 }
 function ctxFill(dm, g) {
   const el = $('dctx');
@@ -5730,6 +5927,8 @@ function unitFrameQ(u, anc) {
 }
 const MTXT = {
   ru: { metal: 'Металл', t_metal: 'Лист на каждый металлический полуфабрикат: размеры и подписи по модели', m_off: 'Обычный лист', m_pdf: 'Комплект PDF (все листы)', m_rep: 'Листы в отчёт Федосова (картинки по одному)',
+        f_loaded: 'Свои листы подняты из папки заказа', f_lost: 'не нашлись детали (модель перевыгружена)',
+        f_name: 'Лист', f_newsel: 'Новый лист из выделенного', f_newvis: 'Новый лист из всего видимого', f_rep: 'Лист в отчёт Федосова (картинка)', f_del: 'Удалить лист', f_none: 'нет видимых деталей',
         m_none: 'в модели нет полуфабрикатов с металлом', m_view: 'вид', v_bottom: 'снизу', v_back: 'сзади', v_right: 'справа', v_front: 'спереди', v_left: 'слева', v_top: 'сверху', m_last: 'последний вид листа не удаляется', holes: 'отв.', thru: 'насквозь', nothru: 'несквозное', fromIn: 'изнутри', fromOut: 'снаружи', withleg: 'с ножкой', capsYes: 'Торцы труб заглушить', capsNo: 'Торцы труб не глушить', refnote: '* Размеры для справок', det: 'Платик', detHole: 'отв.', deep: 'глуб.', under: 'под', nuts: 'шт.', c_offax: 'отверстие не по оси трубы (смещение', c_mm: 'мм)',
         side: { '-x': 'слева', x: 'справа', '-y': 'снизу', y: 'сверху', '-z': 'сзади', z: 'спереди' }, onside: 'с боку:', inside: 'внутрь', weld: 'патрубок', gablegs: 'Габариты — по трубам, без опор', metalprop: 'Металл', nopaintneed: 'не требуется (нержавейка)', m_chk: 'Проверить модель', ctr: 'Подрядчик', noctr: 'без подрядчика', orderqty: 'Количество изделий', qty: 'Количество', c_title: 'Замечания по модели — поправить и выгрузить заново', c_none: 'Замечаний по модели нет', c_nonut: 'на оси нет гайки', c_twonuts: 'две гайки в одном месте',
         mat: 'Материал', paint: 'Покраска', nopaint: 'покраска не задана в модели (свойство полуфабриката)', sheet: 'Лист', scale: 'Масштаб',
@@ -5739,6 +5938,8 @@ const MTXT = {
         join: 'Столярка — рамочные фасады', j_fac: 'фасадов', j_none: 'в модели нет рамочных фасадов (полуфабрикат «рамка» из дерева внутри блока фасада)', j_no: '№', j_wh: 'ширина × высота', j_qty: 'шт.',
         j_frame: 'Рамка', j_sec: 'Сечение рамки', j_fill: 'Наполнение', j_nofill: 'без наполнения', j_fin: 'Отделка: впиши двойным щелчком (тонировка, лак…)', j_note: 'Размеры фасадов — по наружному контуру рамки.' },
   uk: { metal: 'Метал', t_metal: 'Аркуш на кожен металевий напівфабрикат: розміри й підписи за моделлю', m_off: 'Звичайний аркуш', m_pdf: 'Комплект PDF (усі аркуші)', m_rep: 'Аркуші у звіт Федосова (картинки по одному)',
+        f_loaded: 'Свої аркуші підняті з теки замовлення', f_lost: 'не знайшлися деталі (модель перевивантажена)',
+        f_name: 'Аркуш', f_newsel: 'Новий аркуш з виділеного', f_newvis: 'Новий аркуш з усього видимого', f_rep: 'Аркуш у звіт Федосова (картинка)', f_del: 'Видалити аркуш', f_none: 'немає видимих деталей',
         m_none: 'у моделі немає напівфабрикатів з металом', m_view: 'вид', v_bottom: 'знизу', v_back: 'ззаду', v_right: 'справа', v_front: 'спереду', v_left: 'зліва', v_top: 'згори', m_last: 'останній вид аркуша не видаляється', holes: 'отв.', thru: 'наскрізь', nothru: 'ненаскрізне', fromIn: 'зсередини', fromOut: 'ззовні', withleg: 'з ніжкою', capsYes: 'Торці труб заглушити', capsNo: 'Торці труб не глушити', refnote: '* Розміри для довідок', det: 'Платик', detHole: 'отв.', deep: 'глиб.', under: 'під', nuts: 'шт.', c_offax: 'отвір не по осі труби (зміщення', c_mm: 'мм)',
         side: { '-x': 'зліва', x: 'справа', '-y': 'знизу', y: 'згори', '-z': 'ззаду', z: 'спереду' }, onside: 'з боку:', inside: 'всередину', weld: 'патрубок', gablegs: 'Габарити — по трубах, без опор', metalprop: 'Метал', nopaintneed: 'не потрібне (нержавійка)', m_chk: 'Перевірити модель', ctr: 'Підрядник', noctr: 'без підрядника', orderqty: 'Кількість виробів', qty: 'Кількість', c_title: 'Зауваження до моделі — виправити й вивантажити заново', c_none: 'Зауважень до моделі немає', c_nonut: 'на осі немає гайки', c_twonuts: 'дві гайки в одному місці',
         mat: 'Матеріал', paint: 'Фарбування', nopaint: 'фарбування не задане в моделі (властивість напівфабрикату)', sheet: 'Аркуш', scale: 'Масштаб',
@@ -5750,7 +5951,13 @@ const MTXT = {
 };
 const ML = k => (MTXT[dLang] && MTXT[dLang][k]) || MTXT.ru[k];
 let metal = null, metalPrevFix = 0;
-const mnotes = [];                                          // выноски листов металла: {mk, p (сцена), dx, dy, txt[]}
+// «свой лист» (тема 60, Алексей 11.11): лист с видами-блоками для любых деталей модели — выделенных или всех видимых.
+// Та же единица листа, что у металла (u, name, pi, box), но free: виды — те, что поставил человек (un.vs, первый — главный),
+// автоматических размеров, выносок и колонки надписей нет; размеры и сечения ставятся рукой на живом виде.
+const freeUnits = [], FREE_U0 = -20000; let freeSeq = 0;
+const freeNow = () => metalCur === null ? null : freeUnits.find(x => x.u === metalCur) || null;
+const mnotes = [];
+let selNote = null;                                         // выделенная выноска (тянуть, плашка: текст / удалить)                                          // выноски листов металла: {mk, p (сцена), dx, dy, txt[]}
 function cleanFast(n) {   // имя крепежа без поставщика в скобках и без артикула в конце (длинный код из букв и цифр)
   const w = String(n || '').replace(/^\[[^\]]*\]\s*/, '').trim().split(/\s+/);
   if (w.length > 1 && w[w.length - 1].length >= 12 && /\d/.test(w[w.length - 1]) && /[a-z]/i.test(w[w.length - 1])) w.pop();
@@ -5764,7 +5971,8 @@ let metalGroupSel = null;
 function metalData() {
   const B = metal || (metal = metalBuild());
   const g = B.groups.includes(metalGroupSel) ? metalGroupSel : B.groups[0];
-  if (B.views[g]) return B.views[g];
+  // all — всё, что можно открыть листом: листы металла (own) и «свои листы» (freeUnits, тема 60); комплект PDF / отчёт — только own
+  if (B.views[g]) { B.views[g].all = B.views[g].own.concat(freeUnits); return B.views[g]; }
   const units = B.units.filter(x => x.ctr === g);
   units.forEach((x, k) => { x.no = k + 1; });                 // номера листов — свои в каждом комплекте
   const gi = B.groups.indexOf(g);
@@ -5775,7 +5983,7 @@ function metalData() {
              pi: B.groups.length > 1 ? [...new Set(us.flatMap(x => x.pi))] : partsUnder(t),   // виды — только детали комплекта
              boxes: [], box, holes: [], mats: [...new Set(us.flatMap(x => x.mats))], paint: us.map(x => x.paint).find(Boolean) || '' };
   }).filter(Boolean);
-  return (B.views[g] = { tops: B.tops, groups: B.groups, group: g, units, gen, all: gen.concat(units) });
+  return (B.views[g] = { tops: B.tops, groups: B.groups, group: g, units, gen, own: gen.concat(units), all: gen.concat(units, freeUnits) });
 }
 function metalBuild() {
   const par = {};
@@ -5910,7 +6118,7 @@ function holeAt(un, h) {
 }
 function axName(v) { const k = ['x', 'y', 'z'].reduce((p, q) => Math.abs(v[q]) > Math.abs(v[p]) ? q : p, 'x'); return (v[k] < 0 ? '-' : '') + k; }
 // заголовок листа: полуфабрикат — имя и номер, отдельная деталь — её материал, длина, количество
-const unitTitle = un => un.general || un.loose ? un.name : un.name + ' ' + un.no;
+const unitTitle = un => un.general || un.loose || un.free ? un.name : un.name + ' ' + un.no;
 function metalView(un) {
   const s = un.box.getSize(V3()), mn = Math.min(s.x, s.y, s.z), sd = [s.x, s.y, s.z].sort((a, b) => a - b);
   if (sd[2] > 3 * sd[1] && (un.mains || []).length <= 1) return s.z === sd[2] ? 'left' : 'front';   // одиночная труба / пруток: вид, где видна вся длина (крестовина из труб — три вида)
@@ -5942,10 +6150,11 @@ const RIGHT_COL = 92, GAP = 34;                             // мм листа: 
 const ISO_MIN = 70, ISO_MAX = 150, EDGE_M = 8, VGAP = 6, DET_S = 58;   // DET_S — сторона увеличенного вида платика (мм листа)
 function metalClear(un) {                                   // автоматические размеры листа; поставленные рукой — остаются
   for (const dm of dims.filter(d => d.mk === un.u && d.auto)) removeDim(dm);
-  for (let i = mnotes.length - 1; i >= 0; i--) if (mnotes[i].mk === un.u) mnotes.splice(i, 1);
+  for (let i = mnotes.length - 1; i >= 0; i--) if (mnotes[i].mk === un.u && !mnotes[i].hand) mnotes.splice(i, 1);
   un.given = new Set(); un.marks = {};
 }
 function metalLayout(un) {
+  if (un.free) return freeLayout(un);
   const v0 = un.general ? '3d' : metalView(un); let vs = v0 === '3d' ? ['front', 'left', 'top'] : [v0];
   // дополнительные виды по просьбе (меню листа: снизу / сзади / справа — «вид по линии вниз, вверх», Алексей 28.10)
   for (const v of un.extra || []) if (!vs.includes(v)) vs.push(v);
@@ -6041,6 +6250,185 @@ function metalLayout(un) {
   if (best.n !== drawN) { drawFix = drawN = best.n; metalClear(un); for (const v of vs) { metalCam(un, v); metalDims(un); } }
   return best;
 }
+// ---------- «свой лист» (тема 60) ----------
+// раскладка: главный вид (первый в un.vs) — слева вверху; слева / справа / сзади — в ряд с ним, сверху / снизу — под ним
+// (проекционная связь, как у металла), остальные (аксонометрия) — в свободное место. Вокруг вида — поле под размеры рукой.
+// Масштаб — самый крупный из ряда, при котором всё помещается; выбранный рукой не помещается — следующий мельче.
+const FREE_PAD = { l: 18, t: 18, r: 18, b: 18 };
+function freeLayout(un) {
+  const vs = un.vs.slice(); un.multi = vs.length > 1; un.gabView = null;
+  const AW = SHEET_W, AH = SHEET_H, scales = un.forceN ? [un.forceN].concat(SCALES.filter(s => s > un.forceN)) : SCALES;
+  let best = null;
+  for (const n of scales) {
+    drawFix = drawN = n;
+    const G = {}; for (const v of vs) G[v] = Object.assign(metalCam(un, v), { v, pad: FREE_PAD });
+    const sz = g => ({ w: g.w / n, h: g.h / n });
+    const rect = (g, px, py) => { const s = sz(g); return [px - s.w / 2 - g.pad.l, py - s.h / 2 - g.pad.t, px + s.w / 2 + g.pad.r, py + s.h / 2 + g.pad.b]; };
+    const F = G[vs[0]], fs = sz(F), pos = { [F.v]: [EDGE_M + F.pad.l + fs.w / 2, EDGE_M + F.pad.t + fs.h / 2] }, occ = [rect(F, ...pos[F.v])];
+    let rowX = occ[0][2], colY = occ[0][3], fits = true;
+    for (const v of vs.slice(1).filter(q => viewLink(vs[0], q))) {
+      const g = G[v], s = sz(g);
+      if (viewLink(vs[0], v) === 'row') { pos[v] = [rowX + VGAP + g.pad.l + s.w / 2, pos[F.v][1]]; rowX = pos[v][0] + s.w / 2 + g.pad.r; }
+      else { pos[v] = [pos[F.v][0], colY + VGAP + g.pad.t + s.h / 2]; colY = pos[v][1] + s.h / 2 + g.pad.b; }
+      occ.push(rect(g, ...pos[v]));
+    }
+    for (const v of vs.slice(1).filter(q => !pos[q])) {
+      const g = G[v], s = sz(g), spot = metalFreeRect(occ, AW, AH, s.w + g.pad.l + g.pad.r, s.h + g.pad.t + g.pad.b);
+      if (!spot) { fits = false; break; }
+      pos[v] = [spot[0] + g.pad.l + s.w / 2, spot[1] + g.pad.t + s.h / 2]; occ.push(rect(g, ...pos[v]));
+    }
+    if (!fits) continue;
+    const U0 = [Math.min(...occ.map(r => r[0])), Math.min(...occ.map(r => r[1])), Math.max(...occ.map(r => r[2])), Math.max(...occ.map(r => r[3]))];
+    if (U0[2] > AW - EDGE_M + 0.5 || U0[3] > AH - EDGE_M + 0.5) continue;      // не влезло — масштаб мельче
+    const sh = [(AW - (U0[2] - U0[0])) / 2 - U0[0], (AH - (U0[3] - U0[1])) / 2 - U0[1]];   // всё вместе — посередине листа
+    best = { n, iso: null, det: null, views: vs.map(v => ({ v, px: pos[v][0] + sh[0], py: pos[v][1] + sh[1], gw: G[v].w / n, gh: G[v].h / n, pad: G[v].pad })) };
+    break;
+  }
+  if (!best) { const n = SCALES[SCALES.length - 1]; best = { n, iso: null, det: null, views: vs.map(v => ({ v, px: AW / 2, py: AH / 2 })) }; }
+  drawFix = drawN = best.n;
+  return best;
+}
+// новый лист: из выделенных деталей, нет выделения — из всего, что сейчас видно; главный вид — тот, что был на экране
+function freeNew() {
+  const pi = selSet.length ? selSet.slice() : parts.map((p, i) => i).filter(i => parts[i].g.visible);
+  if (!pi.length) { toast(ML('f_none')); return null; }
+  const cv0 = curView(), v0 = cv0 && cv0 !== 'iso' ? cv0 : 'front';
+  if (metalCur !== null) metalOff();
+  if (selSet.length) clearSel();
+  root.updateMatrixWorld(true);
+  const box = new THREE.Box3(); for (const i of pi) box.expandByObject(parts[i].g);
+  const un = { u: FREE_U0 - (++freeSeq), free: true, name: ML('f_name') + ' ' + freeSeq, pi, box, boxes: [], holes: [], vs: [v0], no: 0 };
+  freeUnits.push(un); metalData(); metalShow(un.u);
+  return un;
+}
+// добавить вид на лист: масштаб листа прежний, если новый вид помещается; виды, расставленные рукой, остаются на местах,
+// новый встаёт в свободное место рядом
+function freeAddView(un, v) {
+  if (un.vs.includes(v)) { metalShow(un.u, v, true); return; }
+  // виды двигали рукой — места ВСЕХ видов замораживаются (иначе новая раскладка сдвинула бы нетронутые), новый — в свободное место
+  const n0 = drawN, was = un.vpos ? metalViews(un) : null, old = was && was.map(w => metalViewRect(w)), fix = {};
+  if (was) for (const w of was) fix[w.v] = [w.px, w.py];
+  un.vs.push(v); un.forceN = n0; un.lay = null;
+  const lay = metalLayout(un);
+  if (lay.n !== n0) { un.vpos = null; un.forceN = 0; un.lay = null; }       // в прежнем масштабе не поместилось — лист переложен заново
+  else if (old) {
+    const w = lay.views.find(x => x.v === v), p = w.pad || FREE_PAD;
+    const spot = metalFreeRect(old, SHEET_W, SHEET_H, (w.gw || 40) + p.l + p.r, (w.gh || 40) + p.t + p.b);
+    if (spot) { fix[v] = [spot[0] + p.l + (w.gw || 40) / 2, spot[1] + p.t + (w.gh || 40) / 2]; un.vpos = fix; }
+    else { un.vpos = null; un.forceN = 0; un.lay = null; }                  // свободного места нет — лист переложен заново, масштаб по месту
+  }
+  metalShow(un.u, v);
+}
+function freeDel(un) {
+  for (const dm of dims.filter(d => d.mk === un.u)) removeDim(dm);
+  for (let i = secs.length - 1; i >= 0; i--) if (secs[i].mk === un.u) secs.splice(i, 1);
+  for (let i = mnotes.length - 1; i >= 0; i--) if (mnotes[i].mk === un.u) mnotes.splice(i, 1);
+  if (metalCur === un.u) metalOff();
+  freeUnits.splice(freeUnits.indexOf(un), 1); metalData(); drawOverlay(); syncPanel();
+}
+// весь лист картинкой — в папку чертежей зоны, откуда их по порядку имён берёт отчёт Федосова (следующим номером)
+async function freeReport(un) {
+  if (!LOCAL) { toast('в этой странице нет папки заказа — перевыгрузите проект из Базиса'); return null; }
+  const av = un.actV; let b64;
+  try { b64 = await svgPng(metalSheetSvg(un), 15); } catch (e) { console.error(e); toast('лист не собрался: ' + e.message); metalShow(un.u, av); return null; }
+  metalShow(un.u, av);
+  await refreshList();
+  const name = nextName(drawFiles.d, un.name, '.png');
+  try { await srv('/draw/save', { dir: DIR_DRAW, name, b64 }); toast('лист сохранён: ' + name); }
+  catch (e) { toast('не сохранилось: ' + e.message); return null; }
+  refreshList();
+  return name;
+}
+// ---------- свои листы помнятся (тема 60, шаг 3): <заказ>\5. Креслення\Свои листы\<изделие>.json через домашний сервер ----------
+// Деталь листа хранится ключом «имя | место» — номер детали в выгрузке после перевыгрузки может смениться; не нашлась — подсказка.
+// Размеры, сечения, выноски — точками модели, как есть (сдвинули деталь в Базисе — размер останется на старом месте).
+const FREE_DIR = LOCAL ? LOCAL.order + '\\5. Креслення\\Свои листы' : '';
+const freeFile = () => String(M.title || 'изделие').replace(/[\\/:*?"<>|]/g, '_') + '.json';
+function partKey(i) {
+  const o = M.objs[i]; if (!o) return 'i' + i;
+  const t = o.t, p = t ? [t[3], t[7], t[11]] : (() => { const c = new THREE.Box3().expandByObject(parts[i].g).getCenter(V3()).sub(root.position); return [c.x, c.y, c.z]; })();
+  return (o.n || '') + '|' + p.map(v => Math.round(v)).join(',');
+}
+let freeLoaded = false, freeSaved = '', freeSaveTm = null;
+function freeState() {
+  const ids = new Set(freeUnits.map(x => x.u)), A = v => v.toArray().map(x => Math.round(x * 1000) / 1000);
+  return JSON.stringify({ v: 1, title: M.title || '', seq: freeSeq,
+    sheets: freeUnits.map(x => ({ u: x.u, name: x.name, vs: x.vs, vpos: x.vpos || null, forceN: x.forceN || 0, keys: x.pi.map(partKey), pi: x.pi })),
+    dims: dims.filter(d => ids.has(d.mk)).map(d => ({ mk: d.mk, a: A(d.a), b: A(d.b), axis: d.axis, off: A(d.off), label: d.label, text: d.text, vdir: d.vdir ? A(d.vdir) : null, chain: d.chain, fs: d.fs, ang: d.ang ? { c: A(d.ang.c), p: A(d.ang.p) } : null })),
+    secs: secs.filter(q => ids.has(q.mk)).map(q => ({ mk: q.mk, a: A(q.a), b: A(q.b), s: q.s, vdir: A(q.vdir), fs: q.fs, letter: q.letter, sN: q.sN, rot: q.rot, pos: q.pos.slice(), pi: q.pi })),
+    notes: mnotes.filter(n => n.hand && ids.has(n.mk)).map(n => ({ mk: n.mk, vk: n.vk, p: A(n.p), pi: n.pi, q: n.q.slice(), txt: n.txt.slice() })) });
+}
+// после любой перемены на листе (перерисовка листа) — запись через секунду тишины, только если что-то поменялось
+function freeSaveSoon() {
+  if (!LOCAL || !freeLoaded) return;
+  clearTimeout(freeSaveTm);
+  freeSaveTm = setTimeout(async () => {
+    const s = freeState(); if (s === freeSaved) return;
+    try { await srv('/draw/state', { dir: FREE_DIR, name: freeFile(), data: s }); freeSaved = s; }
+    catch (e) { console.warn('свои листы не записались:', e.message); }
+  }, 1000);
+}
+async function freeLoad() {
+  if (!LOCAL || freeLoaded) return;
+  let txt = '';
+  try { txt = (await srv('/draw/state', { dir: FREE_DIR, name: freeFile() })).data || ''; }
+  catch (e) { console.warn('свои листы не прочитались:', e.message); return; }   // старый сервер / нет сервера — листы просто не помнятся
+  freeLoaded = true;
+  if (!txt.trim()) { freeSaved = freeState(); return; }
+  let st; try { st = JSON.parse(txt); } catch (e) { console.warn('файл своих листов испорчен'); return; }
+  root.updateMatrixWorld(true);
+  const byKey = new Map(); parts.forEach((p, i) => { const k = partKey(i); if (!byKey.has(k)) byKey.set(k, i); });
+  const lost = [], um = new Map();                          // um — прежний номер листа → нынешний (лист успели сделать до чтения файла)
+  freeSeq = Math.max(freeSeq, st.seq || 0);
+  for (const s of st.sheets || []) {
+    if (freeUnits.some(x => x.u === s.u)) { const nu = FREE_U0 - (++freeSeq); um.set(s.u, nu); s.u = nu; } else um.set(s.u, s.u);
+    const pi = []; s.keys.forEach((k, j) => { const i = byKey.get(k); if (i !== undefined) pi.push(i); else if (M.objs[s.pi[j]] && (M.objs[s.pi[j]].n || '') === k.split('|')[0]) pi.push(s.pi[j]); });
+    if (pi.length < s.keys.length) lost.push(s.name + ' — ' + (s.keys.length - pi.length));
+    if (!pi.length) continue;
+    const box = new THREE.Box3(); for (const i of pi) box.expandByObject(parts[i].g);
+    freeUnits.push({ u: s.u, free: true, name: s.name, pi, box, boxes: [], holes: [], vs: s.vs.slice(), vpos: s.vpos, forceN: s.forceN || 0, no: 0 });
+  }
+  const V = a => new THREE.Vector3().fromArray(a), ok = new Set(freeUnits.map(x => x.u));
+  for (const q of [].concat(st.dims || [], st.secs || [], st.notes || [])) q.mk = um.has(q.mk) ? um.get(q.mk) : null;
+  for (const q of st.dims || []) {
+    if (!ok.has(q.mk)) continue;
+    if (q.chain) chainSeq = Math.max(chainSeq, q.chain);   // цепочки после подъёма не сливаются с новыми
+    const dm = addDim(V(q.a), V(q.b), { label: q.label, text: q.text, fs: q.fs, mk: q.mk });
+    dm.axis = q.axis; dm.off = V(q.off); dm.vdir = q.vdir ? V(q.vdir) : null; dm.chain = q.chain; if (q.ang) dm.ang = { c: V(q.ang.c), p: V(q.ang.p) };
+    buildDim(dm); if (dm.g) dm.g.visible = false;
+  }
+  for (const q of st.secs || []) if (ok.has(q.mk)) secs.push({ a: V(q.a), b: V(q.b), s: q.s, vdir: V(q.vdir), fs: q.fs, letter: q.letter, sN: q.sN, rot: q.rot, pos: q.pos.slice(), pi: q.pi, mk: q.mk });
+  for (const n of st.notes || []) if (ok.has(n.mk)) mnotes.push({ mk: n.mk, vk: n.vk, p: V(n.p), pi: n.pi, q: n.q.slice(), txt: n.txt.slice(), hand: true });
+  freeSaved = freeState();
+  if (freeUnits.length) toast(ML('f_loaded') + ': ' + freeUnits.length + (lost.length ? '. ' + ML('f_lost') + ': ' + lost.join(', ') : ''));
+  syncPanel(); drawOverlay();
+}
+function freeMenu(b) {
+  const el = $('dfly'), cur = freeNow(), nm = v => v === 'iso' ? L('n_iso') : ML('m_view') + ' ' + ML('v_' + v);
+  flyFor = b;
+  el.innerHTML = `<button data-fu="new"><span>${esc(selSet.length ? ML('f_newsel') + ' (' + selSet.length + ')' : ML('f_newvis'))}</span></button>` +
+    freeUnits.map(x => `<button data-fu="${x.u}" class="${metalCur === x.u ? 'on' : ''}"><span>${esc(x.name)}</span></button>`).join('') +
+    (cur ? ['front', 'back', 'left', 'right', 'top', 'bottom', 'iso'].map(v => `<button data-fv="${v}" class="${cur.vs.includes(v) ? 'on' : ''}"><span>${esc((cur.vs.includes(v) ? '− ' : '+ ') + nm(v))}</span></button>`).join('') +
+      `<button data-fu="rep"><span>${esc(ML('f_rep'))}</span></button><button data-fu="del"><span>${esc(ML('f_del'))}</span></button>` : '') +
+    (metalCur !== null ? `<button data-fu="off"><span>${esc(ML('m_off'))}</span></button>` : '');
+  el.querySelectorAll('[data-fv]').forEach(q => { q.onclick = e => {
+    e.stopPropagation(); closeFly();
+    const v = q.dataset.fv; if (cur.vs.includes(v)) metalDelView(cur, v); else freeAddView(cur, v);
+  }; });
+  el.querySelectorAll('[data-fu]').forEach(q => { q.onclick = e => {
+    e.stopPropagation(); closeFly();
+    const v = q.dataset.fu;
+    if (v === 'new') freeNew(); else if (v === 'off') metalOff(); else if (v === 'rep') freeReport(cur); else if (v === 'del') freeDel(cur); else metalShow(+v);
+    syncPanel();
+  }; });
+  el.classList.add('show');
+  const r = b.getBoundingClientRect();
+  el.style.left = Math.max(6, Math.min(innerWidth - el.offsetWidth - 6, r.left)) + 'px'; el.style.top = (r.bottom + 4) + 'px';
+}
+// для самопроверки в невидимом браузере
+window.__free = { make: () => { const un = freeNew(); return un ? un.u : null; }, add: v => freeAddView(freeNow(), v), del: v => metalDelView(freeNow(), v),
+  list: () => freeUnits.map(x => [x.u, x.name, x.vs.join(' '), x.pi.length]), rep: () => freeReport(freeNow()), kill: () => freeDel(freeNow()),
+  png: async pxmm => { const un = freeNow(), av = un.actV, b = await svgPng(metalSheetSvg(un), pxmm || 15); metalShow(un.u, av); return b; } };   // та же картинка, что уходит в отчёт
 // свободный прямоугольник w×h на листе (сетка 4 мм, от левого верха — рядом с видами), не задевая занятое; нет — null
 function metalFreeRect(occ, AW, AH, w, h) {
   const hit = (x, y) => occ.some(r => x < r[2] + 4 && x + w > r[0] - 4 && y < r[3] + 4 && y + h > r[1] - 4);
@@ -6111,6 +6499,10 @@ function metalStatics(un, act) {
 // сдвинуть вид на листе; живой — вместе с ним сдвигается лист в сцене, а камера за листом (лист на экране стоит)
 function metalMoveView(un, v, px, py) {
   const cur = metalViews(un).find(w => w.v === v); if (!cur) return;
+  // сам вид не уходит за край листа (Алексей 11.11: «нижний вид уходит за пределы поля»)
+  const hw = (cur.gw || 0) / 2, hh = (cur.gh || 0) / 2, M2 = 2;
+  if (hw * 2 < SHEET_W - 2 * M2) px = Math.max(M2 + hw, Math.min(SHEET_W - M2 - hw, px));
+  if (hh * 2 < SHEET_H - 2 * M2) py = Math.max(M2 + hh, Math.min(SHEET_H - M2 - hh, py));
   const dx = px - cur.px, dy = py - cur.py; if (!dx && !dy) return;
   (un.vpos || (un.vpos = {}))[v] = [px, py];
   if (v !== un.actV || !sheetC) return;
@@ -6120,23 +6512,33 @@ function metalMoveView(un, v, px, py) {
 }
 // проекционная связь (Алексей 29.10): вид слева / справа / сзади, стоящий в ряд с главным, ходит только вбок, вид сверху /
 // снизу под ним — только вверх-вниз; главный тянет связанные за собой. Несвязанный ходит свободно, у линии главного — прилипает
-const V_ROW = ['left', 'right', 'back'], V_COL = ['top', 'bottom'];
+// Главный вид: у металла — спереди, у своего листа — первый поставленный (тема 60). Связь с главным: виды сбоку от него
+// (спереди / сзади / слева / справа) — в ряд, сверху / снизу — в столбец под видом спереди или сзади; аксонометрия — свободная.
+const V_SIDE = ['front', 'back', 'left', 'right'], V_TB = ['top', 'bottom'];
+const mainView = un => un.free ? un.vs[0] : 'front';
+function viewLink(m, v) {
+  if (m === v || v === 'iso' || m === 'iso') return null;
+  if (V_SIDE.includes(m)) return V_SIDE.includes(v) ? 'row' : V_TB.includes(v) && (m === 'front' || m === 'back') ? 'col' : null;
+  return v === 'front' || v === 'back' ? 'col' : null;
+}
 function metalDragView(un, v, P, dx, dy) {
-  const F = P.front;
+  const m = mainView(un), F = P[m], lk = F ? viewLink(m, v) : null;
   let x = P[v][0] + dx, y = P[v][1] + dy;
-  if (F && v !== 'front') {
-    if (V_ROW.includes(v)) { if (Math.abs(P[v][1] - F[1]) < 0.5 || Math.abs(y - F[1]) < 4) y = F[1]; }
-    else if (V_COL.includes(v)) { if (Math.abs(P[v][0] - F[0]) < 0.5 || Math.abs(x - F[0]) < 4) x = F[0]; }
-  }
+  if (lk === 'row') { if (Math.abs(P[v][1] - F[1]) < 0.5 || Math.abs(y - F[1]) < 4) y = F[1]; }
+  else if (lk === 'col') { if (Math.abs(P[v][0] - F[0]) < 0.5 || Math.abs(x - F[0]) < 4) x = F[0]; }
   metalMoveView(un, v, x, y);
-  if (v === 'front') for (const q in P) {
-    if (V_ROW.includes(q) && Math.abs(P[q][1] - F[1]) < 0.5) metalMoveView(un, q, P[q][0], P[q][1] + dy);
-    else if (V_COL.includes(q) && Math.abs(P[q][0] - F[0]) < 0.5) metalMoveView(un, q, P[q][0] + dx, P[q][1]);
+  if (v === m) {                                            // главный тянет связанных — на столько, на сколько сдвинулся сам (у края листа меньше)
+    const np = (un.vpos && un.vpos[v]) || [x, y], ddx = np[0] - P[v][0], ddy = np[1] - P[v][1];
+    for (const q in P) {
+      const l = viewLink(m, q);
+      if (l === 'row' && Math.abs(P[q][1] - F[1]) < 0.5) metalMoveView(un, q, P[q][0], P[q][1] + ddy);
+      else if (l === 'col' && Math.abs(P[q][0] - F[0]) < 0.5) metalMoveView(un, q, P[q][0] + ddx, P[q][1]);
+    }
   }
 }
 // масштаб листа: все виды разом; главный стоит, остальные — с тем же зазором до главного (связь видов не рвётся)
 function metalApplyScale(un, n) {
-  const old = metalViews(un), F0 = old.find(w => w.v === 'front') || old[0], a0 = metalViewRect(F0), kk = drawN / n, gap = {};
+  const old = metalViews(un), F0 = old.find(w => w.v === mainView(un)) || old[0], a0 = metalViewRect(F0), kk = drawN / n, gap = {};
   for (const w of old) { const b = metalViewRect(w); gap[w.v] = { r: b[0] - a0[2], l: a0[0] - b[2], d: b[1] - a0[3], u: a0[1] - b[3], dx: w.px - F0.px, dy: w.py - F0.py }; }
   const moved = !!un.vpos;
   un.forceN = n; un.lay = null; un.vpos = null;
@@ -6159,7 +6561,8 @@ function metalDelView(un, v) {
   const vw = metalViews(un); if (vw.length < 2) { toast(ML('m_last')); return; }
   const pos = {}; for (const w of vw) if (w.v !== v) pos[w.v] = [w.px, w.py];
   const ex = un.extra || [];
-  if (ex.includes(v)) ex.splice(ex.indexOf(v), 1); else un.vdel = (un.vdel || []).concat(v);
+  if (un.free) un.vs = un.vs.filter(x => x !== v);
+  else if (ex.includes(v)) ex.splice(ex.indexOf(v), 1); else un.vdel = (un.vdel || []).concat(v);
   un.forceN = drawN; un.vpos = pos; un.lay = null; metalSelV = null;
   metalShow(un.u, v === un.actV ? Object.keys(pos)[0] : un.actV, true);
 }
@@ -6174,7 +6577,7 @@ function metalViewsSvg(un, S) {
   }
   const box = (r, cls, extra) => `<rect class="${cls}" ${extra || ''} x="${f(S.x0 + r[0] * k)}" y="${f(S.y0 + r[1] * k)}" width="${f((r[2] - r[0]) * k)}" height="${f((r[3] - r[1]) * k)}"/>`;
   if (metalScaleDr) {                                       // тянут угол: будущие рамки видов и масштаб
-    const D = metalScaleDr, F = vw.find(w => w.v === 'front') || vw[0];
+    const D = metalScaleDr, F = vw.find(w => w.v === mainView(un)) || vw[0];
     for (const w of vw) {
       const r = metalViewRect(w), c = [F.px + (w.px - F.px) * D.f, F.py + (w.py - F.py) * D.f], hw = (r[2] - r[0]) * D.f / 2, hh = (r[3] - r[1]) * D.f / 2;
       s += box([c[0] - hw, c[1] - hh, c[0] + hw, c[1] + hh], 'vpre');
@@ -6182,10 +6585,21 @@ function metalViewsSvg(un, S) {
     s += `<text class="vtip" x="${f(D.x + 12)}" y="${f(D.y + 24)}">М 1:${fmtN(D.n)}</text>`;
     return s;
   }
+  // линии связи с главным видом (тема 60): связанный вид стоит в ряд / в столбец — между серединами тонкий пунктир
+  const m = mainView(un), F = vw.find(w => w.v === m);
+  if (F) for (const w of vw) {
+    const l = viewLink(m, w.v);
+    if ((l === 'row' && Math.abs(w.py - F.py) < 0.5) || (l === 'col' && Math.abs(w.px - F.px) < 0.5))
+      s += `<path class="vlink" d="M${f(S.x0 + F.px * k)} ${f(S.y0 + F.py * k)}L${f(S.x0 + w.px * k)} ${f(S.y0 + w.py * k)}"/>`;
+  }
   for (const w of vw) {
+    // живой вид при выбранном инструменте ловится только краем (внутри ставятся размеры); без инструмента — всей площадью,
+    // как остальные: потянул — вид поехал (Алексей 11.11)
     const r = metalViewRect(w), act = w.v === un.actV, on = metalSelV === w.v;
-    s += box(r, 'vfr' + (on ? ' on' : '')) + box(r, act ? 'vb' : 'vh', `data-vw="${w.v}"`) +
+    s += box(r, 'vfr' + (on ? ' on' : '')) + box(r, act && drawTool ? 'vb' : 'vh', `data-vw="${w.v}"`) +
       `<rect class="grip bg" data-vws="${w.v}" x="${f(S.x0 + r[2] * k - 5)}" y="${f(S.y0 + r[3] * k - 5)}" width="10" height="10"/>`;
+    if (vw.length > 1) s += `<g class="vx" data-vx="${w.v}" transform="translate(${f(S.x0 + r[2] * k - 2)} ${f(S.y0 + r[1] * k + 2)})"><title>${esc(L('v_x'))}</title>` +
+      '<rect x="-16" y="0" width="16" height="16" rx="3"/><path d="M-12 4L-4 12M-4 4L-12 12"/></g>';   // крестик — убрать вид
   }
   return s;
 }
@@ -6216,7 +6630,7 @@ function metalOff() {
 function metalDims(un) {
   const vk = viewKey();                                     // размеры, выноски и отверстия — свои у каждого вида
   for (const dm of dims.filter(d => d.mk === un.u && d.auto && dimHere(d))) removeDim(dm);
-  for (let i = mnotes.length - 1; i >= 0; i--) if (mnotes[i].mk === un.u && mnotes[i].vk === vk) mnotes.splice(i, 1);
+  for (let i = mnotes.length - 1; i >= 0; i--) if (mnotes[i].mk === un.u && mnotes[i].vk === vk && !mnotes[i].hand) mnotes.splice(i, 1);
   const { R, U } = viewAxes(), b = un.mbox || un.box, k = drawN, ROW = 9 * k, FIRST = 11 * k;
   const mid = b.getCenter(V3());
   // только отверстия, проходящие через металл (дюбель в стене за полкой — не отверстие полки; контрольная кухня 030_2)
@@ -6465,11 +6879,13 @@ function metalDims(un) {
     const q = { c: un.detMark.p }, top = onTop(q);
     mnotes.push({ mk: un.u, vk, p: un.detMark.p.clone(), dx: onRight(q) ? -1 : 1, dy: top ? -1 : 1, ly: 11 + (top ? rowsN.t : rowsN.b) * 9 + 5 + (nSide[top ? 't' : 'b'] || 0), txt: ['А'], circ: un.detMark.r / k });
   }
+  // выноски, которые потянули или поправили рукой (тема 60), — вместо автоматических с тем же текстом
+  for (let i = mnotes.length - 1; i >= 0; i--) { const n = mnotes[i]; if (!n.hand && n.mk === un.u && n.vk === vk && mnotes.some(o => o.hand && o.src === n.mk + '|' + n.vk + '|' + n.txt.join('\n'))) mnotes.splice(i, 1); }
   // поля вокруг вида (мм листа): ряды размеров (первый 10 мм, дальше по 8, плюс цифра) и выноски с их полками
   const padOf = n => n ? 11 + (n - 1) * 9 + 6 : 3, pad = { t: padOf(rowsN.t), b: padOf(rowsN.b), l: padOf(rowsN.l), r: padOf(rowsN.r) };
   const halfW = Math.abs(b.max[R] - b.min[R]) / k / 2;
   for (const n of mnotes) {
-    if (n.mk !== un.u || n.vk !== vk) continue;
+    if (n.mk !== un.u || n.vk !== vk || n.hand) continue;
     if (n.dy < 0) pad.t = Math.max(pad.t, n.ly + 6); else pad.b = Math.max(pad.b, n.ly + n.txt.length * 6.6 + 2);
     const x0 = (n.p[R] - mid[R]) * rtS / k, x1 = x0 + n.dx * (n.ly * 0.5 + Math.max(...n.txt.map(t => t.length)) * 2.5);
     if (x1 > halfW) pad.r = Math.max(pad.r, x1 - halfW + 2); if (x1 < -halfW) pad.l = Math.max(pad.l, -halfW - x1 + 2);
@@ -6478,10 +6894,16 @@ function metalDims(un) {
   drawOverlay();
 }
 // выноска: точка → косая 8 мм наружу → полка с текстом (строки друг под другом)
-function noteSvg(n, toP, k, exp) {
+// угол полки выноски — смещение от точки в мм листа: у поставленной / перетянутой рукой — своё (n.q), у автоматической — по раскладке
+function noteQ(n) { if (n.q) return n.q.slice(); const ly = n.ly || 8; return [n.dx * ly * 0.5, n.dy * ly]; }
+// автоматическая выноска металла, которую потянули или поправили, — становится ручной; перекладка листа её не трогает,
+// а автоматическую с тем же текстом на том же виде больше не ставит (src)
+function noteHand(n) { if (n.hand) return; n.src = n.mk + '|' + n.vk + '|' + n.txt.join('\n'); n.q = noteQ(n); n.hand = true; }
+function noteSvg(n, toP, k, exp, idx) {
   const p = toP(n.p), f = v => String(Math.round(v * 100) / 100), col = '#000000';
-  const ly = n.ly || 8, q = [p[0] + n.dx * ly * 0.5 * k, p[1] + n.dy * ly * k], wTxt = Math.max(...n.txt.map(t => t.length)) * 2.5 * k;
-  const end = [q[0] + n.dx * wTxt, q[1]], sw = exp ? 0.18 : Math.max(1, 0.18 * k);
+  const Q = noteQ(n), dx = n.q ? (Q[0] >= 0 ? 1 : -1) : n.dx;
+  const q = [p[0] + Q[0] * k, p[1] + Q[1] * k], wTxt = Math.max(...n.txt.map(t => t.length)) * 2.5 * k;
+  const end = [q[0] + dx * wTxt, q[1]], sw = exp ? 0.18 : Math.max(1, 0.18 * k);
   let s;
   if (n.circ) {                                             // место выносного элемента: тонкая окружность, выноска от её края
     const rr = n.circ * k, L0 = Math.hypot(q[0] - p[0], q[1] - p[1]) || 1, sx = p[0] + (q[0] - p[0]) / L0 * rr, sy = p[1] + (q[1] - p[1]) / L0 * rr;
@@ -6491,8 +6913,10 @@ function noteSvg(n, toP, k, exp) {
     s = `<path d="M${f(p[0])} ${f(p[1])}L${f(q[0])} ${f(q[1])}L${f(end[0])} ${f(end[1])}" fill="none" stroke="${col}" stroke-width="${f(sw)}"/>`;
     s += `<circle cx="${f(p[0])}" cy="${f(p[1])}" r="${f(0.6 * k)}" fill="${col}"/>`;
   }
-  const x = n.dx > 0 ? q[0] : end[0];
+  const x = dx > 0 ? q[0] : end[0];
   n.txt.forEach((t, i) => { s += `<text x="${f(x)}" y="${f(q[1] - 1.4 * k + i * 6.6 * k)}" font-family="${DFONT}" font-size="${f(5 * k)}" fill="${col}">${esc(t)}</text>`; });
+  // на экране: за полку с текстом выноску тянут, щелчок — плашка (текст, удалить), правая — удалить
+  if (!exp && idx !== undefined) s += `<rect class="nh${n === selNote ? ' on' : ''}" data-n="${idx}" x="${f(Math.min(x, end[0]) - 2)}" y="${f(q[1] - 6.4 * k)}" width="${f(Math.abs(end[0] - q[0]) + 4)}" height="${f(n.txt.length * 6.6 * k + 2)}"/>`;
   return s;
 }
 // отверстие на виде: ось в плоскости листа — штрихпунктир оси и две линии стенок; ось на нас — кружок и крест
@@ -6524,7 +6948,7 @@ function metalBlockRect(un, n) { const g = metalBlockGeo(un, n); return [g.x0, g
 // аксонометрия: место от раскладки или перетянутое рукой (un.isoOv {x, y, s})
 function metalIsoGeo(un) { return un.isoOv || (un.lay && un.lay.iso && un.lay.iso.s >= 40 ? un.lay.iso : { x: SHEET_W - 88, y: 8, s: 82 }); }
 function metalBlockSvg(o, k, ui) {
-  const md = metalData(), un = metal && md.all.find(x => x.u === metalCur); if (!un) return '';
+  const md = metalData(), un = metal && md.all.find(x => x.u === metalCur); if (!un || un.free) return '';   // свой лист — без колонки надписей
   const f = v => String(Math.round(v * 100) / 100), G = metalBlockGeo(un, drawN), x = o[0] + (G.x0 + 2) * k;
   let y = o[1] + G.y0 * k, s = '';
   for (const [t, h, warn] of G.ls) {
@@ -6769,14 +7193,14 @@ function metalCheckBox(list) {
 }
 async function metalReport() {
   if (!LOCAL) { toast('в этой странице нет папки заказа — перевыгрузите проект из Базиса'); return; }
-  // папка «Метал» в чертежах отчёта (Алексей 27.10): что там лежало — в корзину, листы с 01 заново
-  const dir = LOCAL.order + '\\5. Креслення\\Чертежи для отчета(wmf)\\Метал', got = [];
-  try { await srv('/draw/clear', { dir }); } catch (e) { toast(L('p_noSrv') + ': ' + e.message); return; }
+  // папка «Метал» в чертежах отчёта (Алексей 27.10) — общая на заказ: свои листы поверх прежних, чужие зоны не трогаем (catName)
+  const dir = LOCAL.order + '\\5. Креслення\\Чертежи для отчета(wmf)\\Метал', got = await catFiles(dir);
+  if (!got) return;
   const md = metalData(), cur = metalCur, av = cur !== null ? (md.all.find(x => x.u === cur) || {}).actV : 0; let n = 0;
-  for (const un of md.all) {
+  for (const un of md.own) {
     // картинкой PNG 15 точек на мм (6000 точек в ширину): отчёт переводил SVG в картинку 2000 точек — было размыто (27.10)
-    const b64 = await svgPng(metalSheetSvg(un), 15), name = nextName(got, unitTitle(un).replace(/\.+$/, ''), '.png');
-    try { await srv('/draw/save', { dir, name, b64 }); got.push({ name }); n++; }
+    const b64 = await svgPng(metalSheetSvg(un), 15), name = catName(got, unitTitle(un).replace(/\.+$/, ''), '.png');
+    try { await srv('/draw/save', { dir, name, b64 }); if (!got.some(f => f.name === name)) got.push({ name }); n++; }
     catch (e) { toast('не сохранилось: ' + e.message); break; }
   }
   metalBackTo(cur, av);
@@ -6786,7 +7210,7 @@ async function metalReport() {
 }
 function metalPdfHtml() {
   const md = metalData(), pages = [], cur = metalCur, av = cur !== null ? (md.all.find(x => x.u === cur) || {}).actV : 0;
-  for (const un of md.all) pages.push(metalSheetSvg(un));
+  for (const un of md.own) pages.push(metalSheetSvg(un));
   metalBackTo(cur, av);
   return '<!doctype html><html><head><meta charset="utf-8">' +
     `<link href="https://fonts.googleapis.com/css2?family=${DFONT.replace(/ /g, '+')}&display=block" rel="stylesheet">` +
@@ -6797,7 +7221,7 @@ async function metalPdf(suffix) {
   if (!LOCAL) { toast('в этой странице нет папки заказа — перевыгрузите проект из Базиса'); return; }
   const md = metalData(), html = metalPdfHtml();
   const name = (M.title || 'изделие') + '_Чертежи металлоизделий' + (md.group ? ' — ' + md.group.replace(/[\\/:*?"<>|]/g, '_') : '') + (suffix || '') + '.pdf', dir = LOCAL.order + '\\5. Креслення\\Дод. креслення\\Метал';
-  toast('собираю PDF: листов ' + md.all.length + '…');
+  toast('собираю PDF: листов ' + md.own.length + '…');
   try { const r = await srv('/draw/pdf', { dir, name, html }); toast('PDF готов: ' + r.file); const cl = metalChecks(); if (cl.length) metalCheckBox(cl); return r.file; }
   catch (e) {
     // старый PDF открыт в просмотрщике — Windows не даёт его перезаписать: кладём рядом с хвостом «(новый)»
@@ -6821,12 +7245,12 @@ function metalMenu(b) {
   const mdB = metal;                                        // подрядчики: выбор комплекта (один — кнопок нет)
   const grpBtns = mdB.groups.length > 1 ? mdB.groups.map((g, k) => `<button data-mg="${k}" class="${g === md.group ? 'on' : ''}"><span>${esc(ML('ctr') + ': ' + (g || ML('noctr')))}</span></button>`).join('') : '';
   // дополнительные виды текущего листа (снизу / сзади / справа) — кладутся в свободное место в том же масштабе
-  const cur = metalCur !== null && !texCur ? md.all.find(x => x.u === metalCur) : null;
+  const cur = metalCur !== null && !texCur ? md.own.find(x => x.u === metalCur) : null;
   // удалённые с листа основные виды — вернуть (Алексей 29.10)
   const back = cur ? (cur.vdel || []).map(v => `<button data-mr="${v}"><span>${esc('+ ' + ML('m_view') + ' ' + ML('v_' + v))}</span></button>`).join('') : '';
   const exBtns = back + (cur ? ['bottom', 'back', 'right'].filter(v => !(cur.vdel || []).includes(v)).map(v => `<button data-mv="${v}" class="${(cur.extra || []).includes(v) ? 'on' : ''}"><span>${esc('+ ' + ML('m_view') + ' ' + ML('v_' + v))}</span></button>`).join('') : '');
   el.innerHTML = grpBtns + `<button data-mu="pdf"><span>${esc(ML('m_pdf'))}</span></button><button data-mu="rep"><span>${esc(ML('m_rep'))}</span></button><button data-mu="chk"><span>${esc(ML('m_chk'))}</span></button>` +
-    md.all.map(x => `<button data-mu="${x.u}" class="${metalCur === x.u ? 'on' : ''}"><span>${esc(unitTitle(x))}</span></button>`).join('') + exBtns +
+    md.own.map(x => `<button data-mu="${x.u}" class="${metalCur === x.u ? 'on' : ''}"><span>${esc(unitTitle(x))}</span></button>`).join('') + exBtns +
     `<button data-mu="off"><span>${esc(ML('m_off'))}</span></button>`;
   el.querySelectorAll('[data-mv]').forEach(q => { q.onclick = e => {
     e.stopPropagation(); closeFly();
@@ -6900,7 +7324,7 @@ const texTitle = un => ML('tex') + ' — ' + ML('t_grp') + ' ' + un.g;
 function texDims(un) {
   const vk = viewKey();
   for (const dm of dims.filter(d => d.mk === un.u)) removeDim(dm);
-  for (let i = mnotes.length - 1; i >= 0; i--) if (mnotes[i].mk === un.u) mnotes.splice(i, 1);
+  for (let i = mnotes.length - 1; i >= 0; i--) if (mnotes[i].mk === un.u && !mnotes[i].hand) mnotes.splice(i, 1);
   const { R, U } = viewAxes(), k = drawN, ROW = 9 * k, FIRST = 11 * k, b = un.box, mid = b.getCenter(V3());
   const upS = Math.sign(V3().setFromMatrixColumn(cam.matrixWorld, 1)[U]) || 1, rtS = Math.sign(V3().setFromMatrixColumn(cam.matrixWorld, 0)[R]) || 1;
   // промежутки панелей вдоль оси (в направлении листа): одинаковые — один раз; ряд = цепочка без наложений, слева направо
@@ -6915,6 +7339,9 @@ function texDims(un) {
   const mids = [];
   const put = (a, bb, axis, offV) => {
     const dm = addDim(a, bb, { mk: un.u, col: '#000000', fsz: 5, small: true }); dm.axis = axis; dm.off = offV;
+    // столярка — до четверти миллиметра (зазор 2,5, фасад 552,5, петля 23,5, имитация 368,75: целое врёт, а с полмиллиметра
+    // цепочка 368,5 + 2,5 + 856,5 не сходится с 1228; выгрузка даёт точки до 0,1; Алексей 16.11)
+    if (un.gapRows) dm.text = joinMm(bb[axis] - a[axis]);
     const m = (a[axis] + bb[axis]) / 2, near = mids.filter(z => z.axis === axis && Math.abs(z.m - m) < 14 * k);
     if (near.length) dm.stag = near.length % 2 ? 1 : -1; mids.push({ axis, m });
     buildDim(dm);
@@ -6935,9 +7362,56 @@ function texDims(un) {
       put(pt(er, row[i][0] / upS), pt(er, row[i][1] / upS), U, off);
       if (i + 1 < row.length && row[i + 1][0] - row[i][1] > 0.3) put(pt(er, row[i][1] / upS), pt(er, row[i + 1][0] / upS), U, offG);
     } });
+  // столярка (Алексей 16.11, 050.10): средние бруски рамки делят фасад на «фасады-имитации» — их граница архиважна (стык
+  // покрытий на стене). Ряд — фасады-имитации и зазор между ними. Одинаковые раскладки разных фасадов — один раз. Петли: от низа фасада до центра каждой чашки — внутри фасада у чашек,
+  // от края фасада до центра нижней чашки — под ней
+  let xL = 0, xR = 0, xB = 0;
+  if (un.gapRows) {
+    const er2 = rtS > 0 ? b.max[R] : b.min[R], dirR = AX[R].clone().multiplyScalar(rtS);
+    const eu2 = upS > 0 ? b.max[U] : b.min[U];
+    const uniq = v => { v.sort((p, q) => p - q); return v.filter((q, i) => !i || q - v[i - 1] > 0.3); };
+    // цепочка вдоль оси A у края: сторона 'r' / 'l' (A = U) или 'b' (A = R)
+    const chain = (vals, A, side) => {
+      const row = side === 'r' ? xR++ : side === 'l' ? rowsU.length * PER + xL++ : rowsR.length * PER + xB++;
+      const dir = side === 'r' ? dirR : side === 'l' ? dirL : dirB, edge = side === 'r' ? er2 : side === 'l' ? er : eu;
+      const off = dir.clone().multiplyScalar(FIRST + row * ROW);
+      for (let i = 0; i + 1 < vals.length; i++) put(A === U ? pt(edge, vals[i]) : pt(vals[i], edge), A === U ? pt(edge, vals[i + 1]) : pt(vals[i + 1], edge), A, off);
+    };
+    for (const [A, O, side] of [[U, R, 'r'], [R, U, 'b']]) {
+      const seen = new Set(), near = [], far = [];
+      for (const f of un.facs) {
+        const fb = f.fbox, inner = joinInner(f, A, O);
+        if (!inner.length) continue;
+        const v1 = uniq([fb.min[A], fb.max[A], ...inner.flatMap(q => [q.min[A], q.max[A]])]);
+        const v2 = [fb.min[A]]; for (let i = 0; i + 1 < inner.length; i++) if (inner[i + 1].min[A] - inner[i].max[A] > 0.3) v2.push(inner[i].max[A], inner[i + 1].min[A]);
+        v2.push(fb.max[A]);
+        const key = v1.map(q => Math.round(q * 2)).join(','); if (seen.has(key)) continue; seen.add(key);
+        near.push(v1); if (v2.length > 2) far.push(v2);
+      }
+      // бруски по 20 на 1:7,5 сливаются в кашу цифр — их ширина и зазор на разрезе А–А; на виде только фасады-имитации.
+      // Средний брусок без зазора (одна перемычка) — тогда цепочка брусков
+      for (const v of far.length ? far : near) chain(v, A, side);
+    }
+    for (const f of un.facs) {
+      const fr = f.fbox.clone().expandByScalar(0.5), cups = f.holes.filter(h => h.r >= 10).map(h => h.a.clone().add(h.e).multiplyScalar(0.5))
+        .filter(c => c[R] >= fr.min[R] && c[R] <= fr.max[R] && c[U] >= fr.min[U] && c[U] <= fr.max[U]);
+      if (!cups.length) continue;
+      const fc = f.fbox.getCenter(V3()), cR = cups.reduce((s, c) => s + c[R], 0) / cups.length, right = (cR - fc[R]) * rtS > 0;
+      // цепочка: фасад петлями к краю изделия — рядом снаружи листа (050.10); фасад внутри изделия — внутри фасада у чашек
+      // (у кухни на 14 фасадов ряды снаружи не помещаются и не понятно, к какому фасаду относятся)
+      const r0 = f.holes.find(h => h.r >= 10).r, edge = right === (rtS > 0) ? f.fbox.max[R] : f.fbox.min[R];
+      const vU = uniq([f.fbox.min[U], f.fbox.max[U], ...cups.map(c => c[U])]);
+      if (Math.abs(edge - (right ? er2 : er)) < 1) chain(vU, U, right ? 'r' : 'l');
+      else { const inward = AX[R].clone().multiplyScalar(right === (rtS > 0) ? -1 : 1).multiplyScalar(r0 + 5 * k);
+        for (let i = 0; i + 1 < vU.length; i++) put(pt(cR, vU[i]), pt(cR, vU[i + 1]), U, inward); }
+      const c0 = cups.reduce((p, c) => (c[U] - p[U]) * upS < 0 ? c : p);
+      put(pt(edge, c0[U]), pt(c0[R], c0[U]), R, dirB.clone().multiplyScalar(r0 + 4 * k));
+    }
+  }
   // выноски — над изделием одним рядом (texNotesSvg): сверху место под полки, справа — если подписи шире изделия;
   // столярка — без выносок (номера посреди фасадов), сверху только зазор
-  const pad = { t: un.gapRows ? 4 : TEX_NL + 7, r: 3, b: rowsR.length ? 11 + (rowsR.length * PER - 1) * 9 + 6 : 3, l: rowsU.length ? 11 + (rowsU.length * PER - 1) * 9 + 6 : 3 };
+  const nB = rowsR.length * PER + xB, nL = rowsU.length * PER + xL;
+  const pad = { t: un.gapRows ? 4 : TEX_NL + 7, r: xR ? 11 + (xR - 1) * 9 + 6 : 3, b: nB ? 11 + (nB - 1) * 9 + 6 : 3, l: nL ? 11 + (nL - 1) * 9 + 6 : 3 };
   if (!un.gapRows) { const wAll = un.panels.reduce((s, i) => s + (un.noteFn || texNote)(i).length * 2.5 + 4, 0), wG = Math.abs(b.max[R] - b.min[R]) / k;
     if (wAll > wG) pad.r = wAll - wG + 3; }
   un.padNow = pad;
@@ -7007,6 +7481,7 @@ function texNotesSvg(un, toP, k, exp) {
 // контуру из модели), наполнение, отделка — пишет Алексей двойным щелчком, хранится в браузере по странице; пустая отделка
 // на экране — серая подсказка, в картинку не идёт.
 const JOIN_U0 = -19000, JOIN_COL = 118;                    // JOIN_COL — мм листа под колонку справа
+const joinMm = v => String(Math.round(Math.abs(v) * 4) / 4).replace('.', ',');   // размер столяру — до 0,25 мм
 const joinKey = t => 'joinFin|' + (M.title || '') + '|' + t;
 const joinFin = t => { try { const v = localStorage.getItem(joinKey(t)); if (v) return v; } catch (e) {} return ''; };
 function joinBuild() {
@@ -7037,8 +7512,17 @@ function joinBuild() {
     const fill = pi.map(i => M.objs[i]).find(o => o.k === 'p');
     const box = pi.reduce((b, i) => b.union(new THREE.Box3().expandByObject(parts[i].g, true)), new THREE.Box3());
     const hw = hwAll.filter(q => onFacade(q.b, box)).map(q => q.i);
-    byTop.get(top).push({ fr, d, pi, hw, pfI, box,
-      frameMat: (M.mnames || [])[M.objs[pfI[0]].mn] || '', sec: M.objs[pfI[0]].pf.s, fillMat: fill ? (M.mnames || [])[fill.mn] || '' : '', fillTh: fill ? fill.th : 0 });
+    // бруски рамки — габаритами: средние (не у края фасада) делят фасад на «фасады-имитации» (050.10, 16.11)
+    const bars = pfI.map(i => new THREE.Box3().expandByObject(parts[i].g, true)), fbox = bars.reduce((b, q) => b.union(q), new THREE.Box3());
+    // отверстия в фасаде поперёк пласти (чашки петель ⌀35, саморезы) — точки и ось; свои отверстия модели петли (вдоль пласти) мимо
+    const fb = box.clone().expandByScalar(0.5), sz = box.getSize(V3()), thin = ['x', 'y', 'z'].reduce((p, q) => sz[q] < sz[p] ? q : p, 'z');
+    const holes = (M.holes || []).map(h => ({ a: WP(h[0], h[1], h[2]), e: WP(h[3], h[4], h[5]), r: h[6] / 2 }))
+      .filter(h => { const ax = h.e.clone().sub(h.a); return ax.length() > 0.5 && Math.abs(ax.normalize()[thin]) > 0.9 && fb.containsPoint(h.a) && fb.containsPoint(h.e); });
+    // материал в выгрузке — «имя код» («…двусторонний 269248»), свой материал Базиса — «[#] Дуб»: на лист столяру только имя
+    // (Алексей 16.11: код ему ничего не скажет)
+    const mnm = o => String((M.mnames || [])[o.mn] || '').split(/[\r\n]/)[0].replace(/\s+\d{4,}\s*$/, '').replace(/^\[#\]\s*/, '').trim();
+    byTop.get(top).push({ fr, d, pi, hw, pfI, box, bars, fbox, holes,
+      frameMat: mnm(M.objs[pfI[0]]), sec: M.objs[pfI[0]].pf.s, fillMat: fill ? mnm(fill) : '', fillTh: fill ? fill.th : 0 });
   }
   // лист — на изделие и сторону: фасады смотрят в разные стороны (угловой пенал) — на каждую сторону свой лист.
   // Сторона — тонкая ось фасада, знак — от середины изделия к фасаду (фасады снаружи корпуса)
@@ -7052,7 +7536,8 @@ function joinBuild() {
       const box = new THREE.Box3(); for (const f of facs) box.union(f.box);
       const view = { z: 'front', '-z': 'back', x: 'right', '-x': 'left', y: 'top', '-y': 'top' }[side] || 'front';
       const un = { u: JOIN_U0 - n++, t, side, name: (M.names[t] || 'изделие') + (bySide.size > 1 ? ' (' + (ML('side')[side] || side) + ')' : ''),
-                   facs, pi: [...new Set(facs.flatMap(f => f.pi.concat(f.hw)))], boxes: facs.map(f => f.box), box, panels: facs.map(f => f.fr), holes: [], view, gapRows: true };
+                   facs, pi: [...new Set(facs.flatMap(f => f.pi.concat(f.hw)))], boxes: facs.map(f => f.box), box, panels: facs.map(f => f.fr), view, gapRows: true,
+                   holes: facs.flatMap((f, j) => f.holes.map(h => ({ j, p0: h.a, p1: h.e, ax: h.e.clone().sub(h.a).normalize(), r: h.r }))) };
       un.noteFn = fr => String((un.rowOf || {})[fr] || '');   // номер строки таблицы — бледной цифрой посреди фасада (joinNumsSvg)
       joinList.push(un);
     }
@@ -7101,9 +7586,37 @@ function joinShow(u) {
   drawFix = drawN = un.lay.n;
   metalPlace(metalCam(un, un.view), un.lay.px, un.lay.py);
   if (!dims.some(d => d.mk === un.u)) { joinRows(un); texDims(un); }
+  if (!secs.some(q => q.mk === un.u)) joinSecAuto(un);
   fitView();
   frameName = joinTitle(un); const nm = $('dName'); if (nm) nm.value = frameName;
   syncPanel(); drawInfo(); need();
+}
+// местный разрез А–А через раздел фасадов-имитаций (Алексей 16.11, 050.10): бруски, зазор между ними и наполнение — в 1:1,
+// в колонке под рамкой. Линия поперёк зазора посреди фасада, ±35 мм. Раздела нет — разреза нет. Как ручное сечение: можно
+// двигать, поворачивать, удалить
+// средние бруски рамки поперёк оси A: тонкие по A, не у края рамки и через всю рамку по O (≥ 80 %) — настоящий раздел,
+// а не стойка ящика или короткий брусок. Края — по самой рамке (у ящика в блоке фасада ещё и корпус ящика)
+function joinInner(f, A, O) {
+  const fb = f.fbox, W = fb.max[O] - fb.min[O];
+  return f.bars.filter(q => { const s = q.getSize(V3()); return s[A] < s[O] && s[O] >= W * 0.8 && q.min[A] > fb.min[A] + 1 && q.max[A] < fb.max[A] - 1; })
+    .sort((p, q) => p.min[A] - q.min[A]);
+}
+function joinSecAuto(un) {
+  const { R, U } = viewAxes();
+  for (const [A, O] of [[U, R], [R, U]]) {
+    for (const f of un.facs) {
+      const fb = f.fbox, inner = joinInner(f, A, O);
+      let gm = null; for (let i = 0; i + 1 < inner.length; i++) if (inner[i + 1].min[A] - inner[i].max[A] > 0.3) { gm = (inner[i].max[A] + inner[i + 1].min[A]) / 2; break; }
+      if (gm === null && inner.length) gm = (inner[0].min[A] + inner[0].max[A]) / 2;
+      if (gm === null) continue;
+      const c = fb.getCenter(V3()), a = c.clone(), b = c.clone(); a[A] = gm - 35; b[A] = gm + 35;
+      const used = new Set(secs.map(q => q.letter)), letter = [...SEC_LET].find(ch => !used.has(ch)) || '?';
+      const sc = { a, b, s: 1, vdir: viewDir().clone(), fs: hideFac, letter, sN: 1, rot: 0, auto: true, mk: un.u,
+                   pos: [SHEET_W / 2 - EDGE_M - JOIN_COL / 2, SHEET_H / 2 - EDGE_M - 45] };
+      Object.assign(sc, secCut(sc));
+      if (sc.G.length) { secs.push(sc); return; }
+    }
+  }
 }
 // сечение рамки по контуру из модели (как на вкладке «Столярка» раскроя профилей): прямые и дуги, снизу цепочка ступенек
 // и общий размер, справа так же. Рисуется в мм листа в поле (x0, y0) шириной W; возвращает svg и занятую высоту
@@ -7138,6 +7651,17 @@ function joinSecSvg(o, k, els0, x0, y0, W) {
     } else d += 'L' + f(X(e.x2)) + ' ' + f(Y(e.y2));
   }
   let s = `<path d="${d}" fill="none" stroke="#000000" stroke-width="${f(0.35 * k)}" stroke-linecap="round"/>`;
+  // скругления — «R2» выноской от середины дуги наружу (Алексей 16.11: столяр должен видеть, что угол не прямой)
+  for (const e of els) {
+    if (e.t !== 2 || e.cx == null) continue;
+    const r = Math.hypot(e.x1 - e.cx, e.y1 - e.cy), a1 = Math.atan2(e.y1 - e.cy, e.x1 - e.cx), a2 = Math.atan2(e.y2 - e.cy, e.x2 - e.cx);
+    let sw = e.dir ? a2 - a1 : a1 - a2; while (sw < 0) sw += 2 * Math.PI;
+    const am = a1 + (e.dir ? 1 : -1) * sw / 2, ux = Math.cos(am), uy = Math.sin(am);
+    const px = e.cx + r * ux, py = e.cy + r * uy, L = 5 / sc;
+    const qx = X(px + ux * L), qy = Y(py + uy * L), right = ux >= 0, sh = 6 * k * (right ? 1 : -1);
+    s += `<path d="M${f(X(px))} ${f(Y(py))}L${f(qx)} ${f(qy)}L${f(qx + sh)} ${f(qy)}" fill="none" stroke="#000000" stroke-width="${f(0.15 * k)}"/>` +
+      `<text x="${f(qx + sh / 2)}" y="${f(qy - 0.7 * k)}" font-family="${DFONT}" font-size="${f(3.2 * k)}" fill="#000000" text-anchor="middle">R${fmtN(Math.round(r * 2) / 2)}</text>`;
+  }
   const ln = (a, b, c, e, sw) => `<line x1="${f(a)}" y1="${f(b)}" x2="${f(c)}" y2="${f(e)}" stroke="#000000" stroke-width="${f(sw * k)}"/>`;
   const dimH = (a, b, yy) => ln(X(a), yy, X(b), yy, 0.2) + ln(X(a), Y(0) + 1 * k, X(a), yy + 1.2 * k, 0.13) + ln(X(b), Y(0) + 1 * k, X(b), yy + 1.2 * k, 0.13) +
     `<text x="${f((X(a) + X(b)) / 2)}" y="${f(yy - 0.8 * k)}" font-family="${DFONT}" font-size="${f(FS * k)}" fill="#000000" text-anchor="middle">${fmtN(b - a)}</text>`;
@@ -7177,6 +7701,9 @@ function joinBlockSvg(o, k, exp) {
   const fills = [...new Set(un.facs.map(q => q.fillMat ? q.fillMat + (q.fillTh && !new RegExp('(^|\\D)' + fmtN(q.fillTh).replace(',', '[.,]') + '\\s*мм').test(q.fillMat) ? ' ' + fmtN(q.fillTh) + ' мм' : '') : ''))].filter(Boolean);
   if (!fills.length) TW(ML('j_fill') + ': ' + ML('j_nofill'), 3.8);
   else fills.forEach((m, i) => TW((i ? '' : ML('j_fill') + ': ') + m, 3.8));
+  // присадка петель (Алексей 16.11): чашки на виде пунктиром (с обратной стороны), размеры — до центра чашки
+  const cup = un.facs.flatMap(q => q.holes).find(h => h.r >= 10);
+  if (cup) { y += 2; TW('Петли: чашка ⌀' + fmtN(Math.round(cup.r * 4) / 2) + ', глубина ' + fmtN(Math.round(cup.a.distanceTo(cup.e) * 2) / 2) + ' — с обратной стороны (на виде пунктиром); размеры — до центра чашки', 3.6); }
   y += 3;
   // отделка: вписана — в лист и в картинку; пустая — серая подсказка только на экране, в картинке пустое место (Алексей 28.10)
   const fin = joinFin(un.t);
@@ -7217,12 +7744,12 @@ addEventListener('dblclick', e => {
 function joinSheetSvg(un) { joinShow(un.u); return buildSVG(); }
 async function joinReport() {
   if (!LOCAL) { toast('в этой странице нет папки заказа — перевыгрузите проект из Базиса'); return; }
-  const dir = LOCAL.order + '\\5. Креслення\\Чертежи для отчета(wmf)\\Столярка', got = [];
-  try { await srv('/draw/clear', { dir }); } catch (e) { toast(L('p_noSrv') + ': ' + e.message); return; }
+  const dir = LOCAL.order + '\\5. Креслення\\Чертежи для отчета(wmf)\\Столярка', got = await catFiles(dir);
+  if (!got) return;
   let n = 0;
   for (const un of joinBuild()) {
-    const b64 = await svgPng(joinSheetSvg(un), 15), name = nextName(got, joinTitle(un), '.png');
-    try { await srv('/draw/save', { dir, name, b64 }); got.push({ name }); n++; }
+    const b64 = await svgPng(joinSheetSvg(un), 15), name = catName(got, joinTitle(un), '.png');
+    try { await srv('/draw/save', { dir, name, b64 }); if (!got.some(f => f.name === name)) got.push({ name }); n++; }
     catch (e) { toast('не сохранилось: ' + e.message); break; }
   }
   toast('в отчёт Федосова — листов ' + n + ' (папка «Столярка»)');
@@ -7293,13 +7820,14 @@ addEventListener('dblclick', e => {
 function texSheetSvg(un) { texShow(un.g); return buildSVG(); }
 async function texReport() {
   if (!LOCAL) { toast('в этой странице нет папки заказа — перевыгрузите проект из Базиса'); return; }
-  // папка «Переход текстуры» в чертежах отчёта (Алексей 28.10): старое — в корзину, листы с 01 заново; нет папки — создаёт сервер
-  const dir = LOCAL.order + '\\5. Креслення\\Чертежи для отчета(wmf)\\Переход текстуры', got = [];
-  try { await srv('/draw/clear', { dir }); } catch (e) { toast(L('p_noSrv') + ': ' + e.message); return; }
+  // папка «Переход текстуры» в чертежах отчёта (Алексей 28.10) — общая на заказ: свои листы поверх прежних, чужие зоны не
+  // трогаем (catName); нет папки — создаёт сервер
+  const dir = LOCAL.order + '\\5. Креслення\\Чертежи для отчета(wmf)\\Переход текстуры', got = await catFiles(dir);
+  if (!got) return;
   let n = 0;
   for (const un of texBuild()) {
-    const b64 = await svgPng(texSheetSvg(un), 15), name = nextName(got, texTitle(un), '.png');
-    try { await srv('/draw/save', { dir, name, b64 }); got.push({ name }); n++; }
+    const b64 = await svgPng(texSheetSvg(un), 15), name = catName(got, texTitle(un), '.png');
+    try { await srv('/draw/save', { dir, name, b64 }); if (!got.some(f => f.name === name)) got.push({ name }); n++; }
     catch (e) { toast('не сохранилось: ' + e.message); break; }
   }
   toast('в отчёт Федосова — листов ' + n + ' (папка «Переход текстуры»)');
@@ -7407,11 +7935,12 @@ function buildSVG() {
   let ds = '', nd = 0;
   if (dimsShown) for (const dm of dims) { if (!dimHere(dm)) continue; const g = dimPrims(dm, P2, 1); if (g) { ds += dimSvg(g, 1, { exp: true }); nd++; } }
   let ss = ''; for (const sc of secs) if (secHere(sc)) ss += secSvg(secPrims(sc, [SHEET_W / 2, SHEET_H / 2], 1, P2), 1, { exp: true });
+  if (metalCur === null) { const vk = viewKey(); let hs = ''; for (const n of mnotes) if ((n.mk ?? null) === null && n.vk === vk) hs += noteSvg(n, P2, 1, true); if (hs) ss += `<g id="vynoski">${hs}</g>`; }   // обычный лист: выноски рукой
   if (metalCur !== null) {
     let ms = ''; for (const n of mnotes) if (n.mk === metalCur && n.vk === viewKey()) ms += noteSvg(n, P2, 1, true);
     const un = metal && metal.units.find(x => x.u === metalCur);
     if (un && un.marks) for (const m of un.marks[viewKey()] || []) ms += holeMarkSvg(m, P2, 1, true);
-    ss += `<g id="metall">${ms}${metalNoBlock ? '' : joinCur ? joinBlockSvg([0, 0], 1, true) + joinNumsSvg(joinCur, P2, 1, true) : texCur ? texBlockSvg([0, 0], 1) + texHolesSvg(texCur, P2, 1, true) + texNotesSvg(texCur, P2, 1, true) : metalBlockSvg([0, 0], 1)}</g>`;
+    ss += `<g id="metall">${ms}${metalNoBlock ? '' : joinCur ? joinBlockSvg([0, 0], 1, true) + joinNumsSvg(joinCur, P2, 1, true) + texHolesSvg(joinCur, P2, 1, true) : texCur ? texBlockSvg([0, 0], 1) + texHolesSvg(texCur, P2, 1, true) + texNotesSvg(texCur, P2, 1, true) : metalBlockSvg([0, 0], 1)}</g>`;
   }
   const f2 = v => String(Math.round(v * 100) / 100), paths = [];
   for (let k = 0; k < out.length; k += 1500) paths.push(out.slice(k, k + 1500).map(q => 'M' + f2(q[0]) + ' ' + f2(q[1]) + 'L' + f2(q[2]) + ' ' + f2(q[3])).join(''));
@@ -7465,6 +7994,17 @@ async function refreshList() {
   sec(L('p_draw'), drawFiles.d, 'svg'); sec(L('p_shot'), drawFiles.s, 'png');
   return true;
 }
+// папка категории (Метал / Столярка / Переход текстуры) — одна на заказ, в ней листы ВСЕХ зон (16.11: кнопка «в отчёт» на
+// «Инсталяции» 050.10 отправила бы в корзину кухонные листы — раньше папку чистили целиком). Ничего не удаляем: лист с тем же
+// названием перезаписывается на месте (номер прежний), новый — следующим номером
+async function catFiles(dir) {
+  try { return filesOf(await srv('/draw/list', { dir })).map(f => ({ name: f.name })); }
+  catch (e) { toast(L('p_noSrv') + ': ' + e.message); return null; }
+}
+function catName(got, title, ext) {
+  const t = ((title || '').trim() || 'вид').replace(/[\\/:*?"<>|]/g, '_') + ext, old = got.find(f => f.name.replace(/^\d+\s*—\s*/, '') === t);
+  return old ? old.name : nextName(got, title, ext);
+}
 function nextName(arr, title, ext) {
   let n = 0; for (const f of arr) { const m = /^(\d+)/.exec(f.name); if (m) n = Math.max(n, +m[1]); }
   return String(n + 1).padStart(2, '0') + ' — ' + ((title || '').trim() || 'вид').replace(/[\\/:*?"<>|]/g, '_') + ext;
@@ -7486,7 +8026,8 @@ async function checkFolders() {
 async function saveSheet() {
   if (!LOCAL) { toast('в этой странице нет папки заказа — перевыгрузите проект из Базиса'); return; }
   if (view.persp) setPersp(false);
-  let svg; try { svg = buildSVG(); } catch (e) { console.error(e); toast('лист не собрался: ' + e.message); return; }
+  const fu = freeNow();                                     // свой лист — все его виды одним листом
+  let svg; try { if (fu) { const av = fu.actV; svg = metalSheetSvg(fu); metalShow(fu.u, av); } else svg = buildSVG(); } catch (e) { console.error(e); toast('лист не собрался: ' + e.message); return; }
   const name = nextName(drawFiles.d, frameName, '.svg');
   try { await srv('/draw/save', { dir: DIR_DRAW, name, svg }); toast('лист сохранён: ' + name); }
   catch (e) { toast('не сохранилось: ' + e.message); return; }

@@ -256,6 +256,18 @@ html.draw body, html.draw.dlines body { background: transparent; color: var(--rb
 #dsvg .vb:hover { stroke: rgba(122,167,224,.35); }
 #dsvg .vpre { fill: none; stroke: #1f6fe0; stroke-width: 1px; stroke-dasharray: 5 3; pointer-events: none; }
 #dsvg .vtip { font: 600 13px system-ui, sans-serif; fill: #1f6fe0; pointer-events: none; }
+/* тема 60: что поймал прицел размера — линия целиком / угол; крестик «убрать вид»; линии связи видов */
+#dsvg .snapl { fill: none; stroke: #ff7a00; stroke-width: 3px; stroke-opacity: .85; stroke-linecap: round; pointer-events: none; }
+#dsvg .snapc { fill: none; stroke: #ff7a00; stroke-width: 2.5px; pointer-events: none; }
+#dsvg .vx { cursor: pointer; pointer-events: all; }
+#dsvg .vx rect { fill: #fff; stroke: #c9d7ea; stroke-width: 1px; }
+#dsvg .vx path { stroke: #8a96a3; stroke-width: 1.6px; fill: none; }
+#dsvg .vx:hover rect { fill: #e0301e; stroke: #e0301e; }
+#dsvg .vx:hover path { stroke: #fff; }
+#dsvg .nh { fill: transparent; stroke: none; pointer-events: all; cursor: move; }
+#dsvg .nh:hover { fill: rgba(122,167,224,.10); }
+#dsvg .nh.on { fill: rgba(31,111,224,.10); stroke: #1f6fe0; stroke-width: 1px; stroke-dasharray: 3 2; }
+#dsvg .vlink { fill: none; stroke: #7aa7e0; stroke-width: 1px; stroke-dasharray: 2 4; stroke-opacity: .7; pointer-events: none; }
 #dctx button.on { background: var(--rb-on); color: #fff; }
 #dsvg .grip { fill: #fff; stroke: #e0301e; stroke-width: 1.5px; pointer-events: all; cursor: move; }
 #snapmk.edge::before, #snapmk.edge::after { background: #1f5fbf; }
