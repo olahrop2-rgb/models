@@ -2365,7 +2365,7 @@ function rulerPick(x, y, mouse) {
   if (rmode === 'face') { faceHoverEnd(); faceClick(faceAt(x, y), mouse); }
   else if (rmode === 'edge') { edgeHoverEnd(); edgeClick(edgeAt(x, y), mouse); }
   else if (rmode === 'wall') { wallHoverEnd(); wallClick(wallAt(x, y), mouse); }
-  else { const p = snapAt(x, y); if (!p) toast('точку не поставлено: поруч немає кута деталі'); else addPoint(p, mouse); }
+  else { const p = snapAt(x, y); if (!p) toast('точку не поставлено: поруч немає кута деталі чи центру отвору'); else addPoint(p, mouse); }
 }
 // ---------------- размеры ----------------
 // Две точки вдоль ширины, высоты или глубины → размер с выносными «лапками», его можно оттащить:
@@ -8539,7 +8539,7 @@ function syncTools() {
     chip(ICON.easy, 'легкі розміри: комірка, дверцята, шухляда', () => setRMode('easy'), 'mini' + (rmode === 'easy' ? ' on' : ''));
     chip(ICON.faces, 'міряти від грані до грані', () => setRMode('face'), 'mini' + (rmode === 'face' ? ' on' : ''));
     chip(ICON.edges, 'міряти від ребра до ребра', () => setRMode('edge'), 'mini' + (rmode === 'edge' ? ' on' : ''));
-    chip(ICON.points, 'міряти від кута до кута', () => setRMode('point'), 'mini' + (rmode === 'point' ? ' on' : ''));
+    chip(ICON.points, 'міряти від кута або центру отвору (гайки) до кута чи центру', () => setRMode('point'), 'mini' + (rmode === 'point' ? ' on' : ''));
     chip(ICON.wall, 'до стін: від площини деталі до лінії підлоги або стіни', () => setRMode('wall'), 'mini' + (rmode === 'wall' ? ' on' : ''));
     chip(ICON.gab, 'габарит виділеного: ширина, висота, глибина', () => setRMode('gab'), 'mini' + (rmode === 'gab' ? ' on' : ''));
     if (dims.length) chip(ICON.trash, 'стерти всі розміри', () => { clearDims(); partDims.length = 0; easyDims.length = 0; gabDims.length = 0; }, 'mini');
