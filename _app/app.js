@@ -1254,6 +1254,18 @@ function snapAt(cx, cy, radii) {
         }
       }
     }
+    // центры отверстий на поверхности (вход и выход оси) — тоже точки рулетки: от центра заклёпочной гайки / отверстия до
+    // края трубы (Алексей 19.11: «гайку вижу, а как померить, где она — нет»). Точка в отверстии ближе к курсору — она
+    for (const h of M.holes || []) for (const o of [0, 3]) {
+      v.set(h[o], h[o + 1], h[o + 2]).applyMatrix4(root.matrixWorld);
+      if (cutAway(v)) continue;
+      s.copy(v).project(cam);
+      if (s.z > 1 || s.z < -1) continue;
+      const [px, py] = toPx(s), d = Math.hypot(px - cx, py - cy);
+      if (d > R) continue;
+      const key = 'h' + Math.round(px / 2) + ',' + Math.round(py / 2), z = v.clone().sub(cam.position).dot(fwd), oc = cell.get(key);
+      if (!oc || z < oc.z) cell.set(key, { p: v.clone(), d, z, hole: true });
+    }
     const cand = [...cell.values()];
     if (!cand.length) continue;
     cand.sort((a, b) => a.d - b.d);
@@ -1262,7 +1274,8 @@ function snapAt(cx, cy, radii) {
       if (best && k.d > d0 + 4) break;
       if (++tested > 250) break;
       if (!pointVisible(k.p)) continue;
-      if (!best) { best = k; d0 = k.d; } else if (k.z < best.z - 0.5) best = k;
+      // центр отверстия рядом с курсором важнее угла, даже если угол ближе к глазу (иначе к гайке не прицепиться)
+      if (!best) { best = k; d0 = k.d; } else if (k.hole && !best.hole) best = k; else if (k.hole === best.hole && k.z < best.z - 0.5) best = k;
     }
     if (best) return best.p;
   }
