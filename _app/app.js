@@ -6765,7 +6765,13 @@ function metalDims(un) {
   const { R, U } = viewAxes(), b = un.mbox || un.box, k = drawN, ROW = 9 * k, FIRST = 11 * k;
   const mid = b.getCenter(V3());
   // только отверстия, проходящие через металл (дюбель в стене за полкой — не отверстие полки; контрольная кухня 030_2)
-  const HSall = un.general ? [] : un.holes.map(h => Object.assign({ h }, holeAt(un, h))).filter(q => q.p0.distanceTo(q.p1) > 0.5 && un.boxes.some(bb => bb.clone().expandByScalar(0.5).containsPoint(q.c)));
+  const HSraw = un.general ? [] : un.holes.map(h => Object.assign({ h }, holeAt(un, h))).filter(q => q.p0.distanceTo(q.p1) > 0.5 && un.boxes.some(bb => bb.clone().expandByScalar(0.5).containsPoint(q.c)));
+  // винт / болт в заклёпочную гайку: в металле сверлят одно отверстие — под гайку (её ⌀ в подписи гайки); отверстие винта
+  // в той же стенке отдельной строкой не идёт (трибуна 19.11: «8 шт. Гайка М6» + «8 отв. ⌀7 под винт» — какое сверлить?)
+  const nutsQ = HSraw.filter(q => /гайк/i.test(q.h.name));
+  const underNut = q => !/гайк/i.test(q.h.name) && nutsQ.some(n => Math.abs(Math.abs(n.ax.dot(q.ax)) - 1) < 0.01 &&
+    n.c.clone().sub(q.c).cross(n.ax).length() < 1 && [q.p0, q.p1].every(p => Math.abs(p.clone().sub(n.c).dot(n.ax)) <= 5));
+  const HSall = HSraw.filter(q => !underNut(q));
   // отверстие меряется и подписывается на виде, где оно кружком (ось на нас); есть такой вид на листе — на остальных только
   // его линии (принцип 2: элемент — на виде, где его видно)
   const VD = { front: 'z', back: 'z', left: 'x', right: 'x', top: 'y', bottom: 'y' }, Dax = ['x', 'y', 'z'].find(q => q !== R && q !== U);
@@ -7007,7 +7013,7 @@ function metalDims(un) {
     // не «сзади» — непонятно, как смотреть); глубину в мм не писать (Алексей 27.10)
     const en = q.ax.clone().negate(), entry = en.dot(mid.clone().sub(q.c)) > 1 ? ML('fromIn') : ML('fromOut');
     const txt = g.nut
-      ? [cnt + nm].concat(g.leg ? [ML('under') + ': ' + g.leg] : [], [ML('onside') + ' ' + nutSide(q)])   // «с боку: внутрь» — принято Алексеем 27.10
+      ? [cnt + nm].concat(q.h.d > 0 ? [ML('holes') + ' ⌀' + fmtN(q.h.d)] : [], g.leg ? [ML('under') + ': ' + g.leg] : [], [ML('onside') + ' ' + nutSide(q)])   // ⌀ — отверстие под гайку   // «с боку: внутрь» — принято Алексеем 27.10
       // отверстие панели: зенковка над ним — в той же строке; одна зенковка без отверстия — именем паза из модели, без диаметра
       : [(n > 1 ? n + ' ' + ML('holes') + ' ' : '') + (q.h.d > 0 ? '⌀' + fmtN(q.h.d) + ' ' + (q.thru ? ML('thru') : ML('nothru') + ', ' + entry) + (q.h.cut ? ', ' + q.h.cut : '') : q.h.cut || nm)]
         .concat(own ? [] : [ML('under') + ' ' + nm.charAt(0).toLowerCase() + nm.slice(1)]);
