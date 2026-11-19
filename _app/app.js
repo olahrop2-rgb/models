@@ -73,6 +73,8 @@ const ICON = {
   gab: sv('<path d="M4 8l8-4 8 4v8l-8 4-8-4zM4 8l8 4 8-4M12 12v8"/>'),
   easy: sv('<rect x="3" y="3" width="18" height="18" rx="1.5"/><path d="M7 12h10M7 12l2-2M7 12l2 2M17 12l-2-2M17 12l-2 2"/>'),
   points: sv('<circle cx="5" cy="12" r="2.2" fill="currentColor"/><circle cx="19" cy="12" r="2.2" fill="currentColor"/><path d="M8 12h8" stroke-dasharray="2 2"/>'),
+  // мерить: точка и грань, между ними размер
+  meas: sv('<circle cx="5.5" cy="12" r="2.2" fill="currentColor"/><path d="M9 12h8" stroke-dasharray="2 2"/><path d="M20 4v16" stroke-width="2.4"/>'),
   // до стін: угол комнаты (стена и пол) и полка с размерами до них
   wall: sv('<path d="M4 3v18h17" stroke-width="2.2"/><path d="M11 9h8"/><path d="M15 9v9.5M13.5 16.5l1.5 2 1.5-2" stroke-dasharray="0"/><path d="M11 6.5H6.5M8 5l-1.5 1.5L8 8"/>'),
   sheet: sv('<path d="M5 3h10l4 4v14H5z"/><path d="M15 3v4h4M8 17h8M8 17v-6M16 17v-6M8 11h8"/>'),
@@ -1217,7 +1219,52 @@ function pointVisible(p) {
   }
   return true;
 }
-function snapAt(cx, cy, radii) {
+let snapHole = false;              // последняя точка snapAt — центр отверстия (для подписи «центр отвору»)
+// Разбор набора рёбер детали (один раз, в его осях):
+// circ — круглые отверстия, вырезанные в самой детали (не сверление из выгрузки): замкнутые кольца рёбер, все точки на одном
+//   расстоянии от середины; центр кольца — точка рулетки «центр отвору» (19.11: у трубы с дыркой цеплялся край круга);
+// corn — настоящие углы: где сходятся рёбра разных направлений. Точки посреди прямого ребра (их даёт разбивка грани
+//   на треугольники) и точки колец углами не считаются.
+function edgeGraph(ln) {
+  if (ln.userData.eg) return ln.userData.eg;
+  const pos = ln.geometry.attributes.position, nodes = new Map(), circ = [], corn = [];
+  const node = i => {
+    const k = Math.round(pos.getX(i) * 100) + ',' + Math.round(pos.getY(i) * 100) + ',' + Math.round(pos.getZ(i) * 100);
+    let n = nodes.get(k); if (!n) nodes.set(k, n = { p: new THREE.Vector3().fromBufferAttribute(pos, i), nb: [] });
+    return n;
+  };
+  for (let i = 0; i + 1 < pos.count; i += 2) { const a = node(i), b = node(i + 1); if (a !== b) { a.nb.push(b); b.nb.push(a); } }
+  const seen = new Set(), ring = new Set();
+  for (const n of nodes.values()) {
+    if (seen.has(n) || n.nb.length !== 2) continue;
+    const loop = [n]; seen.add(n);
+    let prev = n, cur = n.nb[0], closed = false;
+    while (cur && cur.nb.length === 2 && loop.length < 720) {
+      if (cur === n) { closed = true; break; }
+      if (seen.has(cur)) break;
+      seen.add(cur); loop.push(cur);
+      const nx = cur.nb[0] === prev ? cur.nb[1] : cur.nb[0]; prev = cur; cur = nx;
+    }
+    if (!closed || loop.length < 8) continue;
+    const c = new THREE.Vector3(); for (const q of loop) c.add(q.p); c.divideScalar(loop.length);
+    let r = 0; for (const q of loop) r += q.p.distanceTo(c); r /= loop.length;
+    if (r < 0.5 || loop.some(q => Math.abs(q.p.distanceTo(c) - r) > Math.max(0.05, r * 0.03))) continue;
+    circ.push(c.x, c.y, c.z, r); for (const q of loop) ring.add(q);
+  }
+  const u = new THREE.Vector3(), w = new THREE.Vector3();
+  for (const n of nodes.values()) {
+    if (ring.has(n)) continue;
+    let corner = false;
+    for (let i = 0; i < n.nb.length && !corner; i++) {
+      u.subVectors(n.nb[i].p, n.p).normalize();
+      for (let j = i + 1; j < n.nb.length; j++) { w.subVectors(n.nb[j].p, n.p).normalize(); if (Math.abs(u.dot(w)) < 0.9998) { corner = true; break; } }
+    }
+    if (corner || n.nb.length === 1) corn.push(n.p.x, n.p.y, n.p.z);   // конец одиночного отрезка — тоже край
+  }
+  return (ln.userData.eg = { circ, corn });
+}
+// strict (рулетка «міряти»): углы — только настоящие, из рёбер детали (edgeGraph), а не любая вершина сетки
+function snapAt(cx, cy, radii, strict) {
   root.updateMatrixWorld(true);
   const persp = cam.isPerspectiveCamera, fwd = cam.getWorldDirection(new THREE.Vector3());
   const pxPerMm = d => persp ? innerHeight / 2 / (d * Math.tan(THREE.MathUtils.degToRad(cam.fov / 2)))
@@ -1229,7 +1276,7 @@ function snapAt(cx, cy, radii) {
     // а у мелкой фурнитуры сотни углов — без этого проверка видимости тонула в них
     const cell = new Map();
     for (const pr of parts) {
-      if (pr.isL || !pr.g.visible) continue;
+      if (pr.isL || !pr.g.visible || strict) continue;
       for (const m of pr.meshes) {
         if (!shown(m)) continue;
         // сначала грубо: шар вокруг куска на экране далеко от курсора — пропускаем весь кусок
@@ -1266,6 +1313,46 @@ function snapAt(cx, cy, radii) {
       const key = 'h' + Math.round(px / 2) + ',' + Math.round(py / 2), z = v.clone().sub(cam.position).dot(fwd), oc = cell.get(key);
       if (!oc || z < oc.z) cell.set(key, { p: v.clone(), d, z, hole: true });
     }
+    // центры колец-отверстий, вырезанных в детали (кольца — у всех наборов рёбер рядом с курсором)
+    const circ = [];
+    for (const pr of parts) {
+      if (pr.isL || !pr.g.visible || !pr.edges) continue;
+      for (const ln of pr.edges) {
+        if (!shown(ln.parent)) continue;
+        const g = ln.geometry; if (!g.boundingSphere) g.computeBoundingSphere();
+        const sc = ln.matrixWorld.getMaxScaleOnAxis(), r = g.boundingSphere.radius * sc;
+        c.copy(g.boundingSphere.center).applyMatrix4(ln.matrixWorld);
+        const depth = c.clone().sub(cam.position).dot(fwd);
+        if (!(persp && depth <= r)) {
+          const [sx, sy] = toPx(s.copy(c).project(cam));
+          if (Math.hypot(sx - cx, sy - cy) > r * pxPerMm(persp ? depth - r : 1) + R) continue;
+        }
+        const eg = edgeGraph(ln), cc = eg.circ, mw = ln.matrixWorld;
+        for (let i = 0; i < cc.length; i += 4) {
+          v.set(cc[i], cc[i + 1], cc[i + 2]).applyMatrix4(mw);
+          circ.push({ c: v.clone(), r: cc[i + 3] * sc });
+          if (cutAway(v)) continue;
+          s.copy(v).project(cam);
+          if (s.z > 1 || s.z < -1) continue;
+          const [px, py] = toPx(s), d = Math.hypot(px - cx, py - cy);
+          if (d > R) continue;
+          const key = 'h' + Math.round(px / 2) + ',' + Math.round(py / 2), z = v.clone().sub(cam.position).dot(fwd), oc = cell.get(key);
+          if (!oc || z < oc.z) cell.set(key, { p: v.clone(), d, z, hole: true });
+        }
+        if (strict) for (let i = 0; i < eg.corn.length; i += 3) {
+          v.set(eg.corn[i], eg.corn[i + 1], eg.corn[i + 2]).applyMatrix4(mw);
+          if (cutAway(v)) continue;
+          s.copy(v).project(cam);
+          if (s.z > 1 || s.z < -1) continue;
+          const [px, py] = toPx(s), d = Math.hypot(px - cx, py - cy);
+          if (d > R) continue;
+          const key = Math.round(px / 2) + ',' + Math.round(py / 2), z = v.clone().sub(cam.position).dot(fwd), o = cell.get(key);
+          if (!o || z < o.z) cell.set(key, { p: v.clone(), d, z });
+        }
+      }
+    }
+    // точка на самом кольце отверстия — не угол
+    for (const [key, k] of cell) if (!k.hole && circ.some(q => Math.abs(k.p.distanceTo(q.c) - q.r) < 0.1)) cell.delete(key);
     const cand = [...cell.values()];
     if (!cand.length) continue;
     cand.sort((a, b) => a.d - b.d);
@@ -1277,7 +1364,7 @@ function snapAt(cx, cy, radii) {
       // центр отверстия рядом с курсором важнее угла, даже если угол ближе к глазу (иначе к гайке не прицепиться)
       if (!best) { best = k; d0 = k.d; } else if (k.hole && !best.hole) best = k; else if (k.hole === best.hole && k.z < best.z - 0.5) best = k;
     }
-    if (best) return best.p;
+    if (best) { snapHole = !!best.hole; return best.p; }
   }
   return null;
 }
@@ -1288,6 +1375,8 @@ function snapAt(cx, cy, radii) {
 // от стойки). Коснулся пустого места — замер сброшен. Способ «точки» — прежний, от угла до угла.
 let rmode = 'easy';                                    // для заказчика по умолчанию — лёгкие размеры
 try { rmode = localStorage.getItem('viewerRMode2') || 'easy'; } catch (e) {}
+// грани, рёбра и точки слиты в один способ «міряти» (19.11) — запомненный старый способ открывается как он
+if (rmode === 'face' || rmode === 'edge' || rmode === 'point') rmode = 'meas';
 let face1 = null, faceHov = null;
 const partDims = [];
 const PAR = 0.9995;                                   // «параллельно» — расхождение меньше 2°
@@ -1503,7 +1592,7 @@ function edgeAt(cx, cy) {
         if (L2 < 4) continue;                                   // ребро смотрит на нас — точка, не линия
         const t = Math.max(0, Math.min(1, ((cx - ax) * vx + (cy - ay) * vy) / L2));
         const d = Math.hypot(ax + vx * t - cx, ay + vy * t - cy);
-        if (d <= R) { const z = A.clone().lerp(B, t).sub(cam.position).dot(fwd); cand.push({ d, a: A.clone(), b: B.clone(), t, z, pi }); }
+        if (d <= R) { const z = A.clone().lerp(B, t).sub(cam.position).dot(fwd); cand.push({ d, a: A.clone(), b: B.clone(), t, z, pi, ln }); }
       }
     }
   }
@@ -1513,7 +1602,7 @@ function edgeAt(cx, cy) {
   for (const k of cand.slice(0, 40)) {
     const p = k.a.clone().lerp(k.b, k.t);
     if (cutAway(p) || !pointVisible(p)) continue;
-    return { a: k.a, b: k.b, p, dir: k.b.clone().sub(k.a).normalize(), pi: k.pi };
+    return { a: k.a, b: k.b, p, dir: k.b.clone().sub(k.a).normalize(), pi: k.pi, ln: k.ln };
   }
   return null;
 }
@@ -1558,6 +1647,140 @@ function edgeClick(e, mouse) {
   const b = e.p.clone(), a = b.clone().sub(perp);
   const dm = addDim(a, b);
   if (mouse && dm.axis) placing = { dm, base: a.clone().add(b).multiplyScalar(0.5) };
+}
+// ---------------- рулетка «міряти» ----------------
+// Один способ вместо «граней», «рёбер» и «точек» (Алексей 19.11: «выбрал центр — до грани, до точки, до чего угодно»).
+// Касание берёт по порядку: центр отверстия / гайки рядом, угол детали рядом, ребро прямо под пальцем, иначе плоская
+// грань под ним (круглая — не грань). Второе: точка–точка — расстояние; точка–ребро/грань — по перпендикуляру;
+// ребро/грань — до параллельного ребра/грани; не параллельные — размер не ставится, подсветка красная.
+// Прямой вид (спереди / сверху / сбоку без перспективы) — мерим то, что видно на экране: глубина вида в размер не входит,
+// а грань, смотрящая на нас, не берётся (на ней ничего не померить — берётся ребро рядом). Повёрнутый вид — в пространстве.
+let meas1 = null, measHov = null, mline = null;
+const MPAR = Math.sin(THREE.MathUtils.degToRad(2));      // ребро «параллельно грани» — до 2°
+const MNAME = { pt: 'кут', hole: 'центр отвору', edge: 'ребро', face: 'грань', round: 'кругла поверхня' };
+const mName = it => it.kind === 'pt' && it.hole ? MNAME.hole : MNAME[it.kind];
+function straightView() {
+  if (cam.isPerspectiveCamera) return null;
+  const v = cam.getWorldDirection(new THREE.Vector3());
+  return Math.max(Math.abs(v.x), Math.abs(v.y), Math.abs(v.z)) > 0.9995 ? v : null;
+}
+// круглая поверхность: нормали в углах треугольника расходятся с его собственной (гладкое затенение)
+function curvedHit(h) {
+  const nA = h.object.geometry.attributes.normal; if (!nA || !h.face) return false;
+  const v = new THREE.Vector3();
+  for (const k of [h.face.a, h.face.b, h.face.c]) { v.fromBufferAttribute(nA, k).normalize(); if (v.dot(h.face.normal) < 0.9986) return true; }
+  return false;
+}
+function measAt(cx, cy) {
+  const V = straightView();
+  const scr = v => { const s = v.clone().project(cam); return [(s.x + 1) / 2 * innerWidth, (1 - s.y) / 2 * innerHeight]; };
+  const p = snapAt(cx, cy, [TOUCH ? 22 : 12], true);
+  if (p) return { kind: 'pt', p, hole: snapHole };
+  const e = edgeAt(cx, cy);
+  // край круглого отверстия — это не ребро, а его центр
+  const near = e && (() => {         // точка ребра под курсором и её расстояние до курсора на экране
+    ray.setFromCamera(new THREE.Vector2((cx / innerWidth) * 2 - 1, -(cy / innerHeight) * 2 + 1), cam);
+    const q = new THREE.Vector3(); ray.ray.distanceSqToSegment(e.a, e.b, null, q);
+    const [x, y] = scr(q); return { q, d: Math.hypot(x - cx, y - cy) };
+  })();
+  const tight = V ? (TOUCH ? 24 : 12) : (TOUCH ? 10 : 6);
+  if (e && e.ln && near.d <= tight) {
+    const cc = edgeGraph(e.ln).circ, la = e.ln.worldToLocal(e.a.clone()), lb = e.ln.worldToLocal(e.b.clone()), c = new THREE.Vector3();
+    for (let i = 0; i < cc.length; i += 4) {
+      c.set(cc[i], cc[i + 1], cc[i + 2]); const r = cc[i + 3], tol = Math.max(0.05, r * 0.03);
+      if (Math.abs(la.distanceTo(c) - r) < tol && Math.abs(lb.distanceTo(c) - r) < tol) return { kind: 'pt', p: c.applyMatrix4(e.ln.matrixWorld), hole: true };
+    }
+  }
+  // точка ребра — та, что под курсором (в перспективе середина по экрану — не середина в пространстве)
+  if (e && near.d <= tight) return { kind: 'edge', p: near.q, e };
+  const h = pick(cx, cy);
+  if (!h || !h.face || !parts[h.object.userData.idx] || parts[h.object.userData.idx].isL) return null;
+  if (curvedHit(h)) return { kind: 'round', p: h.point.clone() };
+  const m = h.object, nl = h.face.normal.clone().normalize(), pl = m.worldToLocal(h.point.clone());
+  const n = nl.clone().applyMatrix3(new THREE.Matrix3().getNormalMatrix(m.matrixWorld)).normalize();
+  if (V && Math.abs(n.dot(V)) > 0.9) return null;
+  return { kind: 'face', p: h.point.clone(), f: { m, nl, dl: nl.dot(pl), n, p: h.point.clone(), idx: m.userData.idx } };
+}
+function measSame(a, b) {
+  if (!a || !b || a.kind !== b.kind) return false;
+  if (a.kind === 'pt') return a.p.distanceTo(b.p) < 0.5;
+  if (a.kind === 'edge') return sameEdge(a.e, b.e);
+  if (a.kind === 'face') return sameFace(a.f, b.f);
+  return false;
+}
+// размер между двумя взятыми: { a, b } — концы размера, или { err } — почему нельзя
+function measCalc(i1, i2) {
+  const V = straightView(), flat = w => V ? w.addScaledVector(V, -w.dot(V)) : w;
+  const pl = [i1, i2].filter(i => i.kind === 'face'), ln = [i1, i2].filter(i => i.kind === 'edge');
+  let a, w;
+  if (pl.length) {
+    const n = pl[0].f.n;
+    if (pl.length === 2 && Math.abs(pl[1].f.n.dot(n)) <= PAR) return { err: 'грані не паралельні — виберіть іншу' };
+    for (const l of ln) if (Math.abs(l.e.dir.dot(n)) >= MPAR) return { err: 'ребро не паралельне грані — виберіть інше' };
+    // размер ведём от того, что не грань (от точки, от ребра); две грани — от места касания второй
+    const from = pl.length === 2 ? i2 : (i1.kind === 'face' ? i2 : i1), plane = from === i1 ? i2 : i1;
+    a = from.p.clone(); w = flat(n.clone().multiplyScalar(n.dot(plane.p.clone().sub(a))));
+  } else if (ln.length) {
+    const d = ln[0].e.dir;
+    if (ln.length === 2 && Math.abs(ln[1].e.dir.dot(d)) <= PAR) return { err: 'ребра не паралельні — виберіть інше' };
+    const from = ln.length === 2 ? i2 : (i1.kind === 'edge' ? i2 : i1), line = from === i1 ? i2 : i1;
+    a = from.p.clone(); w = line.p.clone().sub(a); w.addScaledVector(d, -w.dot(d));
+    if (V) { flat(w); const dd = flat(d.clone()); if (dd.lengthSq() > 0.01) { dd.normalize(); w.addScaledVector(dd, -w.dot(dd)); } }
+  } else { a = i1.p.clone(); w = flat(i2.p.clone().sub(a)); }
+  if (w.length() < 0.5) return { err: V ? 'на цьому виді тут 0 мм — виберіть інше або поверніть модель' : 'тут 0 мм — виберіть інше' };
+  return { a, b: a.clone().add(w) };
+}
+// подсветка взятого / того, что возьмётся; возвращает, чем её снять
+function measHL(it, col, first) {
+  if (it.kind === 'edge') { const e = { a: it.e.a, b: it.e.b, dir: it.e.dir }; edgeHL(e, col); return () => dropEdge(e); }
+  if (it.kind === 'face') { const f = Object.assign({}, it.f); faceHL(f, col, first ? 0.45 : 0.35); return () => dropHL(f); }
+  if (!first && col !== WBAD) return null;                  // точка под мышью — её показывает крестик (на телефоне — лупа)
+  const dot = new THREE.Points(new THREE.BufferGeometry().setFromPoints([it.p]),
+    new THREE.PointsMaterial({ color: col, size: TOUCH ? 14 : 10, sizeAttenuation: false, depthTest: false }));
+  dot.renderOrder = 11; scene.add(dot); need();
+  return () => { scene.remove(dot); dot.geometry.dispose(); need(); };
+}
+function measLine(r) {
+  if (mline) { scene.remove(mline); mline.geometry.dispose(); mline = null; }
+  if (r && !r.err) {
+    mline = new THREE.Line(new THREE.BufferGeometry().setFromPoints([r.a, r.b]), new THREE.LineDashedMaterial({ color: DIMC, depthTest: false, dashSize: 10, gapSize: 6 }));
+    mline.computeLineDistances(); mline.renderOrder = 10; scene.add(mline);
+  }
+  need();
+}
+// ведём мышь / палец: подсветить, что возьмётся; при взятом первом — сразу пунктир и число (или почему нельзя)
+function measHover(cx, cy) {
+  const it = measAt(cx, cy);
+  let col = 0x2b6cb0, r = null;
+  if (it && it.kind !== 'round' && meas1) { if (measSame(it, meas1)) col = 0; else { r = measCalc(meas1, it); if (r.err) col = WBAD; } }
+  const ok = !!it && it.kind !== 'round' && !!col;
+  if (measHov && !(ok && measSame(measHov, it) && measHov.col === col)) { if (measHov.undo) measHov.undo(); measHov = null; }
+  if (ok && !measHov) { measHov = it; it.col = col; it.undo = measHL(it, col, false); }
+  measLine(r);
+  const st = $('st');
+  if (!it) st.textContent = meas1 ? 'від: ' + mName(meas1) + ' — торкніться другого (порожнє місце — скинути)' : RHINT.meas;
+  else if (it.kind === 'round') st.textContent = 'кругла поверхня — візьміть центр отвору, ребро або плоску грань';
+  else if (r && r.err) st.textContent = mName(it) + ': ' + r.err;
+  else if (r) st.textContent = mName(meas1) + ' → ' + mName(it) + ': ' + fmt(r.a.distanceTo(r.b)) + ' мм';
+  else st.textContent = mName(it);
+  return { it, r };
+}
+function measHoverEnd() { if (measHov && measHov.undo) measHov.undo(); measHov = null; measLine(null); }
+function measClear() { if (meas1 && meas1.undo) meas1.undo(); meas1 = null; measLine(null); showPending(); }
+function measClick(it, mouse) {
+  measHoverEnd();
+  if (!it) { if (meas1) measClear(); $('st').textContent = RHINT.meas; return; }
+  if (it.kind === 'round') { toast('кругла поверхня — візьміть центр отвору, ребро або плоску грань'); return; }
+  if (!meas1) {
+    meas1 = it; it.undo = measHL(it, DIMC, true); showPending();
+    $('st').textContent = 'від: ' + mName(it) + ' — торкніться другого (порожнє місце — скинути)'; return;
+  }
+  if (measSame(it, meas1)) return;
+  const r = measCalc(meas1, it);
+  if (r.err) { toast(r.err); return; }
+  measClear();
+  const dm = addDim(r.a, r.b);
+  if (mouse && dm.axis) placing = { dm, base: r.a.clone().add(r.b).multiplyScalar(0.5) };
 }
 // ---------------- рулетка «до стін» ----------------
 // Способ «до стін» (Алексей 08.10): заказчик спрашивает, на какой высоте полка и сколько от неё до стены, а пола и
@@ -2342,13 +2565,13 @@ function easyPick(x, y) {
   easyStatic(h);
 }
 
-const RHINT = { easy: 'легкі розміри: торкніться полиці, стінки, дверцят або шухляди', face: 'рулетка: торкніться грані деталі', edge: 'рулетка: торкніться ребра деталі', point: 'рулетка: вкажіть першу точку',
+const RHINT = { easy: 'легкі розміри: торкніться полиці, стінки, дверцят або шухляди', meas: 'міряти: торкніться центру отвору, кута, ребра або грані', face: 'рулетка: торкніться грані деталі', edge: 'рулетка: торкніться ребра деталі', point: 'рулетка: вкажіть першу точку',
   wall: WHINT,
   gab: matchMedia('(pointer: coarse)').matches ? 'габарит: торкніться деталі; ще раз — збірна одиниця, далі — вища'
     : 'габарит: виділіть деталь; Tab — вище, Shift+Tab — нижче, Ctrl — додати деталь, Shift — збірна одиниця (ще раз — вища)' };
 function setRMode(m) {
   rmode = m; try { localStorage.setItem('viewerRMode2', m); } catch (e) {}
-  rp = []; clearFace1(); faceHoverEnd(); clearEdge1(); edgeHoverEnd(); clearWall1(); wallHoverEnd(); hideHover(); dropEasy();
+  rp = []; clearFace1(); faceHoverEnd(); clearEdge1(); edgeHoverEnd(); clearWall1(); wallHoverEnd(); measClear(); measHoverEnd(); hideHover(); dropEasy();
   $('st').textContent = RHINT[m];
   if (m === 'wall') {                                      // мерить не до чего, если линии помещения спрятаны или их нет
     if (!showL) { showL = true; applyVis(); renderTree(); }
@@ -2362,6 +2585,7 @@ function setRMode(m) {
 function rulerPick(x, y, mouse) {
   if (rmode === 'gab') { const h = pick(x, y); if (h) tapPick(h.object.userData.idx); else clearSel(); return; }   // только телефон
   if (rmode === 'easy') { easyPick(x, y); return; }
+  if (rmode === 'meas') { measHoverEnd(); measClick(measAt(x, y), mouse); return; }
   if (rmode === 'face') { faceHoverEnd(); faceClick(faceAt(x, y), mouse); }
   else if (rmode === 'edge') { edgeHoverEnd(); edgeClick(edgeAt(x, y), mouse); }
   else if (rmode === 'wall') { wallHoverEnd(); wallClick(wallAt(x, y), mouse); }
@@ -2424,7 +2648,9 @@ function axisMenu(dm) {
     m.appendChild(b);
   }
   document.body.appendChild(m);
-  setTimeout(() => addEventListener('pointerdown', closeAxisMenu, { once: true }), 0);
+  // закрыть — нажатием мимо меню (нажатие по самому меню раньше закрывало его до выбора)
+  const off = ev => { if (m.contains(ev.target)) return; removeEventListener('pointerdown', off, true); closeAxisMenu(); };
+  setTimeout(() => addEventListener('pointerdown', off, true), 0);
 }
 function closeAxisMenu() { const m = $('axmenu'); if (m) m.remove(); }
 // кнопка «размеры»: короткое нажатие — спрятать/показать, долгое (или правой кнопкой) — удалить все
@@ -2537,9 +2763,9 @@ function addPoint(p, mouse) {
 }
 // первая точка и резиновая линия до курсора (на компьютере)
 let pend = null;
-function cancelPoint() { rp = []; clearFace1(); clearEdge1(); clearWall1(); $('st').textContent = RHINT[rmode]; }
+function cancelPoint() { rp = []; clearFace1(); clearEdge1(); clearWall1(); measClear(); $('st').textContent = RHINT[rmode]; }
 function showPending(hover) {
-  $('bUndo').style.display = ruler && (rp.length || face1 || edge1 || wall1) ? '' : 'none';
+  $('bUndo').style.display = ruler && (rp.length || face1 || edge1 || wall1 || meas1) ? '' : 'none';
   if (pend) { scene.remove(pend); pend = null; }
   if (!rp.length) { need(); return; }
   const pts = [rp[0], hover || rp[0]];
@@ -2554,7 +2780,7 @@ function showPending(hover) {
 }
 function clearDims() { while (dims.length) removeDim(dims[0]); rp = []; showPending(); }
 function stopRuler() {
-  ruler = false; rp = []; placing = null; dropEasy(); clearFace1(); faceHoverEnd(); clearEdge1(); edgeHoverEnd(); clearWall1(); wallHoverEnd(); showPending(); hideHover(); syncTools();
+  ruler = false; rp = []; placing = null; dropEasy(); clearFace1(); faceHoverEnd(); clearEdge1(); edgeHoverEnd(); clearWall1(); wallHoverEnd(); measClear(); measHoverEnd(); showPending(); hideHover(); syncTools();
   cv.style.cursor = '';
   setOn('bRuler', false); $('st').textContent = ''; need();
   // рулетку погасили — размеры спрятаны до следующего включения (29.09); в кресленні размеры — часть листа, остаются
@@ -2573,6 +2799,13 @@ function hover(cx, cy) {
     mk.classList.remove('snapped'); mk.style.left = cx + 'px'; mk.style.top = cy + 'px';
     dragDim(placing.dm, cx, cy, cx - bx, cy - by);
     $('st').textContent = 'розмір ' + fmt(placing.dm.a.distanceTo(placing.dm.b)) + ' мм — відведіть мишу, клацання фіксує (Esc — без відступу)';
+    return;
+  }
+  if (rmode === 'meas') {                                  // міряти: крестик прыгает на точку, ребро/грань — подсветкой
+    const { it } = measHover(cx, cy);
+    let x = cx, y = cy, sn = false;
+    if (it && it.kind === 'pt') { const s = it.p.clone().project(cam); x = (s.x + 1) / 2 * innerWidth; y = (1 - s.y) / 2 * innerHeight; sn = true; }
+    mk.classList.toggle('snapped', sn); mk.style.left = x + 'px'; mk.style.top = y + 'px';
     return;
   }
   if (rmode !== 'point') {                                 // грани/рёбра: крестик на курсоре, под ним подсветка
@@ -2664,7 +2897,9 @@ function spinLoop() {
 const loupe = $('loupe'), lctx = loupe.getContext('2d');
 let aim = null;
 function aimAt(x, y) {
-  aim = rmode === 'face' ? { x, y, kind: 'face', f: faceHover(x, y) }
+  const mh = rmode === 'meas' ? measHover(x, y) : null;
+  aim = mh ? { x, y, kind: 'meas', it: mh.it, p: mh.it && mh.it.kind === 'pt' ? mh.it.p : null }
+      : rmode === 'face' ? { x, y, kind: 'face', f: faceHover(x, y) }
       : rmode === 'edge' ? { x, y, kind: 'edge', e: edgeHover(x, y) }
       : rmode === 'wall' ? { x, y, kind: 'wall', w: wallHover(x, y) } : { x, y, p: snapAt(x, y) };
   rend.render(scene, cam);                                  // свежий кадр — сразу копируем из него кусок
@@ -2680,6 +2915,13 @@ function aimAt(x, y) {
   if (aim.p) { const s = aim.p.clone().project(cam); mx = S / 2 + (((s.x + 1) / 2 * innerWidth) - x) * Z * k; my = S / 2 + (((1 - s.y) / 2 * innerHeight) - y) * Z * k; }
   lctx.strokeStyle = '#1f5fbf'; lctx.lineWidth = 2;
   lctx.beginPath(); lctx.moveTo(mx - 14, my); lctx.lineTo(mx + 14, my); lctx.moveTo(mx, my - 14); lctx.lineTo(mx, my + 14); lctx.stroke();
+  if (aim.kind === 'meas') {                                // что возьмётся, словом — внизу круга
+    const t = aim.it ? mName(aim.it) : 'нічого';
+    lctx.font = 'bold 22px sans-serif'; lctx.textAlign = 'center';
+    const tw = lctx.measureText(t).width;
+    lctx.fillStyle = 'rgba(255,255,255,.88)'; lctx.fillRect(S / 2 - tw / 2 - 8, S - 62, tw + 16, 32);
+    lctx.fillStyle = aim.it && aim.it.kind !== 'round' ? '#1f5fbf' : '#c0392b'; lctx.fillText(t, S / 2, S - 38);
+  }
   lctx.restore();
   lctx.strokeStyle = '#2b2f36'; lctx.lineWidth = 3; lctx.beginPath(); lctx.arc(S / 2, S / 2, S / 2 - 2, 0, Math.PI * 2); lctx.stroke();
   // лупа вверху слева; палец зашёл в этот угол — перескакивает вправо
@@ -2697,8 +2939,9 @@ function isLand() { return innerWidth > innerHeight; }
 // отпустили палец: точка ставится; не поставилась — сказать почему (замечание 27.09: «ставятся не всегда»)
 function aimEnd(place, cancelled) {
   loupe.style.display = 'none';
-  const a = aim; aim = null; faceHoverEnd(); edgeHoverEnd(); wallHoverEnd();
+  const a = aim; aim = null; faceHoverEnd(); edgeHoverEnd(); wallHoverEnd(); measHoverEnd();
   if (cancelled) toast('не поставлено: телефон перервав дотик — спробуйте ще раз, трохи далі від краю екрана');
+  else if (place && a && a.kind === 'meas') measClick(a.it);
   else if (place && a && a.kind === 'face') faceClick(a.f);
   else if (place && a && a.kind === 'wall') wallClick(a.w);
   else if (place && a && a.kind === 'edge') edgeClick(a.e);
@@ -2790,7 +3033,7 @@ cv.addEventListener('pointerdown', e => {
     if (h && !toggleAt(h.object.userData.idx)) $('st').textContent = 'ця деталь нерухома';
   }
 });
-cv.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse') { hideHover(); faceHoverEnd(); edgeHoverEnd(); wallHoverEnd(); } });
+cv.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse') { hideHover(); faceHoverEnd(); edgeHoverEnd(); wallHoverEnd(); measHoverEnd(); } });
 cv.addEventListener('pointercancel', e => { if (e.pointerType === 'touch') touchUp(e); });
 cv.addEventListener('pointermove', e => {
   if (e.pointerType === 'touch') { touchMove(e); return; }
@@ -2835,7 +3078,7 @@ cv.addEventListener('pointerup', e => {
   if (drawOn && snapTool()) { if (d.b === 2) endTool(); else if (d.b === 0) toolClick(e.clientX, e.clientY); return; }
   if (drawOn && d.b === 0 && (selDim || selSec || selNote)) { selDim = selSec = selNote = null; drawOverlay(); }
   if (drawOn && PRESS.has(drawTool)) return;                // щелчок мимо модуля/проёма — ничего не выделяем
-  if (d.b === 2) { if (ruler && (rp.length || face1 || edge1 || wall1)) cancelPoint(); return; }   // правая кнопка без сдвига — убрать первую точку
+  if (d.b === 2) { if (ruler && (rp.length || face1 || edge1 || wall1 || meas1)) cancelPoint(); return; }   // правая кнопка без сдвига — убрать первую точку
   if (d.b !== 0) return;
   if (ruler && rmode !== 'gab') {                           // «габарит» — щелчок выделяет, как без рулетки (с Ctrl)
     if (placing) { finishPlacing(); return; }
@@ -2890,7 +3133,7 @@ addEventListener('keydown', e => {
   if (e.key === 'Delete') hideSel();
   if (e.key === 'Escape') {
     if (placing) { placing.dm.off.set(0, 0, 0); buildDim(placing.dm); updRuler(); finishPlacing(); need(); return; }
-    if (ruler && (rp.length || face1 || edge1 || wall1)) { cancelPoint(); return; }
+    if (ruler && (rp.length || face1 || edge1 || wall1 || meas1)) { cancelPoint(); return; }
     stopRuler(); clearSel();
   }
 });
@@ -8537,9 +8780,7 @@ function syncTools() {
     if (drawOn) chip(ICON.ruler, 'вимкнути рулетку', stopRuler);
     // способ рулетки: лёгкие размеры (для заказчика, по умолчанию), грани, рёбра, точки
     chip(ICON.easy, 'легкі розміри: комірка, дверцята, шухляда', () => setRMode('easy'), 'mini' + (rmode === 'easy' ? ' on' : ''));
-    chip(ICON.faces, 'міряти від грані до грані', () => setRMode('face'), 'mini' + (rmode === 'face' ? ' on' : ''));
-    chip(ICON.edges, 'міряти від ребра до ребра', () => setRMode('edge'), 'mini' + (rmode === 'edge' ? ' on' : ''));
-    chip(ICON.points, 'міряти від кута або центру отвору (гайки) до кута чи центру', () => setRMode('point'), 'mini' + (rmode === 'point' ? ' on' : ''));
+    chip(ICON.meas, 'міряти: центр отвору, кут, ребро або грань — до будь-чого з них', () => setRMode('meas'), 'mini' + (rmode === 'meas' ? ' on' : ''));
     chip(ICON.wall, 'до стін: від площини деталі до лінії підлоги або стіни', () => setRMode('wall'), 'mini' + (rmode === 'wall' ? ' on' : ''));
     chip(ICON.gab, 'габарит виділеного: ширина, висота, глибина', () => setRMode('gab'), 'mini' + (rmode === 'gab' ? ' on' : ''));
     if (dims.length) chip(ICON.trash, 'стерти всі розміри', () => { clearDims(); partDims.length = 0; easyDims.length = 0; gabDims.length = 0; }, 'mini');
