@@ -497,6 +497,9 @@ function partEdges(g, deg, slivers, pd) {
       const d = dot(f.tri.n, fs[1].tri.n);
       draw = d <= cosT && d >= -cosT;   // d < -cosT: перевёрнутый сосед в той же плоскости — не ребро
     }
+    // у черты больше двух треугольников, и все в одной плоскости — Базис наложил треугольники ровной пласти друг на друга
+    // (19.11, трибуна 002_11: задняя стенка с вырезом под розетку — косые черты от выреза к углам, у черты 4 треугольника)
+    if (draw && fs.length > 2 && fs.every(g => Math.abs(dot(g.tri.n, f.tri.n)) > 0.9995)) draw = false;
     if (draw && fs.length === 1 && skipped(f.a, f.b)) draw = false;
     if (draw) out.push(pos[f.a], pos[f.a + 1], pos[f.a + 2], pos[f.b], pos[f.b + 1], pos[f.b + 2]);
   }
@@ -1960,6 +1963,7 @@ function wallClick(w, mouse) {
 const ROOM = { groups: [], surfs: [] };
 const ROOM_MAT = {
   wall: new THREE.MeshBasicMaterial({ color: 0xc9d0d8, transparent: true, opacity: 0.32, depthWrite: false, side: THREE.FrontSide }),
+  wallFade: new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, side: THREE.FrontSide }),   // стена без верхней линии — тает кверху
   reveal: new THREE.MeshBasicMaterial({ color: 0xc3cad3, transparent: true, opacity: 0.4, depthWrite: false, side: THREE.DoubleSide }),   // откосы окна
   floor: new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, side: THREE.FrontSide }),   // прозрачность — по краю (тает)
   pick: new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, colorWrite: false, side: THREE.FrontSide }),   // потолок — только мишень
@@ -2043,7 +2047,7 @@ function buildRoom() {
       }
     }
     for (const s of segs) {
-      if (!s.hor || !(s.kind === 'black' || s.kind === 'red' || s.kind === 'green' || s.kind === 'purple')) continue;
+      if (!s.hor || !(s.kind === 'black' || s.kind === 'red' || s.kind === 'green')) continue;
       const d = s.B.clone().sub(s.A).setY(0), L = d.length(); if (L < 20) continue; d.divideScalar(L);
       for (const P of planes) {
         if (Math.abs(P.d.dot(d)) < 0.995 || offOf(P, s.A) > 40 || offOf(P, s.B) > 40) continue;
@@ -2072,7 +2076,7 @@ function buildRoom() {
       for (let k = 0; k + 1 < us.length; k++) {
         const ua = us[k], ub = us[k + 1]; if (ub - ua < 1) continue;
         const um = (ua + ub) / 2, cov = P.lines.filter(l => l.u0 <= um + 1 && l.u1 >= um - 1);
-        const hl = cov.filter(l => !l.floor && !l.low && l.kind !== 'purple' && l.y > fy + 20).sort((a, b) => a.y - b.y);
+        const hl = cov.filter(l => !l.floor && !l.low && l.y > fy + 20).sort((a, b) => a.y - b.y);
         const hs = []; for (const l of hl) if (!hs.length || l.y - hs[hs.length - 1].y > 5) hs.push(l);
         let top = hs.length ? hs[hs.length - 1].y : null;
         const rawTop = top;
@@ -2080,12 +2084,17 @@ function buildRoom() {
           const clean = hs.filter(l => l.kind === 'black' && l.y > top - 250 && l.y < top - 5);   // чистовой потолок под черновым
           if (hs[hs.length - 1].kind === 'red' && clean.length) top = clean[clean.length - 1].y;
         }
-        // фиолетовая — верх стены, только если ни чёрного, ни красного верха нет во всей плоскости (замер другой конторы, 19.11,
-        // трибуна 002_11: низкая стена 1640 под фермой — верх фиолетовым, чёрные — только углы); у основной фиолетовая — переход материала
-        const pu = cov.filter(l => l.kind === 'purple' && l.y > fy + 20);
-        cells.push({ ua, ub, onFloor: cov.some(l => l.floor), onRed: cov.some(l => l.low), hs, top, rawTop, pTop: pu.length ? Math.max(...pu.map(l => l.y)) : null });
+        cells.push({ ua, ub, onFloor: cov.some(l => l.floor), onRed: cov.some(l => l.low), hs, top, rawTop });
       }
-      if (cells.every(c => c.top === null)) for (const c of cells) if (c.pTop !== null) c.top = c.rawTop = c.pTop;
+      // Верхней линии (чёрной / красной) в плоскости нет — замер другой конторы (19.11, трибуна 002_11: низ красный, углы чёрные,
+      // верх фиолетовый или вовсе без линии). Стена — та же плоскость по линиям пола, высота — до самой высокой точки любой линии,
+      // лежащей в этой плоскости (углы, верх любого цвета), и кверху стена тает (Алексей: «как обрыв, градиентом»).
+      const soft = cells.length && cells.every(c => c.top === null);
+      if (soft) {
+        let hi = null;
+        for (const s of segs) if (offOf(P, s.A) <= 40 && offOf(P, s.B) <= 40) { const y = Math.max(s.A.y, s.B.y); if (y > fy + 100 && (hi === null || y > hi)) hi = y; }
+        if (hi !== null) for (const c of cells) c.top = c.rawTop = hi;
+      }
       cells.forEach((c, k) => {
         if (c.top !== null) return;
         const L = cells.slice(0, k).reverse().find(x => x.top !== null), R = cells.slice(k + 1).find(x => x.top !== null);
@@ -2107,8 +2116,23 @@ function buildRoom() {
         if (top > cyAll || !gotTop) { cyAll = gotTop ? Math.max(cyAll, top) : top; gotTop = true; }
       }
       if (!tri.length) continue;
-      const g = new THREE.BufferGeometry().setFromPoints(tri); g.computeVertexNormals();
-      const m = new THREE.Mesh(g, ROOM_MAT.wall); m.renderOrder = -1; grp.add(m);
+      let m;
+      if (soft) {                                // тает кверху: нижние 55 % — как обычная стена, выше — до нуля у верха
+        const pos = [], col = [], cw = new THREE.Color(0xc9d0d8), A0 = 0.32;
+        for (let k = 0; k < tri.length; k += 6) {
+          const q = [tri[k], tri[k + 1], tri[k + 2], tri[k + 5]], y0 = Math.min(...q.map(v => v.y)), y1 = Math.max(...q.map(v => v.y)), ym = y0 + (y1 - y0) * 0.55;
+          for (const [ya, yb, aa, ab] of [[y0, ym, A0, A0], [ym, y1, A0, 0]]) {
+            const r = q.map(v => v.clone().setY(v.y <= y0 + 0.5 ? ya : yb)), al = r.map(v => (Math.abs(v.y - ya) < 0.5 ? aa : ab));
+            for (const i of [0, 1, 2, 0, 2, 3]) { pos.push(r[i].x, r[i].y, r[i].z); col.push(cw.r, cw.g, cw.b, al[i]); }
+          }
+        }
+        const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(col, 4)); g.computeVertexNormals();
+        m = new THREE.Mesh(g, ROOM_MAT.wallFade);
+      } else {
+        const g = new THREE.BufferGeometry().setFromPoints(tri); g.computeVertexNormals();
+        m = new THREE.Mesh(g, ROOM_MAT.wall);
+      }
+      m.renderOrder = -1; grp.add(m);
       ROOM.surfs.push({ m, kind: 'wall', n: inward.clone().normalize(), p: P.o.clone().setY(fy), g: grp });
       // откосы окна (Алексей 30.10: «откосы тоже создают свою плоскость»): глубина — по линиям ниши поперёк стены, начатым у
       // стены в пределах проёма (030_6: 195 мм до окна); низ, верх и бок, у которого есть такая линия (окно в угол — без бока)
@@ -2147,7 +2171,7 @@ function buildRoom() {
     // пол — прямоугольник на всю комнату; у краёв, где стены нет, плавно тает (Алексей 30.10: «видно, что пол есть и где
     // обрывается»); он же мишень «від підлоги». Потолок — невидимая мишень «до стелі»
     {
-      const x0 = pb.min.x, x1 = pb.max.x, z0 = pb.min.z, z1 = pb.max.z, W = x1 - x0, D = z1 - z0;
+      let x0 = pb.min.x, x1 = pb.max.x, z0 = pb.min.z, z1 = pb.max.z;
       const walled = side => planes.some(P => {   // вдоль этого края стоит стена
         const along = side === 'x0' || side === 'x1' ? Math.abs(P.d.z) > 0.99 : Math.abs(P.d.x) > 0.99;
         if (!along) return false;
@@ -2155,9 +2179,27 @@ function buildRoom() {
         return Math.abs(v - c) < 120;
       });
       const open = { x0: !walled('x0'), x1: !walled('x1'), z0: !walled('z0'), z1: !walled('z1') };
+      // Пол не уже мебели (Алексей 19.11, трибуна 002_11: линии пола замера — узкая полоска 400 мм, трибуна вылезала за край):
+      // где стены нет, пол идёт за мебель ещё на полметра и там тает; вдоль стены — до стены, как было
+      const MARG = 500, fb = new THREE.Box3(), inv = root.matrixWorld.clone().invert(), bb = new THREE.Box3(), mm = new THREE.Matrix4();
+      root.updateMatrixWorld(true);
+      for (const p of parts) {
+        if (p.isL || !p.meshes) continue;
+        for (const m of p.meshes) { const g = m.geometry; if (!g.boundingBox) g.computeBoundingBox(); fb.union(bb.copy(g.boundingBox).applyMatrix4(mm.multiplyMatrices(inv, m.matrixWorld))); }
+      }
+      const ext = { x0: false, x1: false, z0: false, z1: false };
+      if (!fb.isEmpty()) {
+        if (open.x0 && fb.min.x - MARG < x0) { x0 = fb.min.x - MARG; ext.x0 = true; }
+        if (open.x1 && fb.max.x + MARG > x1) { x1 = fb.max.x + MARG; ext.x1 = true; }
+        if (open.z0 && fb.min.z - MARG < z0) { z0 = fb.min.z - MARG; ext.z0 = true; }
+        if (open.z1 && fb.max.z + MARG > z1) { z1 = fb.max.z + MARG; ext.z1 = true; }
+      }
+      const W = x1 - x0, D = z1 - z0;
+      // тает на открытом краю: за мебелью — на полосе MARG, по линиям пола — как было (до 1 м)
       const fx = Math.min(1000, W * 0.35) || 1, fz = Math.min(1000, D * 0.35) || 1, N = 16, pos = [], col = [];
+      const fe = { x0: ext.x0 ? MARG : fx, x1: ext.x1 ? MARG : fx, z0: ext.z0 ? MARG : fz, z1: ext.z1 ? MARG : fz };
       const sm = t => { t = Math.max(0, Math.min(1, t)); return t * t * (3 - 2 * t); };
-      const alpha = (x, z) => 0.36 * (open.x0 ? sm((x - x0) / fx) : 1) * (open.x1 ? sm((x1 - x) / fx) : 1) * (open.z0 ? sm((z - z0) / fz) : 1) * (open.z1 ? sm((z1 - z) / fz) : 1);
+      const alpha = (x, z) => 0.36 * (open.x0 ? sm((x - x0) / fe.x0) : 1) * (open.x1 ? sm((x1 - x) / fe.x1) : 1) * (open.z0 ? sm((z - z0) / fe.z0) : 1) * (open.z1 ? sm((z1 - z) / fe.z1) : 1);
       const P = (i, j) => [x0 + W * i / N, z0 + D * j / N];
       const c3 = new THREE.Color(0xb9c0c8);
       for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
