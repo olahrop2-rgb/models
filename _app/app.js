@@ -4754,7 +4754,9 @@ function wireOverlay() {
   // моделях зон, общее число на заказ знает только он). На общем виде число изделий пересчитывает спецификацию
   // (обычный dblclick не доходит: колонка перерисовывается между щелчками — два нажатия ловятся в pointerdown, blkAsk)
   blkAsk = un => {
-    const v = prompt(un.general ? ML('orderqty') : ML('qty'), un.qtyOv != null ? un.qtyOv : (un.general ? String(M.qty > 0 ? M.qty : 1) : String((un.qty || 1) * (M.qty > 0 ? M.qty : 1)) + ' ' + ML('nuts')));
+    // общий вид — число комплектов на заказ (запоминается в браузере, пересчитывает все листы); лист — своя строка как есть
+    if (un.general) { const v = prompt(ML('kitsN'), String(metalK())); if (v === null) return; if (+v > 0) metalSetK(+v); drawOverlay(); return; }
+    const v = prompt(ML('qty'), un.qtyOv != null ? un.qtyOv : fqK(un.qty || 1));
     if (v === null) return;
     un.qtyOv = v.trim() || null; drawOverlay();
   };
@@ -5958,7 +5960,7 @@ const MTXT = {
   ru: { metal: 'Металл', t_metal: 'Лист на каждый металлический полуфабрикат: размеры и подписи по модели', m_off: 'Обычный лист', m_pdf: 'Комплект PDF (все листы)', m_rep: 'Листы в отчёт Федосова (картинки по одному)',
         f_loaded: 'Свои листы подняты из папки заказа', f_lost: 'не нашлись детали (модель перевыгружена)',
         f_name: 'Лист', f_newsel: 'Новый лист из выделенного', f_newvis: 'Новый лист из всего видимого', f_rep: 'Лист в отчёт Федосова (картинка)', f_del: 'Удалить лист', f_none: 'нет видимых деталей',
-        m_none: 'в модели нет полуфабрикатов с металлом', m_view: 'вид', v_bottom: 'снизу', v_back: 'сзади', v_right: 'справа', v_front: 'спереди', v_left: 'слева', v_top: 'сверху', m_last: 'последний вид листа не удаляется', holes: 'отв.', thru: 'насквозь', nothru: 'несквозное', fromIn: 'изнутри', fromOut: 'снаружи', withleg: 'с ножкой', capsYes: 'Торцы труб заглушить', capsNo: 'Торцы труб не глушить', capsWeld: 'Торцы труб заварить', tubesT: 'трубы', tubesHint: 'Трубы каркаса — номера как на листе каркаса; размеры от левого торца трубы; М', tubeN: 'труба', paintask: 'не задана в модели — уточнить', asm: 'Сборка каркасов', and: 'и', tie: 'стягивает поз.', kit: 'комплект:', refnote: '* Размеры для справок', det: 'Платик', detHole: 'отв.', deep: 'глуб.', under: 'под', nuts: 'шт.', c_offax: 'отверстие не по оси трубы (смещение', c_mm: 'мм)',
+        m_none: 'в модели нет полуфабрикатов с металлом', m_view: 'вид', v_bottom: 'снизу', v_back: 'сзади', v_right: 'справа', v_front: 'спереди', v_left: 'слева', v_top: 'сверху', m_last: 'последний вид листа не удаляется', holes: 'отв.', thru: 'насквозь', nothru: 'несквозное', fromIn: 'изнутри', fromOut: 'снаружи', withleg: 'с ножкой', capsYes: 'Торцы труб заглушить', capsNo: 'Торцы труб не глушить', capsWeld: 'Торцы труб заварить', kitsN: 'Таких комплектов', schemeT: 'схема труб', schemeHint: 'Номера труб — как на листах «трубы»; одинаковые трубы — один номер', tubesT: 'трубы', tubesHint: 'Трубы каркаса — номера как на листе каркаса; размеры от левого торца трубы; М', tubeN: 'труба', paintask: 'не задана в модели — уточнить', asm: 'Сборка каркасов', and: 'и', tie: 'стягивает поз.', kit: 'комплект:', refnote: '* Размеры для справок', det: 'Платик', detHole: 'отв.', deep: 'глуб.', under: 'под', nuts: 'шт.', c_offax: 'отверстие не по оси трубы (смещение', c_mm: 'мм)',
         side: { '-x': 'слева', x: 'справа', '-y': 'снизу', y: 'сверху', '-z': 'сзади', z: 'спереди' }, onside: 'с боку:', inside: 'внутрь', weld: 'патрубок', gablegs: 'Габариты — по трубам, без опор', metalprop: 'Металл', nopaintneed: 'не требуется (нержавейка)', m_chk: 'Проверить модель', ctr: 'Подрядчик', noctr: 'без подрядчика', orderqty: 'Количество изделий', qty: 'Количество', c_title: 'Замечания по модели — поправить и выгрузить заново', c_none: 'Замечаний по модели нет', c_nonut: 'на оси нет гайки', c_twonuts: 'две гайки в одном месте',
         mat: 'Материал', paint: 'Покраска', nopaint: 'покраска не задана в модели (свойство полуфабриката)', sheet: 'Лист', scale: 'Масштаб',
         note1: 'Размеры — по наружному контуру, от базы (левый / нижний край).',
@@ -5969,7 +5971,7 @@ const MTXT = {
   uk: { metal: 'Метал', t_metal: 'Аркуш на кожен металевий напівфабрикат: розміри й підписи за моделлю', m_off: 'Звичайний аркуш', m_pdf: 'Комплект PDF (усі аркуші)', m_rep: 'Аркуші у звіт Федосова (картинки по одному)',
         f_loaded: 'Свої аркуші підняті з теки замовлення', f_lost: 'не знайшлися деталі (модель перевивантажена)',
         f_name: 'Аркуш', f_newsel: 'Новий аркуш з виділеного', f_newvis: 'Новий аркуш з усього видимого', f_rep: 'Аркуш у звіт Федосова (картинка)', f_del: 'Видалити аркуш', f_none: 'немає видимих деталей',
-        m_none: 'у моделі немає напівфабрикатів з металом', m_view: 'вид', v_bottom: 'знизу', v_back: 'ззаду', v_right: 'справа', v_front: 'спереду', v_left: 'зліва', v_top: 'згори', m_last: 'останній вид аркуша не видаляється', holes: 'отв.', thru: 'наскрізь', nothru: 'ненаскрізне', fromIn: 'зсередини', fromOut: 'ззовні', withleg: 'з ніжкою', capsYes: 'Торці труб заглушити', capsNo: 'Торці труб не глушити', capsWeld: 'Торці труб заварити', tubesT: 'труби', tubesHint: 'Труби каркаса — номери як на аркуші каркаса; розміри від лівого торця труби; М', tubeN: 'труба', paintask: 'не задана в моделі — уточнити', asm: 'Збірка каркасів', and: 'і', tie: 'стягує поз.', kit: 'комплект:', refnote: '* Розміри для довідок', det: 'Платик', detHole: 'отв.', deep: 'глиб.', under: 'під', nuts: 'шт.', c_offax: 'отвір не по осі труби (зміщення', c_mm: 'мм)',
+        m_none: 'у моделі немає напівфабрикатів з металом', m_view: 'вид', v_bottom: 'знизу', v_back: 'ззаду', v_right: 'справа', v_front: 'спереду', v_left: 'зліва', v_top: 'згори', m_last: 'останній вид аркуша не видаляється', holes: 'отв.', thru: 'наскрізь', nothru: 'ненаскрізне', fromIn: 'зсередини', fromOut: 'ззовні', withleg: 'з ніжкою', capsYes: 'Торці труб заглушити', capsNo: 'Торці труб не глушити', capsWeld: 'Торці труб заварити', kitsN: 'Таких комплектів', schemeT: 'схема труб', schemeHint: 'Номери труб — як на аркушах «труби»; однакові труби — один номер', tubesT: 'труби', tubesHint: 'Труби каркаса — номери як на аркуші каркаса; розміри від лівого торця труби; М', tubeN: 'труба', paintask: 'не задана в моделі — уточнити', asm: 'Збірка каркасів', and: 'і', tie: 'стягує поз.', kit: 'комплект:', refnote: '* Розміри для довідок', det: 'Платик', detHole: 'отв.', deep: 'глиб.', under: 'під', nuts: 'шт.', c_offax: 'отвір не по осі труби (зміщення', c_mm: 'мм)',
         side: { '-x': 'зліва', x: 'справа', '-y': 'знизу', y: 'згори', '-z': 'ззаду', z: 'спереду' }, onside: 'з боку:', inside: 'всередину', weld: 'патрубок', gablegs: 'Габарити — по трубах, без опор', metalprop: 'Метал', nopaintneed: 'не потрібне (нержавійка)', m_chk: 'Перевірити модель', ctr: 'Підрядник', noctr: 'без підрядника', orderqty: 'Кількість виробів', qty: 'Кількість', c_title: 'Зауваження до моделі — виправити й вивантажити заново', c_none: 'Зауважень до моделі немає', c_nonut: 'на осі немає гайки', c_twonuts: 'дві гайки в одному місці',
         mat: 'Матеріал', paint: 'Фарбування', nopaint: 'фарбування не задане в моделі (властивість напівфабрикату)', sheet: 'Аркуш', scale: 'Масштаб',
         note1: 'Розміри — по зовнішньому контуру, від бази (лівий / нижній край).',
@@ -5980,7 +5982,12 @@ const MTXT = {
 };
 const ML = k => (MTXT[dLang] && MTXT[dLang][k]) || MTXT.ru[k];
 let metal = null, metalPrevFix = 0;
-let blkT = 0, blkAsk = null;                                 // два щелчка по колонке надписей — окно количества
+let blkT = 0, blkAsk = null;
+// комплектов на заказ (Алексей 19.11: три трибуны, в модели 1): вписывается на общем виде, хранится в браузере по имени проекта;
+// количество на листах — «на одно изделие (на все)»: «10 (30) шт.»
+function metalK() { try { const v = +localStorage.getItem('metalK|' + (M.title || '')); if (v > 0) return v; } catch (e) {} return M.qty > 0 ? M.qty : 1; }
+function metalSetK(v) { try { localStorage.setItem('metalK|' + (M.title || ''), String(v)); } catch (e) {} }
+function fqK(c) { const K = metalK(); return K > 1 ? c + ' (' + c * K + ') ' + ML('nuts') : c + ' ' + ML('nuts'); }                                 // два щелчка по колонке надписей — окно количества
 // «свой лист» (тема 60, Алексей 11.11): лист с видами-блоками для любых деталей модели — выделенных или всех видимых.
 // Та же единица листа, что у металла (u, name, pi, box), но free: виды — те, что поставил человек (un.vs, первый — главный),
 // автоматических размеров, выносок и колонки надписей нет; размеры и сечения ставятся рукой на живом виде.
@@ -6205,6 +6212,9 @@ function metalBuild() {
       const hs = fu.holes.filter(h => segIn(h.a, h.e, b, 0.3) > 0.3);
       const sh = (fu.sheets || []).filter(s => !isCap(s) && s.box.clone().expandByScalar(0.6).intersectsBox(b));
       if (!hs.length && !sh.length) return;
+      // на боковых гранях ничего (только в торец) — трубе нечего показать на листе труб (трубы 5 заднего каркаса, 19.11)
+      const la0 = longOf(b);
+      if (!hs.some(h => axName(h.e.clone().sub(h.a)).replace('-', '') !== la0) && !sh.some(s => s.thin !== la0)) return;
       // форма трубы: длина, места отверстий и платиков от её середины (труба, развёрнутая концами, — та же)
       const sig = f => [Math.round(b.max[la] - b.min[la]), ...hs.map(h => [h.a, h.e].map(p => ['x', 'y', 'z'].map(a => Math.round(((p[a] - c[a]) * (a === la ? f : 1)) * 2)).join(',')).join(';') + '|' + h.d).sort(),
         ...sh.map(s => ['x', 'y', 'z'].map(a => Math.round(((s.c[a] - c[a]) * (a === la ? f : 1)) * 2)).join(',')).sort()].join('/');
@@ -6216,14 +6226,23 @@ function metalBuild() {
     let N = 0;
     const tg = [];
     for (const g of grp.values()) { N++; for (const k of g.list) fu.tubeNo[k] = N; tg.push(Object.assign(g, { N, fu, qty: g.list.length * (fu.qty || 1) })); }
-    const pages = []; let cur = [], hUsed = 0;
-    const tsc = tubeScale(tg);                               // один масштаб на все листы труб каркаса
-    for (const g of tg) { const h = tubeBlockH(g, tsc); if (cur.length && hUsed + h > SHEET_H - 30) { pages.push(cur); cur = []; hUsed = 0; } cur.push(g); hUsed += h; }
-    if (cur.length) pages.push(cur);
-    const tus = pages.map((pg, i) => ({ u: -5000 - ui * 100 - i, tubeOf: fu, svgSheet: true, tsc, tubeDet: true, loose: true, tg: pg,
+    // листы поровну (Алексей 19.11: «4 и 1 — зачем? три и два, и места побольше»): листов — сколько нужно по высоте,
+    // трубы делятся между ними примерно поровну по высоте
+    const tsc = tubeScale(tg), AV = SHEET_H - 26, hs = tg.map(g => tubeBlockH(g, tsc)), tot = hs.reduce((a, b) => a + b, 0);
+    let pages = [];
+    for (let np = Math.max(1, Math.ceil(tot / AV)); np <= tg.length; np++) {
+      pages = []; let cur = [], hu = 0; const tgt = tot / np;
+      tg.forEach((g, i) => { if (cur.length && pages.length < np - 1 && (hu + hs[i] > AV || hu + hs[i] / 2 > tgt)) { pages.push(cur); cur = []; hu = 0; } cur.push(g); hu += hs[i]; });
+      if (cur.length) pages.push(cur);
+      if (pages.every(pg => pg.reduce((a, g) => a + hs[tg.indexOf(g)], 0) <= AV)) break;
+    }    const tus = pages.map((pg, i) => ({ u: -5000 - ui * 100 - i, tubeOf: fu, svgSheet: true, tsc, tubeDet: true, loose: true, tg: pg,
+      hiParts: pg.flatMap(g => g.list.map(k => fu.tubes[k])),   // трубы листа — выделены на картинке каркаса справа
       name: fu.name + ' — ' + ML('tubesT') + (pages.length > 1 ? ' (' + ML('sheet').toLowerCase() + ' ' + (i + 1) + ' / ' + pages.length + ')' : ''),
-      pi: [], tubes: [], boxes: [], mains: [], sheets: [], box: fu.box, mbox: fu.mbox, lbox: fu.mbox, holes: [], welds: [], legs: [], mats: fu.mats, pmats: fu.pmats,
+      pi: [], tubes: [], boxes: [], mains: [], sheets: i === 0 ? (fu.sheets || []).filter(x => !isCap(x)) : [], box: fu.box, mbox: fu.mbox, lbox: fu.mbox, holes: [], welds: [], legs: [], mats: fu.mats, pmats: fu.pmats,
       paint: fu.paint, metal: fu.metal, stainless: fu.stainless, rot: fu.rot, wmbox: fu.wmbox, hasProf: false, inst: [], ctr: fu.ctr, top: fu.top, qty: fu.qty }));
+    // схема труб: объёмная картинка одного каркаса, у каждой трубы — кружок с её номером (Алексей 19.11: «какие это трубы на
+    // каркасе — непонятно; нужен общий вид с выносками 1, 2, 3, как на листах труб»)
+
     units.splice(ui + 1, 0, ...tus); ui += tus.length;
   }
   // общий вид — только у изделия с полуфабрикатами внутри (собирается по комплекту в metalData)
@@ -6284,7 +6303,7 @@ function metalClear(un) {                                   // автомати�
 }
 function metalLayout(un) {
   if (un.free) return freeLayout(un);
-  if (un.svgSheet) { un.vs = ['front']; un.multi = false; return { n: un.tsc || tubeScale(un.tg), views: [{ v: 'front', px: SHEET_W / 2, py: SHEET_H / 2, gw: 0, gh: 0, pad: { l: 0, t: 0, r: 0, b: 0 } }], iso: null, occ: [], det: null }; }   // лист труб — рисунок по данным
+  if (un.svgSheet) { un.vs = ['front']; un.multi = false; return { n: un.tsc || tubeScale(un.tg), views: [{ v: 'front', px: SHEET_W / 2, py: SHEET_H / 2, gw: 0, gh: 0, pad: { l: 0, t: 0, r: 0, b: 0 } }], iso: null, occ: [], det: (un.sheets || []).length ? { x: SHEET_W - 112, y: 124, s: 58 } : null }; }   // лист труб — рисунок по данным
   // каркас из 20+ труб (трибуна 002_11: 21 и 31; принятый стол St2 — 18) — сразу режим «каркас» (Алексей 19.11)
   if (!un.general && un.hasProf && (un.mains || []).length >= 20) un.frame = true;
   const v0 = un.general ? '3d' : metalView(un); let vs = v0 === '3d' ? ['front', 'left', 'top'] : [v0];
@@ -6398,7 +6417,7 @@ function metalLayout(un) {
     const occS = occ.map(r => [r[0] + shift[0], r[1] + shift[1], r[2] + shift[0], r[3] + shift[1]]);
     // увеличенный вид платика — в свободном квадрате, не задевая виды, аксонометрию и надписи
     // место — по настоящей высоте увеличенного вида с подписями (квадрат 58 мм был ниже: «отв. ⌀5» налезала на колонку, 19.11)
-    const det = (un.sheets || []).some(s => !isCap(s)) ? detSpot(occS.concat([tb], iso ? [[iso.x, iso.y, iso.x + iso.s, iso.y + iso.s]] : [], leg ? [[leg.x, leg.y, leg.x + leg.w, leg.y + leg.h]] : []), AW, AH, DET_S, detNeed(un)) : null;
+    const det = !un.frame && (un.sheets || []).some(s => !isCap(s)) ? detSpot(occS.concat([tb], iso ? [[iso.x, iso.y, iso.x + iso.s, iso.y + iso.s]] : [], leg ? [[leg.x, leg.y, leg.x + leg.w, leg.y + leg.h]] : []), AW, AH, DET_S, detNeed(un)) : null;
     views.forEach((w, i) => { w.gw = G[i].w / n; w.gh = G[i].h / n; w.pad = G[i].pad; });   // рамка вида-блока на листе
     best = { n, views, iso, occ: occS, det, leg };
     if (un.frame || (iso && iso.s >= ISO_MIN)) break;      // каркас: первый влезший (самый крупный) масштаб
@@ -7068,7 +7087,9 @@ function metalDims(un) {
       : [(n > 1 ? n + ' ' + ML('holes') + ' ' : '') + (q.h.d > 0 ? '⌀' + fmtN(q.h.d) + ' ' + (q.thru ? ML('thru') : ML('nothru') + ', ' + entry) + (q.h.cut ? ', ' + q.h.cut : '') : q.h.cut || nm)]
         .concat(own ? [] : [ML('under') + ' ' + nm.charAt(0).toLowerCase() + nm.slice(1)]);
     // каркас: выноски столбиком за рядами не помещаются (трибуна 19.11: 78 мм над видом) — на виде короткая выноска с буквой,
-    // расшифровка — строкой в колонке надписей («Б — 6 отв. ⌀12 насквозь под болт М10х140»). Буквы — после букв платиков
+    // расшифровка — строкой в колонке надписей («Б — 6 отв. ⌀12 насквозь под болт М10х140»). Буквы — после букв платиков.
+    // 19.11 вечер: главный лист каркаса — только общий вид, отверстия — на листах труб: буквы сняты (un.frameLetters — вернуть)
+    if (un.frame && !un.frameLetters) continue;
     if (un.frame) {
       const L0 = new Set((un.sheets || []).filter(x => !isCap(x)).map(x => x.name + '|' + x.size)).size;
       const pre = g.nut ? ML('nuts') : ML('holes'), nAll = HSall.filter(x => gkOf(x) === gkey).length;
@@ -7087,7 +7108,7 @@ function metalDims(un) {
   }
   // каркас: номер трубы — короткой выноской «труба N» на первом виде, где она видна вдоль (номер = её лист)
   let tnI = 0;
-  if (un.frame && un.tubeNo) for (const k in un.tubeNo) {
+  if (un.frame && un.tubeNo && un.tubeLabels) for (const k in un.tubeNo) {   // подписи «труба N» сняты: номера — на картинке листов труб
     const x = un.boxes[+k]; if (!x || longAx(x) === D || given.has('TN' + k)) continue;
     // на самом просторном виде, где труба видна вдоль (ступени: вид спереди узкий — подписи толпились)
     const VDm = { front: 'z', back: 'z', left: 'x', right: 'x', top: 'y', bottom: 'y' }, bs = b.getSize(V3());
@@ -7104,15 +7125,23 @@ function metalDims(un) {
   if (un.general && un.ties) {
     const byPair = new Map();
     for (const t of un.ties) { const key = t.pair + '|' + cleanFast(t.name); if (!byPair.has(key)) byPair.set(key, []); byPair.get(key).push(t); }
+    // выноски — каждая в свою сторону от середины вида (наружу), по четвертям свои стопки; в стопке крайняя точка — с короткой
+    // выноской, ближняя к середине — с длинной: полка внутренней уходит под внешней, линии не пересекаются (Алексей 19.11)
+    const ents = [];
     for (const [key, list] of byPair) {
       if (given.has('T' + key)) continue; given.add('T' + key);
-      const t0 = list[0], q = { c: t0.a.clone().lerp(t0.e, 0.5) }, txt = [list.length + ' ' + ML('nuts') + ' ' + cleanFast(t0.name), ML('tie') + ' ' + t0.pair];
-      const top = onTop(q), rows = top ? rowsN.t : rowsN.b, sk = top ? 't' : 'b';
-      mnotes.push({ mk: un.u, vk, p: q.c.clone(), dx: onRight(q) ? -1 : 1, dy: top ? -1 : 1, ly: gapTo(q, top) + 11 + rows * 9 + 5 + (nSide[sk] || 0), gap: gapTo(q, top), txt });
-      nSide[sk] = (nSide[sk] || 0) + txt.length * 6.6 + 4;
+      const t0 = list[0], q = { c: t0.a.clone().lerp(t0.e, 0.5) };
+      ents.push({ q, txt: [list.length + ' ' + ML('nuts') + ' ' + cleanFast(t0.name), ML('tie') + ' ' + t0.pair], top: onTop(q), right: onRight(q) });
     }
-  }
-  // сами отверстия на виде (в модели их нет — Базис держит их в крепеже): ось и стенки, или кружок с крестом
+    // отвесом: от болта прямо вниз (вверх), полка с текстом влево; левее на листе — короче, правее — длиннее: полки ложатся
+    // одна под другой, отвесы правых проходят правее полок левых — ничего не пересекается
+    ents.sort((a, b) => (a.q.c[R] - b.q.c[R]) * rtS);
+    for (const e of ents) {
+      const rows = e.top ? rowsN.t : rowsN.b, sk = e.top ? 't' : 'b', ly = gapTo(e.q, e.top) + 11 + rows * 9 + 5 + (nSide[sk] || 0);
+      mnotes.push({ mk: un.u, vk, p: e.q.c.clone(), dx: -1, dy: e.top ? -1 : 1, ly, q: [0, (e.top ? -1 : 1) * ly], gap: gapTo(e.q, e.top), txt: e.txt });
+      nSide[sk] = (nSide[sk] || 0) + e.txt.length * 6.6 + 4;
+    }
+  }  // сами отверстия на виде (в модели их нет — Базис держит их в крепеже): ось и стенки, или кружок с крестом
   (un.marks || (un.marks = {}))[vk] = HSall.map(q => ({ p0: q.p0, p1: q.p1, c: q.c, r: q.h.d / 2, nut: /гайк/i.test(q.h.name) }));
   if (un.general && un.ties) for (const t of un.ties) un.marks[vk].push({ p0: t.a, p1: t.e, c: t.a.clone().lerp(t.e, 0.5), r: t.d / 2 });
   // каркас: осевые линии труб, лежащих в плоскости вида (штрихпунктир на 3 мм листа за торцы)
@@ -7216,7 +7245,7 @@ function metalBlockSvg(o, k, ui) {
   // увеличенный вид платика «А» в свободном месте листа (Алексей 27.10: на основном виде платик — точка, нечитаемо)
   if (!un.general && un.lay && un.lay.det) s += metalDetailSvg(un, o, k, un.lay.det);
   // аксонометрия: всё изделие серой дымкой, этот полуфабрикат выделен — в место, которое нашла раскладка
-  if (un.svgSheet) s += tubeSheetSvg(un, o, k);              // лист труб каркаса
+  if (un.svgSheet) s += tubeSheetSvg(un, o, k);              // лист труб каркаса (полосы + картинка каркаса справа)
   const th = un.svgSheet ? null : metalThumb(un);
   const iso = metalIsoGeo(un);
   if (th) s += `<image href="${th}" x="${f(o[0] + iso.x * k)}" y="${f(o[1] + iso.y * k)}" width="${f(iso.s * k)}" height="${f(iso.s * k)}" preserveAspectRatio="xMidYMid meet"/>`;
@@ -7227,22 +7256,22 @@ function metalBlockSvg(o, k, ui) {
     if (th) s += R('iso', iso.x, iso.y, iso.x + iso.s, iso.y + iso.s);
   }
   // общий вид: выноски с номерами позиций на аксонометрии — те же номера, что в списке (Алексей 27.10)
+  // общий вид: номер позиции — одной цифрой без кружка, от неё тонкие линии ко всем таким деталям (Алексей 19.11: «ёжик из
+  // десяти кружков с пятёркой сбивает — одна пятёрка и стрелки к поручням»)
   if (th && un.general && un.thumbMap) {
-    const R0 = 0.47, rc = 3.2, taken = [];
-    const img = p => [o[0] + (iso.x + p[0] * iso.s) * k, o[1] + (iso.y + p[1] * iso.s) * k];
-    for (const x of md.units) for (const pt of x.inst || [(x.mbox || x.box).getCenter(V3())]) {   // точка — на теле, по выноске на каждый экземпляр
-      const p = un.thumbMap(pt), dx = p[0] - 0.5, dy = p[1] - 0.5;
-      let a = Math.atan2(dy, dx); if (!isFinite(a)) a = 0;
-      let q;                                                 // кружок — на кольце у края картинки, занятое место обходится по кругу
-      for (let t = 0; t < 24; t++) { const aa = a + (t % 2 ? 1 : -1) * Math.ceil(t / 2) * 0.26; q = [0.5 + R0 * Math.cos(aa), 0.5 + R0 * Math.sin(aa)]; if (!taken.some(z => Math.hypot(z[0] - q[0], z[1] - q[1]) * iso.s < 2.2 * rc)) break; }
+    const taken = [], img = p => [o[0] + (iso.x + p[0] * iso.s) * k, o[1] + (iso.y + p[1] * iso.s) * k];
+    for (const x of md.units) {
+      const ps = (x.inst || [(x.mbox || x.box).getCenter(V3())]).map(pt => un.thumbMap(pt));
+      const mx = ps.reduce((a, p) => a + p[0], 0) / ps.length, my = ps.reduce((a, p) => a + p[1], 0) / ps.length;
+      let a = Math.atan2(my - 0.5, mx - 0.5); if (!isFinite(a)) a = 0;
+      let q;                                                 // цифра — у края картинки, занятое место обходится по кругу
+      for (let t = 0; t < 40; t++) { const aa = a + (t % 2 ? 1 : -1) * Math.ceil(t / 2) * 0.15; q = [0.5 + 0.5 * Math.cos(aa), 0.5 + 0.5 * Math.sin(aa)]; if (!taken.some(z => Math.hypot(z[0] - q[0], z[1] - q[1]) * iso.s < 9)) break; }
       taken.push(q);
-      const P = img(p), Q = img(q);
-      s += `<path d="M${f(P[0])} ${f(P[1])}L${f(Q[0])} ${f(Q[1])}" stroke="#000000" stroke-width="${f(0.2 * k)}" fill="none"/><circle cx="${f(P[0])}" cy="${f(P[1])}" r="${f(0.6 * k)}" fill="#000000"/>` +
-        `<circle cx="${f(Q[0])}" cy="${f(Q[1])}" r="${f(rc * k)}" fill="#ffffff" stroke="#000000" stroke-width="${f(0.25 * k)}"/>` +
-        `<text x="${f(Q[0])}" y="${f(Q[1] + 1.5 * k)}" font-family="${DFONT}" font-size="${f(4.2 * k)}" fill="#000000" text-anchor="middle">${x.no}</text>`;
+      const Q = img(q);
+      for (const p of ps) { const P = img(p); s += `<path d="M${f(Q[0])} ${f(Q[1])}L${f(P[0])} ${f(P[1])}" stroke="#000000" stroke-width="${f(0.16 * k)}" fill="none"/><circle cx="${f(P[0])}" cy="${f(P[1])}" r="${f(0.55 * k)}" fill="#000000"/>`; }
+      s += `<text x="${f(Q[0])}" y="${f(Q[1] + 1.9 * k)}" font-family="${DFONT}" font-size="${f(5.4 * k)}" font-weight="bold" fill="#000000" text-anchor="middle" stroke="#ffffff" stroke-width="${f(0.8 * k)}" paint-order="stroke">${x.no}</text>`;
     }
-  }
-  return s;
+  }  return s;
 }
 // увеличенный вид платика: рисуется по данным модели (габарит платика, отверстия внутри него), не по рёбрам сцены.
 // Масштаб 1:1 (платик до 50 мм) или 1:2; подпись «А (1:1) — платик 30×30×2, N шт.», отверстия «⌀5 под саморез»
@@ -7304,78 +7333,110 @@ function tubeFaces(g) {
   }
   return { b, s, la, faces, L: s[la] };
 }
-const TUBE_SC = [2.5, 4, 5, 7.5, 10, 15, 20];
-function tubeScale(list) { const L = Math.max(...list.map(g => tubeFaces(g).L)); return TUBE_SC.find(n => L / n <= 285) || 20; }
-function tubeNotes(g, f) {
-  const out = new Map(), b = tubeFaces(g).b, c = b.getCenter(V3()), sz = b.getSize(V3());
-  for (const h of f.hs) {
-    const nut = /гайк/i.test(h.name), nm = cleanFast(h.name), thru = segIn(h.a, h.e, b, 0.3) >= sz[f.A] - 1;
-    const mid = h.a.clone().lerp(h.e, 0.5), side = ML('side')[(mid[f.A] < c[f.A] ? '-' : '') + f.A];
+const TUBE_SC = [2.5, 4, 5, 7.5, 10, 15, 20], TUBE_W = 238;   // длинная труба — не шире 238 мм листа (справа картинка каркаса)
+function tubeScale(list) { const L = Math.max(...list.map(g => tubeFaces(g).L)); return TUBE_SC.find(n => L / n <= TUBE_W) || 20; }
+// что на грани: группы одинакового (отверстие / гайка / платик) — текст и точки на полосе (вдоль трубы от левого торца, поперёк)
+function tubeNotes(g, F) {
+  const R = tubeFaces(g), b = R.b, c = b.getCenter(V3()), sz = R.s, out = new Map();
+  for (const h of F.hs) {
+    const nut = /гайк/i.test(h.name), nm = cleanFast(h.name), thru = segIn(h.a, h.e, b, 0.3) >= sz[F.A] - 1;
+    const mid = h.a.clone().lerp(h.e, 0.5), side = ML('side')[(mid[F.A] < c[F.A] ? '-' : '') + F.A];
     const t = nut ? nm + ' (' + ML('holes') + ' ⌀' + fmtN(h.d) + '), ' + ML('onside') + ' ' + side
-      : ML('holes') + ' ⌀' + fmtN(h.d) + ' ' + (thru ? ML('thru') : ML('nothru') + ', ' + side) + (nm && !/^отв/i.test(nm) ? ', ' + ML('under') + ' ' + nm.charAt(0).toLowerCase() + nm.slice(1) : '');
-    out.set(t, (out.get(t) || 0) + 1);
+      : '⌀' + fmtN(h.d) + ' ' + (thru ? ML('thru') : ML('nothru') + ', ' + side) + (nm && !/^отв/i.test(nm) ? ', ' + ML('under') + ' ' + nm.charAt(0).toLowerCase() + nm.slice(1) : '');
+    if (!out.has(t)) out.set(t, { t, nut, hole: !nut, pts: [] });
+    out.get(t).pts.push([h.a[R.la] - b.min[R.la], h.a[F.B] - b.min[F.B]]);
   }
-  for (const s of f.sh) { const t = s.name + ' ' + s.size; out.set(t, (out.get(t) || 0) + 1); }
-  return [...out].map(([t, n]) => n + ' ' + (/^отв/.test(t) ? '' : ML('nuts') + ' ') + t);
+  for (const s of F.sh) {
+    const t = s.name + ' ' + s.size;
+    if (!out.has(t)) out.set(t, { t, pl: true, pts: [] });
+    out.get(t).pts.push([s.c[R.la] - b.min[R.la], s.c[F.B] - b.min[F.B]]);
+  }
+  return [...out.values()].map(o => Object.assign(o, { txt: o.pts.length + ' ' + (o.hole ? ML('holes') + ' ' : ML('nuts') + ' ') + o.t }));
 }
-function tubeBlockH(g, sc) {
-  const T = tubeFaces(g); let h = 9;
-  for (const f of T.faces) h += 15 + T.s[f.B] / (sc || 5) + 5.2 * tubeNotes(g, f).length + 4;
-  return h + 4;
+// высота полосы с размерами и подписями (мм листа): платики — ряд сверху; отверстия — ряд снизу; длина — ниже; подписи — строками
+function tubeFaceH(g, F, sc, first) {
+  const R = tubeFaces(g); return (F.sh.length ? 9 : 3) + R.s[F.B] / sc + (F.hs.length ? 9 : 3) + (first ? 6 : 0) + 5.6 * tubeNotes(g, F).length + 5;
 }
+function tubeBlockH(g, sc) { const R = tubeFaces(g); return 9 + R.faces.reduce((a, F, i) => a + tubeFaceH(g, F, sc, i === 0), 0) + 3; }
 function tubeSheetSvg(un, o, k) {
   const f = v => String(Math.round(v * 100) / 100), sc = un.tsc || tubeScale(un.tg), X0 = 14;
-  const T = (x, y, t, sz, bold) => `<text x="${f(o[0] + x * k)}" y="${f(o[1] + y * k)}" font-family="${DFONT}" font-size="${f((sz || 5) * k)}" fill="#000000"${bold ? ' font-weight="bold"' : ''}>${esc(t)}</text>`;
+  const T = (x, y, t, sz, bold, anchor) => `<text x="${f(o[0] + x * k)}" y="${f(o[1] + y * k)}" font-family="${DFONT}" font-size="${f((sz || 5) * k)}" fill="#000000"${bold ? ' font-weight="bold"' : ''}${anchor ? ` text-anchor="${anchor}"` : ''}>${esc(t)}</text>`;
   const line = (x1, y1, x2, y2, w, dash) => `<path d="M${f(o[0] + x1 * k)} ${f(o[1] + y1 * k)}L${f(o[0] + x2 * k)} ${f(o[1] + y2 * k)}" stroke="#000000" stroke-width="${f((w || 0.25) * k)}"${dash ? ` stroke-dasharray="${f(3 * k)} ${f(0.8 * k)} ${f(0.5 * k)} ${f(0.8 * k)}"` : ''} fill="none"/>`;
   const P = (x, y) => [o[0] + x * k, o[1] + y * k];
-  let s = T(X0, 12, ML('tubesHint') + ' 1:' + fmtN(sc), 4.2), y = 20;
+  const r1 = v => Math.round(v * 10) / 10;
+  // цепочка от левого торца по местам xs (мм модели), ряд на высоте yy; выносные — до полосы (yEdge)
+  const chain = (xs, L, yy, yEdge) => {
+    const pts = [0, ...[...new Set(xs.map(r1))].sort((a, b) => a - b), r1(L)].filter((v, i, a) => i === 0 || v - a[i - 1] > 0.05);
+    let s = line(X0, yy, X0, yEdge, 0.12);
+    for (let i = 1; i < pts.length; i++) {
+      const a = X0 + pts[i - 1] / sc, b2 = X0 + pts[i] / sc;
+      s += dimLine(P(a, yy), P(b2, yy), fmtN(r1(pts[i] - pts[i - 1])), k, f) + line(b2, yy, b2, yEdge, 0.12);
+    }
+    return s;
+  };
+  let s = T(X0, 12, ML('tubesHint') + ' 1:' + fmtN(sc), 4.2), y = 18;
   const VB2 = { x: 'left', y: 'top', z: 'front' };
   for (const g of un.tg) {
-    const R = tubeFaces(g), mat = M.mnames[M.objs[g.fu.tubes[g.k]].mn] || '';
-    s += T(X0, y + 5, ML('tubeN').replace(/^./, c => c.toUpperCase()) + ' ' + g.N + ' — ' + mat + ', L=' + fmtN(Math.round(R.L * 10) / 10) + ' — ' + g.qty + ' ' + ML('nuts'), 5, true);
+    const R = tubeFaces(g), mat = M.mnames[M.objs[g.fu.tubes[g.k]].mn] || '', len = R.L / sc;
+    s += T(X0, y + 5, ML('tubeN').replace(/^./, c => c.toUpperCase()) + ' ' + g.N + ' — ' + mat + ', L=' + fmtN(r1(R.L)) + ' — ' + fqK(g.qty), 5, true);
     y += 9;
     R.faces.forEach((F, fi) => {
-      const W = R.s[F.B], h = W / sc, len = R.L / sc, yT = y + 13;   // верх полосы (над ней два ряда размеров)
-      const xs = new Set();
-      for (const hh of F.hs) xs.add(Math.round((hh.a[R.la] - R.b.min[R.la]) * 10) / 10);
-      for (const p of F.sh) xs.add(Math.round((p.c[R.la] - R.b.min[R.la]) * 10) / 10);
-      const pts = [0, ...[...xs].sort((a, b) => a - b), Math.round(R.L * 10) / 10].filter((v, i, a) => i === 0 || v - a[i - 1] > 0.05);
-      // полоса трубы, осевая, подпись грани
-      s += `<rect x="${f(o[0] + X0 * k)}" y="${f(o[1] + yT * k)}" width="${f(len * k)}" height="${f(h * k)}" fill="none" stroke="#000000" stroke-width="${f(0.35 * k)}"/>`;
-      s += line(X0 - 3, yT + h / 2, X0 + len + 3, yT + h / 2, 0.15, true);
-      s += T(X0 + len + 5, yT + h / 2 + 1.6, ML('m_view') + ' ' + ML('v_' + VB2[F.A]), 4);
-      // платики — прямоугольники, отверстия — кружки с крестом, гайки — двойной кружок
+      const h = R.s[F.B] / sc, yS = y + (F.sh.length ? 9 : 3);              // верх полосы
+      // полоса, осевая, подпись грани
+      s += `<rect x="${f(o[0] + X0 * k)}" y="${f(o[1] + yS * k)}" width="${f(len * k)}" height="${f(h * k)}" fill="none" stroke="#000000" stroke-width="${f(0.35 * k)}"/>`;
+      s += line(X0 - 3, yS + h / 2, X0 + len + 3, yS + h / 2, 0.15, true) + T(X0 + len + 5, yS + h / 2 + 1.6, ML('m_view') + ' ' + ML('v_' + VB2[F.A]), 4);
       for (const p of F.sh) {
         const x1 = (p.box.min[R.la] - R.b.min[R.la]) / sc, x2 = (p.box.max[R.la] - R.b.min[R.la]) / sc, y1 = (p.box.min[F.B] - R.b.min[F.B]) / sc, y2 = (p.box.max[F.B] - R.b.min[F.B]) / sc;
-        s += `<rect x="${f(o[0] + (X0 + x1) * k)}" y="${f(o[1] + (yT + h - y2) * k)}" width="${f((x2 - x1) * k)}" height="${f((y2 - y1) * k)}" fill="none" stroke="#000000" stroke-width="${f(0.2 * k)}" stroke-dasharray="${f(1 * k)} ${f(0.6 * k)}"/>`;
+        s += `<rect x="${f(o[0] + (X0 + x1) * k)}" y="${f(o[1] + (yS + h - y2) * k)}" width="${f((x2 - x1) * k)}" height="${f((y2 - y1) * k)}" fill="none" stroke="#000000" stroke-width="${f(0.2 * k)}" stroke-dasharray="${f(1 * k)} ${f(0.6 * k)}"/>`;
       }
       for (const hh of F.hs) {
-        const cx = X0 + (hh.a[R.la] - R.b.min[R.la]) / sc, cy = yT + h - (hh.a[F.B] - R.b.min[F.B]) / sc, r = Math.max(0.5, hh.d / 2 / sc), c = P(cx, cy);
+        const cx = X0 + (hh.a[R.la] - R.b.min[R.la]) / sc, cy = yS + h - (hh.a[F.B] - R.b.min[F.B]) / sc, r = Math.max(0.5, hh.d / 2 / sc), c = P(cx, cy);
         s += `<circle cx="${f(c[0])}" cy="${f(c[1])}" r="${f(r * k)}" fill="none" stroke="#000000" stroke-width="${f(0.25 * k)}"/>`;
         if (/гайк/i.test(hh.name)) s += `<circle cx="${f(c[0])}" cy="${f(c[1])}" r="${f((r + 0.6) * k)}" fill="none" stroke="#000000" stroke-width="${f(0.15 * k)}"/>`;
         s += line(cx - r - 1, cy, cx + r + 1, cy, 0.12) + line(cx, cy - r - 1, cx, cy + r + 1, 0.12);
       }
-      // цепочка от левого торца (между соседними местами) и длина трубы рядом выше
-      for (let i = 1; i < pts.length; i++) {
-        const a = X0 + pts[i - 1] / sc, b2 = X0 + pts[i] / sc;
-        s += dimLine(P(a, yT - 5), P(b2, yT - 5), fmtN(Math.round((pts[i] - pts[i - 1]) * 10) / 10), k, f);
-        s += line(b2, yT - 6, b2, yT, 0.12);
+      // сверху — платики, снизу — отверстия и гайки, ещё ниже — длина трубы (размеры друг друга не перебивают; Алексей 19.11)
+      if (F.sh.length) s += chain(F.sh.map(p => p.c[R.la] - R.b.min[R.la]), R.L, yS - 5, yS);
+      let yB = yS + h;
+      if (F.hs.length) { s += chain(F.hs.map(hh => hh.a[R.la] - R.b.min[R.la]), R.L, yB + 5, yB); yB += 9; } else yB += 3;
+      if (fi === 0) { s += line(X0, yS + h, X0, yB + 3, 0.12) + line(X0 + len, yS + h, X0 + len, yB + 3, 0.12) + dimLine(P(X0, yB + 2), P(X0 + len, yB + 2), fmtN(r1(R.L)), k, f); yB += 6; }
+      // отверстие не по оси грани — размер поперёк, справа от полосы
+      const off = [...new Set(F.hs.filter(hh => Math.abs(hh.a[F.B] - (R.b.min[F.B] + R.b.max[F.B]) / 2) > 1).map(hh => r1(hh.a[F.B] - R.b.min[F.B])))];
+      off.forEach((v, i) => { const xx = X0 + len + 30 + i * 6; s += dimLine(P(xx, yS + h), P(xx, yS + h - v / sc), fmtN(v), k, f, true); });
+      // подписи с выносками: строка под размерами, от неё тонкие линии к каждому такому элементу (одна подпись — все такие)
+      // от каждого элемента — отвес вниз до строки подписи, по строке черта от крайнего левого до крайнего правого, текст справа.
+      // Строки: ближняя к полосе — с самым правым элементом; отвесы нижних строк левее текста верхних — линии не режут текст
+      let yy = yB + 4.6;
+      for (const n of tubeNotes(g, F).sort((a, b) => Math.max(...b.pts.map(p => p[0])) - Math.max(...a.pts.map(p => p[0])))) {
+        const xs = n.pts.map(p => X0 + p[0] / sc), x1 = Math.min(...xs), x2 = Math.max(...xs);
+        for (const p of n.pts) { const px = X0 + p[0] / sc, py = yS + h - p[1] / sc; s += line(px, py, px, yy - 1.2, 0.13) + `<circle cx="${f(o[0] + px * k)}" cy="${f(o[1] + py * k)}" r="${f(0.45 * k)}" fill="#000000"/>`; }
+        s += line(x1, yy - 1.2, x2 + 2, yy - 1.2, 0.13) + T(x2 + 2.6, yy, n.txt, 4.2);
+        yy += 5.6;
       }
-      s += line(X0, yT - 11, X0, yT, 0.12) + line(X0 + len, yT - 11, X0 + len, yT, 0.12);
-      if (fi === 0) s += dimLine(P(X0, yT - 10), P(X0 + len, yT - 10), fmtN(Math.round(R.L * 10) / 10), k, f);
-      // отверстие не по оси грани — размер поперёк от нижнего края полосы, справа
-      const off = [...new Set(F.hs.filter(hh => Math.abs(hh.a[F.B] - (R.b.min[F.B] + R.b.max[F.B]) / 2) > 1).map(hh => Math.round((hh.a[F.B] - R.b.min[F.B]) * 10) / 10))];
-      off.forEach((v, i) => { const xx = X0 + len + 4 + i * 6; s += dimLine(P(xx, yT + h), P(xx, yT + h - v / sc), fmtN(v), k, f, true); });
-      // что на грани и сколько
-      let yy = yT + h + 5.5;
-      for (const t of tubeNotes(g, F)) { s += T(X0, yy, t, 4.2); yy += 5.2; }
-      y = yy + 2;
+      y = yy + 1;
     });
-    y += 4;
+    y += 3;
+  }
+  return s + tubeIsoSvg(un, o, k);
+}
+// справа на листе труб: каркас в аксонометрии, трубы этого листа выделены; номер трубы — одна цифра, от неё линии ко всем таким
+function tubeIsoSvg(un, o, k) {
+  const th = metalThumb(un); if (!th) return '';
+  const f = v => String(Math.round(v * 100) / 100), S = 104, X = SHEET_W - 8 - S, Y = 14;
+  let s = `<image href="${th}" x="${f(o[0] + X * k)}" y="${f(o[1] + Y * k)}" width="${f(S * k)}" height="${f(S * k)}" preserveAspectRatio="xMidYMid meet"/>`;
+  const img = p => [o[0] + (X + p[0] * S) * k, o[1] + (Y + p[1] * S) * k], taken = [];
+  for (const t of un.schemePts || []) {
+    const mx = t.ps.reduce((a, p) => a + p[0], 0) / t.ps.length, my = t.ps.reduce((a, p) => a + p[1], 0) / t.ps.length;
+    let a = Math.atan2(my - 0.5, mx - 0.5); if (!isFinite(a)) a = 0;
+    let q;
+    for (let i = 0; i < 40; i++) { const aa = a + (i % 2 ? 1 : -1) * Math.ceil(i / 2) * 0.15; q = [0.5 + 0.5 * Math.cos(aa), 0.5 + 0.5 * Math.sin(aa)]; if (!taken.some(z => Math.hypot(z[0] - q[0], z[1] - q[1]) * S < 8)) break; }
+    taken.push(q);
+    const Q = img(q);
+    for (const p of t.ps) { const Pp = img(p); s += `<path d="M${f(Q[0])} ${f(Q[1])}L${f(Pp[0])} ${f(Pp[1])}" stroke="#1f5fbf" stroke-width="${f(0.18 * k)}" fill="none"/><circle cx="${f(Pp[0])}" cy="${f(Pp[1])}" r="${f(0.55 * k)}" fill="#1f5fbf"/>`; }
+    s += `<text x="${f(Q[0])}" y="${f(Q[1] + 1.8 * k)}" font-family="${DFONT}" font-size="${f(5.2 * k)}" font-weight="bold" fill="#000000" text-anchor="middle" stroke="#ffffff" stroke-width="${f(0.8 * k)}" paint-order="stroke">${t.N}</text>`;
   }
   return s;
-}
-// простой размер для увеличенного вида: линия со стрелками-засечками и числом посередине (единицы вывода)
+}// простой размер для увеличенного вида: линия со стрелками-засечками и числом посередине (единицы вывода)
 function dimLine(a, b, txt, k, f, vert) {
   const t = 1.2 * k, mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
   let s = `<path d="M${f(a[0])} ${f(a[1])}L${f(b[0])} ${f(b[1])}" stroke="#000000" stroke-width="${f(0.18 * k)}"/>`;
@@ -7388,11 +7449,11 @@ function metalBlockLines(un, n) {
   const md = metalData(), page = md.all.indexOf(un) + 1;
   const sz = b => { const s = b.getSize(V3()); return [s.x, s.y, s.z].map(v => Math.round(v)).join('×'); };
   // количество на весь заказ: «Количество изделий» × сколько таких в одном изделии — одним числом, без умножения (Алексей 27.10)
-  const Q = un.general && +un.qtyOv > 0 ? +un.qtyOv : M.qty > 0 ? M.qty : 1, fq = c => c * Q + ' ' + ML('nuts');
+  const Q = metalK(), fq = fqK;
   // один размер шрифта на всю колонку (5 мм, не меньше), крупнее — только заголовок (Алексей 27.10)
   const F = 5;
   let lines = [[unitTitle(un), 7]];
-  if (un.general) lines.push([ML('orderqty') + ': ' + Q, F]); else if (!un.svgSheet) lines.push([ML('qty') + ': ' + (un.qtyOv != null ? un.qtyOv : fq(un.qty || 1)), F]);   // вписанное рукой — как есть
+  if (!un.general && !un.svgSheet) lines.push([ML('qty') + ': ' + (un.qtyOv != null ? un.qtyOv : fq(un.qty || 1)), F]);   // вписанное рукой — как есть
   if (un.general) {                                         // спецификация: листы-полуфабрикаты и покупной крепёж (по именам из модели)
     for (const x of md.units) lines.push([x.no + '.  ' + unitTitle(x) + (x.loose ? '' : ' — ' + sz(x.mbox || x.box)) + ' — ' + fq(x.qty || 1), F]);
     const cnt = new Map();
@@ -7418,6 +7479,7 @@ function metalBlockLines(un, n) {
   // торцы — всегда явно: заглушка в модели → заглушить, иначе — не глушить (Алексей 27.10)
   if (!un.general && un.hasProf) lines.push([(un.sheets || []).some(s => s.endcap) ? ML('capsWeld') : (un.sheets || []).some(s => /заглуш/i.test(s.name)) ? ML('capsYes') : ML('capsNo'), F]);   // у детали из листа торцов труб нет
   if (un.hasStar) lines.push([ML('refnote'), F]);          // ГОСТ 2.307 п. 4.3: есть «*» — надпись «* Размеры для справок»
+  if (un.general) lines.push([ML('kitsN') + ': ' + Q, 6]);   // внизу общего вида — «Таких комплектов: 3» (Алексей 19.11)
   // опоры: на видах два габарита — по металлу и с опорой (Алексей 27.10); масштаб, «лист N из M», «от базы» сняты — их даёт отчёт
   // длинная строка — переносом по словам в ширину колонки (знак ≈ 0,5 высоты шрифта)
   return lines.flatMap(([t, h, warn]) => {
@@ -7439,8 +7501,9 @@ function metalThumb(un) {
   un.thumb = '';
   const rotKeep = metalRotQ; metalRot(null);                // аксонометрия — изделие как есть, без поворота под лист
   try {
-    const md = metalData(), all = new Set(), mine = new Set(un.general ? (un.many ? un.gunits.flatMap(x => x.pi) : []) : un.pi);
-    for (const t of md.tops) for (const i of partsUnder(t)) all.add(i);
+    const md = metalData(), all = new Set(), mine = new Set(un.svgSheet ? un.hiParts : un.general ? (un.many ? un.gunits.flatMap(x => x.pi) : []) : un.pi);
+    if (un.svgSheet) for (const i of un.tubeOf.pi) all.add(i);   // лист труб — только этот каркас, трубы листа выделены
+    else for (const t of md.tops) for (const i of partsUnder(t)) all.add(i);
     const GRAY = new THREE.MeshBasicMaterial({ color: 0xd3d8de, transparent: true, opacity: 0.55, depthWrite: false, side: THREE.DoubleSide });
     // цвет — покраска из свойства (RAL по справочнику), осветлённая «в дымке», рёбра видны; нет покраски — синий (Алексей 27.10)
     const paint = un.paint || (un.general ? (md.units.find(x => x.paint) || {}).paint : '') || '';
@@ -7467,7 +7530,12 @@ function metalThumb(un) {
     }
     ex *= 1.03; ca.left = -ex; ca.right = ex; ca.top = ex; ca.bottom = -ex; ca.updateProjectionMatrix();
     { const inv2 = inv.clone(), ex2 = ex; un.thumbMap = v => { const q = v.clone().applyMatrix4(inv2); return [(q.x / ex2 + 1) / 2, 1 - (q.y / ex2 + 1) / 2]; }; }   // точка модели → доля картинки
-    const N = 700, rt = new THREE.WebGLRenderTarget(N, N), cc = rend.getClearColor(new THREE.Color()), cl = rend.getClearAlpha();
+    // схема труб: точка каждой трубы с номером — середина её тела (в мире, модель без поворота) → доля картинки
+    if (un.svgSheet) {
+      const fu = un.tubeOf;
+      un.schemePts = un.tg.map(g => ({ N: g.N, ps: g.list.map(k => un.thumbMap(partBox(fu.tubes[k]).getCenter(V3()))) }));
+    }
+    const N = un.svgSheet ? 1200 : 700, rt = new THREE.WebGLRenderTarget(N, N), cc = rend.getClearColor(new THREE.Color()), cl = rend.getClearAlpha();
     rend.setRenderTarget(rt); rend.setClearColor(0xffffff, 0); rend.clear(); rend.render(scene, ca);   // фон прозрачный: картинку двигают / растягивают поверх видов (Алексей 19.11)
     const px = new Uint8Array(N * N * 4); rend.readRenderTargetPixels(rt, 0, 0, N, N, px);
     rend.setRenderTarget(null); rend.setClearColor(cc, cl); rt.dispose();
