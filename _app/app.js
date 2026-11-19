@@ -7327,14 +7327,14 @@ function metalThumb(un) {
     ex *= 1.03; ca.left = -ex; ca.right = ex; ca.top = ex; ca.bottom = -ex; ca.updateProjectionMatrix();
     { const inv2 = inv.clone(), ex2 = ex; un.thumbMap = v => { const q = v.clone().applyMatrix4(inv2); return [(q.x / ex2 + 1) / 2, 1 - (q.y / ex2 + 1) / 2]; }; }   // точка модели → доля картинки
     const N = 700, rt = new THREE.WebGLRenderTarget(N, N), cc = rend.getClearColor(new THREE.Color()), cl = rend.getClearAlpha();
-    rend.setRenderTarget(rt); rend.setClearColor(0xffffff, 1); rend.clear(); rend.render(scene, ca);
+    rend.setRenderTarget(rt); rend.setClearColor(0xffffff, 0); rend.clear(); rend.render(scene, ca);   // фон прозрачный: картинку двигают / растягивают поверх видов (Алексей 19.11)
     const px = new Uint8Array(N * N * 4); rend.readRenderTargetPixels(rt, 0, 0, N, N, px);
     rend.setRenderTarget(null); rend.setClearColor(cc, cl); rt.dispose();
     for (const [g, v] of vis) g.visible = v; for (const [m, mt] of mats) m.material = mt; for (const [o, v] of lines) o.visible = v;
     const cv2 = document.createElement('canvas'); cv2.width = cv2.height = N; const g2 = cv2.getContext('2d'), im = g2.createImageData(N, N);
     for (let y = 0; y < N; y++) im.data.set(px.subarray((N - 1 - y) * N * 4, (N - y) * N * 4), y * N * 4);   // кадр снизу вверх
     g2.putImageData(im, 0, 0);
-    g2.strokeStyle = '#ffffff'; g2.lineWidth = 10; g2.strokeRect(0, 0, N, N);   // край кадра — белым (в отчёте была видна черта)
+    g2.clearRect(0, 0, N, 5); g2.clearRect(0, N - 5, N, 5); g2.clearRect(0, 0, 5, N); g2.clearRect(N - 5, 0, 5, N);   // край кадра — пустой (в отчёте была видна черта)
     un.thumb = cv2.toDataURL('image/png');
   } catch (e) { console.error('картинка изделия:', e); }
   metalRot(rotKeep);
