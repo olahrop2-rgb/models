@@ -5960,7 +5960,7 @@ const MTXT = {
   ru: { metal: 'Металл', t_metal: 'Лист на каждый металлический полуфабрикат: размеры и подписи по модели', m_off: 'Обычный лист', m_pdf: 'Комплект PDF (все листы)', m_rep: 'Листы в отчёт Федосова (картинки по одному)',
         f_loaded: 'Свои листы подняты из папки заказа', f_lost: 'не нашлись детали (модель перевыгружена)',
         f_name: 'Лист', f_newsel: 'Новый лист из выделенного', f_newvis: 'Новый лист из всего видимого', f_rep: 'Лист в отчёт Федосова (картинка)', f_del: 'Удалить лист', f_none: 'нет видимых деталей',
-        m_none: 'в модели нет полуфабрикатов с металлом', m_view: 'вид', v_bottom: 'снизу', v_back: 'сзади', v_right: 'справа', v_front: 'спереди', v_left: 'слева', v_top: 'сверху', m_last: 'последний вид листа не удаляется', holes: 'отв.', thru: 'насквозь', nothru: 'несквозное', fromIn: 'изнутри', fromOut: 'снаружи', withleg: 'с ножкой', capsYes: 'Торцы труб заглушить', capsNo: 'Торцы труб не глушить', capsWeld: 'Торцы труб заварить', kitsN: 'Таких комплектов', schemeT: 'схема труб', schemeHint: 'Номера труб — как на листах «трубы»; одинаковые трубы — один номер', tubesT: 'трубы', tubesHint: 'Трубы каркаса — номера как на листе каркаса; размеры от левого торца трубы; М', tubeN: 'труба', paintask: 'не задана в модели — уточнить', asm: 'Сборка каркасов', and: 'и', tie: 'стягивает поз.', kit: 'комплект:', refnote: '* Размеры для справок', det: 'Платик', detHole: 'отв.', deep: 'глуб.', under: 'под', nuts: 'шт.', c_offax: 'отверстие не по оси трубы (смещение', c_mm: 'мм)',
+        m_none: 'в модели нет полуфабрикатов с металлом', m_view: 'вид', v_bottom: 'снизу', v_back: 'сзади', v_right: 'справа', v_front: 'спереди', v_left: 'слева', v_top: 'сверху', m_last: 'последний вид листа не удаляется', holes: 'отв.', thru: 'насквозь', nothru: 'несквозное', fromIn: 'изнутри', fromOut: 'снаружи', withleg: 'с ножкой', capsYes: 'Торцы труб заглушить', capsNo: 'Торцы труб не глушить', capsWeld: 'Торцы труб заварить', fastT: 'Крепёж', kitsN: 'Таких комплектов', schemeT: 'схема труб', schemeHint: 'Номера труб — как на листах «трубы»; одинаковые трубы — один номер', tubesT: 'трубы', tubesHint: 'Трубы каркаса — номера как на листе каркаса; размеры от левого торца трубы; М', tubeN: 'труба', paintask: 'не задана в модели — уточнить', asm: 'Сборка каркасов', and: 'и', tie: 'стягивает поз.', kit: 'комплект:', refnote: '* Размеры для справок', det: 'Платик', detHole: 'отв.', deep: 'глуб.', under: 'под', nuts: 'шт.', c_offax: 'отверстие не по оси трубы (смещение', c_mm: 'мм)',
         side: { '-x': 'слева', x: 'справа', '-y': 'снизу', y: 'сверху', '-z': 'сзади', z: 'спереди' }, onside: 'с боку:', inside: 'внутрь', weld: 'патрубок', gablegs: 'Габариты — по трубам, без опор', metalprop: 'Металл', nopaintneed: 'не требуется (нержавейка)', m_chk: 'Проверить модель', ctr: 'Подрядчик', noctr: 'без подрядчика', orderqty: 'Количество изделий', qty: 'Количество', c_title: 'Замечания по модели — поправить и выгрузить заново', c_none: 'Замечаний по модели нет', c_nonut: 'на оси нет гайки', c_twonuts: 'две гайки в одном месте',
         mat: 'Материал', paint: 'Покраска', nopaint: 'покраска не задана в модели (свойство полуфабриката)', sheet: 'Лист', scale: 'Масштаб',
         note1: 'Размеры — по наружному контуру, от базы (левый / нижний край).',
@@ -5971,7 +5971,7 @@ const MTXT = {
   uk: { metal: 'Метал', t_metal: 'Аркуш на кожен металевий напівфабрикат: розміри й підписи за моделлю', m_off: 'Звичайний аркуш', m_pdf: 'Комплект PDF (усі аркуші)', m_rep: 'Аркуші у звіт Федосова (картинки по одному)',
         f_loaded: 'Свої аркуші підняті з теки замовлення', f_lost: 'не знайшлися деталі (модель перевивантажена)',
         f_name: 'Аркуш', f_newsel: 'Новий аркуш з виділеного', f_newvis: 'Новий аркуш з усього видимого', f_rep: 'Аркуш у звіт Федосова (картинка)', f_del: 'Видалити аркуш', f_none: 'немає видимих деталей',
-        m_none: 'у моделі немає напівфабрикатів з металом', m_view: 'вид', v_bottom: 'знизу', v_back: 'ззаду', v_right: 'справа', v_front: 'спереду', v_left: 'зліва', v_top: 'згори', m_last: 'останній вид аркуша не видаляється', holes: 'отв.', thru: 'наскрізь', nothru: 'ненаскрізне', fromIn: 'зсередини', fromOut: 'ззовні', withleg: 'з ніжкою', capsYes: 'Торці труб заглушити', capsNo: 'Торці труб не глушити', capsWeld: 'Торці труб заварити', kitsN: 'Таких комплектів', schemeT: 'схема труб', schemeHint: 'Номери труб — як на аркушах «труби»; однакові труби — один номер', tubesT: 'труби', tubesHint: 'Труби каркаса — номери як на аркуші каркаса; розміри від лівого торця труби; М', tubeN: 'труба', paintask: 'не задана в моделі — уточнити', asm: 'Збірка каркасів', and: 'і', tie: 'стягує поз.', kit: 'комплект:', refnote: '* Розміри для довідок', det: 'Платик', detHole: 'отв.', deep: 'глиб.', under: 'під', nuts: 'шт.', c_offax: 'отвір не по осі труби (зміщення', c_mm: 'мм)',
+        m_none: 'у моделі немає напівфабрикатів з металом', m_view: 'вид', v_bottom: 'знизу', v_back: 'ззаду', v_right: 'справа', v_front: 'спереду', v_left: 'зліва', v_top: 'згори', m_last: 'останній вид аркуша не видаляється', holes: 'отв.', thru: 'наскрізь', nothru: 'ненаскрізне', fromIn: 'зсередини', fromOut: 'ззовні', withleg: 'з ніжкою', capsYes: 'Торці труб заглушити', capsNo: 'Торці труб не глушити', capsWeld: 'Торці труб заварити', fastT: 'Кріплення', kitsN: 'Таких комплектів', schemeT: 'схема труб', schemeHint: 'Номери труб — як на аркушах «труби»; однакові труби — один номер', tubesT: 'труби', tubesHint: 'Труби каркаса — номери як на аркуші каркаса; розміри від лівого торця труби; М', tubeN: 'труба', paintask: 'не задана в моделі — уточнити', asm: 'Збірка каркасів', and: 'і', tie: 'стягує поз.', kit: 'комплект:', refnote: '* Розміри для довідок', det: 'Платик', detHole: 'отв.', deep: 'глиб.', under: 'під', nuts: 'шт.', c_offax: 'отвір не по осі труби (зміщення', c_mm: 'мм)',
         side: { '-x': 'зліва', x: 'справа', '-y': 'знизу', y: 'згори', '-z': 'ззаду', z: 'спереду' }, onside: 'з боку:', inside: 'всередину', weld: 'патрубок', gablegs: 'Габарити — по трубах, без опор', metalprop: 'Метал', nopaintneed: 'не потрібне (нержавійка)', m_chk: 'Перевірити модель', ctr: 'Підрядник', noctr: 'без підрядника', orderqty: 'Кількість виробів', qty: 'Кількість', c_title: 'Зауваження до моделі — виправити й вивантажити заново', c_none: 'Зауважень до моделі немає', c_nonut: 'на осі немає гайки', c_twonuts: 'дві гайки в одному місці',
         mat: 'Матеріал', paint: 'Фарбування', nopaint: 'фарбування не задане в моделі (властивість напівфабрикату)', sheet: 'Аркуш', scale: 'Масштаб',
         note1: 'Розміри — по зовнішньому контуру, від бази (лівий / нижній край).',
@@ -7354,8 +7354,16 @@ function tubeNotes(g, F) {
   return [...out.values()].map(o => Object.assign(o, { txt: o.pts.length + ' ' + (o.hole ? ML('holes') + ' ' : ML('nuts') + ' ') + o.t }));
 }
 // высота полосы с размерами и подписями (мм листа): платики — ряд сверху; отверстия — ряд снизу; длина — ниже; подписи — строками
+// выступ платиков за полосу трубы (мм листа), сверху и снизу: платик 40 на трубе 40 торчит на всю ширину (19.11: заголовок
+// следующей трубы и габарит ложились на платики)
+function tubeOv(g, F, sc) {
+  const R = tubeFaces(g), W = R.s[F.B]; let t = 0, b = 0;
+  for (const p of F.sh) { t = Math.max(t, (p.box.max[F.B] - R.b.min[F.B] - W) / sc); b = Math.max(b, (R.b.min[F.B] - p.box.min[F.B]) / sc); }
+  return [Math.max(0, t), Math.max(0, b)];
+}
 function tubeFaceH(g, F, sc, first) {
-  const R = tubeFaces(g); return (F.sh.length ? 9 : 3) + R.s[F.B] / sc + (F.hs.length ? 9 : 3) + (first ? 6 : 0) + 5.6 * tubeNotes(g, F).length + 5;
+  const R = tubeFaces(g), ov = tubeOv(g, F, sc);
+  return (F.sh.length ? 9 : 3) + ov[0] + R.s[F.B] / sc + ov[1] + (F.hs.length ? 9 : 3) + (first ? 6 : 0) + 5.6 * tubeNotes(g, F).length + 5;
 }
 function tubeBlockH(g, sc) { const R = tubeFaces(g); return 9 + R.faces.reduce((a, F, i) => a + tubeFaceH(g, F, sc, i === 0), 0) + 3; }
 function tubeSheetSvg(un, o, k) {
@@ -7381,7 +7389,7 @@ function tubeSheetSvg(un, o, k) {
     s += T(X0, y + 5, ML('tubeN').replace(/^./, c => c.toUpperCase()) + ' ' + g.N + ' — ' + mat + ', L=' + fmtN(r1(R.L)) + ' — ' + fqK(g.qty), 5, true);
     y += 9;
     R.faces.forEach((F, fi) => {
-      const h = R.s[F.B] / sc, yS = y + (F.sh.length ? 9 : 3);              // верх полосы
+      const h = R.s[F.B] / sc, ov = tubeOv(g, F, sc), yS = y + (F.sh.length ? 9 : 3) + ov[0];   // верх полосы — ниже выступа платиков и их ряда размеров
       // полоса, осевая, подпись грани
       s += `<rect x="${f(o[0] + X0 * k)}" y="${f(o[1] + yS * k)}" width="${f(len * k)}" height="${f(h * k)}" fill="none" stroke="#000000" stroke-width="${f(0.35 * k)}"/>`;
       s += line(X0 - 3, yS + h / 2, X0 + len + 3, yS + h / 2, 0.15, true) + T(X0 + len + 5, yS + h / 2 + 1.6, ML('m_view') + ' ' + ML('v_' + VB2[F.A]), 4);
@@ -7396,9 +7404,9 @@ function tubeSheetSvg(un, o, k) {
         s += line(cx - r - 1, cy, cx + r + 1, cy, 0.12) + line(cx, cy - r - 1, cx, cy + r + 1, 0.12);
       }
       // сверху — платики, снизу — отверстия и гайки, ещё ниже — длина трубы (размеры друг друга не перебивают; Алексей 19.11)
-      if (F.sh.length) s += chain(F.sh.map(p => p.c[R.la] - R.b.min[R.la]), R.L, yS - 5, yS);
-      let yB = yS + h;
-      if (F.hs.length) { s += chain(F.hs.map(hh => hh.a[R.la] - R.b.min[R.la]), R.L, yB + 5, yB); yB += 9; } else yB += 3;
+      if (F.sh.length) s += chain(F.sh.map(p => p.c[R.la] - R.b.min[R.la]), R.L, yS - ov[0] - 5, yS - ov[0]);
+      let yB = yS + h + ov[1];                               // ниже полосы и выступа платиков
+      if (F.hs.length) { s += chain(F.hs.map(hh => hh.a[R.la] - R.b.min[R.la]), R.L, yB + 5, yS + h); yB += 9; } else yB += 3;
       if (fi === 0) { s += line(X0, yS + h, X0, yB + 3, 0.12) + line(X0 + len, yS + h, X0 + len, yB + 3, 0.12) + dimLine(P(X0, yB + 2), P(X0 + len, yB + 2), fmtN(r1(R.L)), k, f); yB += 6; }
       // отверстие не по оси грани — размер поперёк, справа от полосы
       const off = [...new Set(F.hs.filter(hh => Math.abs(hh.a[F.B] - (R.b.min[F.B] + R.b.max[F.B]) / 2) > 1).map(hh => r1(hh.a[F.B] - R.b.min[F.B])))];
@@ -7466,6 +7474,14 @@ function metalBlockLines(un, n) {
     if (un.kits) for (let i = 0; i < parts.length; i++) if (M.objs[i] && M.objs[i].k === 'f' && un.kits.has(parts[i].h[0])) { const n = kitName(M.objs[i].n); cnt.set(n, (cnt.get(n) || 0) + 1); }
     for (const x of md.units) for (const L of x.legs || []) { const n = String(L.name).replace(/^\[[^\]]*\]\s*/, '').split(',')[0].trim(); cnt.set(n, (cnt.get(n) || 0) + (x.qty || 1)); }
     for (const [n, c] of cnt) lines.push([n + ' — ' + fq(c), F]);
+  }
+  // крепёж этой детали (Алексей 19.11: «на общем написал — и в таблицу каждого изделия: гайки, болты этой единицы»): по отверстиям
+  // детали — заклёпочные гайки, болты опор, винты; болты стяжки — на общем виде (соединяют детали между собой)
+  if (!un.general && !un.svgSheet) {
+    const asm = (md.gen || []).find(x => x.assembly), tieN = new Set(((asm && asm.ties) || []).map(t => cleanFast(t.name))), cnt = new Map();
+    for (const h of un.holes || []) { const n = cleanFast(h.name); if (!n || /^отв/i.test(n) || tieN.has(n)) continue; cnt.set(n, (cnt.get(n) || 0) + 1); }
+    for (const L of un.legs || []) { const n = String(L.name).replace(/^\[[^\]]*\]\s*/, '').split(',')[0].trim(); cnt.set(n, (cnt.get(n) || 0) + 1); }
+    if (cnt.size) { lines.push([ML('fastT') + ':', F]); for (const [n, c] of cnt) lines.push(['   ' + n + ' — ' + fq(c * (un.qty || 1)), F]); }
   }
   const metals = [...new Set((un.general ? md.units : [un]).map(x => x.metal).filter(Boolean))];
   // материал — только трубы, каждая своей строкой; листы платиков / заглушек не перечисляются
