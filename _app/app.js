@@ -4720,6 +4720,9 @@ function wireOverlay() {
     if (bi !== undefined && metalCur !== null) {              // лист металла: колонка надписей / аксонометрия — тянуть, за угол — растягивать
       e.preventDefault(); e.stopPropagation();
       const un = metalData().all.find(x => x.u === metalCur); if (!un || e.button !== 0) return;
+      const tNow = performance.now();
+      if (bi === 'blk' && tNow - blkT < 450 && blkAsk) { blkT = 0; dr = null; blkAsk(un); return; }   // два щелчка — количество
+      if (bi === 'blk') blkT = tNow;
       const G = metalBlockGeo(un, drawN), I = metalIsoGeo(un);
       dr = { blk: bi, un, x: e.clientX, y: e.clientY, moved: false, p0: bi.startsWith('blk') ? { x: G.x0, y: G.y0, s: G.s, w: G.x1 - G.x0 } : { x: I.x, y: I.y, s: I.s } };
       return;
@@ -4747,6 +4750,14 @@ function wireOverlay() {
     selDim = dm; dr = { dm, kind: 'm', x: e.clientX, y: e.clientY, moved: false }; drawOverlay();
   });
   sv.addEventListener('contextmenu', e => e.preventDefault());
+  // колонка надписей листа металла: двойной щелчок — количество рукой (Алексей 19.11: одинаковые каркасы стоят в разных
+  // моделях зон, общее число на заказ знает только он). На общем виде число изделий пересчитывает спецификацию
+  // (обычный dblclick не доходит: колонка перерисовывается между щелчками — два нажатия ловятся в pointerdown, blkAsk)
+  blkAsk = un => {
+    const v = prompt(un.general ? ML('orderqty') : ML('qty'), un.qtyOv != null ? un.qtyOv : (un.general ? String(M.qty > 0 ? M.qty : 1) : String((un.qty || 1) * (M.qty > 0 ? M.qty : 1)) + ' ' + ML('nuts')));
+    if (v === null) return;
+    un.qtyOv = v.trim() || null; drawOverlay();
+  };
   addEventListener('pointermove', e => {
     if (clipDrag) { clipDragTo(e.clientX, e.clientY, clipDrag.x, clipDrag.y, clipDrag.c0); return; }
     if (!dr) return;
@@ -5912,6 +5923,24 @@ function showTip(b) {
 // отверстия самих панелей (круглые `hc`, зенковки `cu`) — по каждому размер от базы (левый / нижний край) вдоль листа и
 // поперёк, кроме направления оси отверстия; ряды наружу — от короткого к длинному, габарит — последним.
 const WP = (x, y, z) => new THREE.Vector3(x, y, z).applyMatrix4(root.matrixWorld);   // точка модели → сцена (с поворотом листа)
+// габарит детали в сцене — только по её телу. Линии контуров прорезанных отверстий идут во всю длину крепежа (болт стяжки
+// 130 мм через две трубы) — по всей группе труба 40 мм выходила шириной 122, каркас трибуны 1936 вместо 1854, в раздутую
+// коробку попадал крепёж облицовки, лист не влезал ни в один масштаб (19.11, 002_11 трибуна)
+// платик-заглушка: в модели заглушка по имени, или платик, вваренный в торец трубы (Алексей 19.11: «торцы труб — не
+// образмеривать, надпись „заварить“»). Ни размеров, ни увеличенного вида — одна строка в колонке надписей
+const isCap = s => /заглуш/i.test(s.name) || !!s.endcap;
+// расшифровка букв отверстий каркаса — строки с переносом по словам в ширину блока (шрифт 5, знак ≈ 2,5 мм)
+const LEG_W = 150;
+function legendLines(un, w) {
+  const max = Math.floor(w / 2.5), out = [];
+  for (const e of un.legend || []) { let cur = ''; for (const wd of e.split(' ')) { if (cur && (cur + ' ' + wd).length > max) { out.push(cur); cur = '    ' + wd; } else cur = cur ? cur + ' ' + wd : wd; } if (cur) out.push(cur); }
+  return out;
+}
+function partBox(i, precise = true) {
+  const p = parts[i], b = new THREE.Box3();
+  for (const m of p.meshes || []) if (!m.userData.mark) b.expandByObject(m, precise);
+  return b.isEmpty() ? new THREE.Box3().expandByObject(p.g, precise) : b;
+}
 let metalRotQ = null;                                       // поворот модели под лист металла (null — модель как есть)
 function metalRot(q) { root.quaternion.copy(q || new THREE.Quaternion()); root.updateMatrixWorld(true); metalRotQ = q || null; }
 // оси полуфабриката — рамка ближайшего фрагмента (свой узел, потом вверх по цепочке); нет рамки — оси изделия.
@@ -5929,7 +5958,7 @@ const MTXT = {
   ru: { metal: 'Металл', t_metal: 'Лист на каждый металлический полуфабрикат: размеры и подписи по модели', m_off: 'Обычный лист', m_pdf: 'Комплект PDF (все листы)', m_rep: 'Листы в отчёт Федосова (картинки по одному)',
         f_loaded: 'Свои листы подняты из папки заказа', f_lost: 'не нашлись детали (модель перевыгружена)',
         f_name: 'Лист', f_newsel: 'Новый лист из выделенного', f_newvis: 'Новый лист из всего видимого', f_rep: 'Лист в отчёт Федосова (картинка)', f_del: 'Удалить лист', f_none: 'нет видимых деталей',
-        m_none: 'в модели нет полуфабрикатов с металлом', m_view: 'вид', v_bottom: 'снизу', v_back: 'сзади', v_right: 'справа', v_front: 'спереди', v_left: 'слева', v_top: 'сверху', m_last: 'последний вид листа не удаляется', holes: 'отв.', thru: 'насквозь', nothru: 'несквозное', fromIn: 'изнутри', fromOut: 'снаружи', withleg: 'с ножкой', capsYes: 'Торцы труб заглушить', capsNo: 'Торцы труб не глушить', refnote: '* Размеры для справок', det: 'Платик', detHole: 'отв.', deep: 'глуб.', under: 'под', nuts: 'шт.', c_offax: 'отверстие не по оси трубы (смещение', c_mm: 'мм)',
+        m_none: 'в модели нет полуфабрикатов с металлом', m_view: 'вид', v_bottom: 'снизу', v_back: 'сзади', v_right: 'справа', v_front: 'спереди', v_left: 'слева', v_top: 'сверху', m_last: 'последний вид листа не удаляется', holes: 'отв.', thru: 'насквозь', nothru: 'несквозное', fromIn: 'изнутри', fromOut: 'снаружи', withleg: 'с ножкой', capsYes: 'Торцы труб заглушить', capsNo: 'Торцы труб не глушить', capsWeld: 'Торцы труб заварить', asm: 'Сборка каркасов', and: 'и', tie: 'стягивает поз.', kit: 'комплект:', refnote: '* Размеры для справок', det: 'Платик', detHole: 'отв.', deep: 'глуб.', under: 'под', nuts: 'шт.', c_offax: 'отверстие не по оси трубы (смещение', c_mm: 'мм)',
         side: { '-x': 'слева', x: 'справа', '-y': 'снизу', y: 'сверху', '-z': 'сзади', z: 'спереди' }, onside: 'с боку:', inside: 'внутрь', weld: 'патрубок', gablegs: 'Габариты — по трубам, без опор', metalprop: 'Металл', nopaintneed: 'не требуется (нержавейка)', m_chk: 'Проверить модель', ctr: 'Подрядчик', noctr: 'без подрядчика', orderqty: 'Количество изделий', qty: 'Количество', c_title: 'Замечания по модели — поправить и выгрузить заново', c_none: 'Замечаний по модели нет', c_nonut: 'на оси нет гайки', c_twonuts: 'две гайки в одном месте',
         mat: 'Материал', paint: 'Покраска', nopaint: 'покраска не задана в модели (свойство полуфабриката)', sheet: 'Лист', scale: 'Масштаб',
         note1: 'Размеры — по наружному контуру, от базы (левый / нижний край).',
@@ -5940,7 +5969,7 @@ const MTXT = {
   uk: { metal: 'Метал', t_metal: 'Аркуш на кожен металевий напівфабрикат: розміри й підписи за моделлю', m_off: 'Звичайний аркуш', m_pdf: 'Комплект PDF (усі аркуші)', m_rep: 'Аркуші у звіт Федосова (картинки по одному)',
         f_loaded: 'Свої аркуші підняті з теки замовлення', f_lost: 'не знайшлися деталі (модель перевивантажена)',
         f_name: 'Аркуш', f_newsel: 'Новий аркуш з виділеного', f_newvis: 'Новий аркуш з усього видимого', f_rep: 'Аркуш у звіт Федосова (картинка)', f_del: 'Видалити аркуш', f_none: 'немає видимих деталей',
-        m_none: 'у моделі немає напівфабрикатів з металом', m_view: 'вид', v_bottom: 'знизу', v_back: 'ззаду', v_right: 'справа', v_front: 'спереду', v_left: 'зліва', v_top: 'згори', m_last: 'останній вид аркуша не видаляється', holes: 'отв.', thru: 'наскрізь', nothru: 'ненаскрізне', fromIn: 'зсередини', fromOut: 'ззовні', withleg: 'з ніжкою', capsYes: 'Торці труб заглушити', capsNo: 'Торці труб не глушити', refnote: '* Розміри для довідок', det: 'Платик', detHole: 'отв.', deep: 'глиб.', under: 'під', nuts: 'шт.', c_offax: 'отвір не по осі труби (зміщення', c_mm: 'мм)',
+        m_none: 'у моделі немає напівфабрикатів з металом', m_view: 'вид', v_bottom: 'знизу', v_back: 'ззаду', v_right: 'справа', v_front: 'спереду', v_left: 'зліва', v_top: 'згори', m_last: 'останній вид аркуша не видаляється', holes: 'отв.', thru: 'наскрізь', nothru: 'ненаскрізне', fromIn: 'зсередини', fromOut: 'ззовні', withleg: 'з ніжкою', capsYes: 'Торці труб заглушити', capsNo: 'Торці труб не глушити', capsWeld: 'Торці труб заварити', asm: 'Збірка каркасів', and: 'і', tie: 'стягує поз.', kit: 'комплект:', refnote: '* Розміри для довідок', det: 'Платик', detHole: 'отв.', deep: 'глиб.', under: 'під', nuts: 'шт.', c_offax: 'отвір не по осі труби (зміщення', c_mm: 'мм)',
         side: { '-x': 'зліва', x: 'справа', '-y': 'знизу', y: 'згори', '-z': 'ззаду', z: 'спереду' }, onside: 'з боку:', inside: 'всередину', weld: 'патрубок', gablegs: 'Габарити — по трубах, без опор', metalprop: 'Метал', nopaintneed: 'не потрібне (нержавійка)', m_chk: 'Перевірити модель', ctr: 'Підрядник', noctr: 'без підрядника', orderqty: 'Кількість виробів', qty: 'Кількість', c_title: 'Зауваження до моделі — виправити й вивантажити заново', c_none: 'Зауважень до моделі немає', c_nonut: 'на осі немає гайки', c_twonuts: 'дві гайки в одному місці',
         mat: 'Матеріал', paint: 'Фарбування', nopaint: 'фарбування не задане в моделі (властивість напівфабрикату)', sheet: 'Аркуш', scale: 'Масштаб',
         note1: 'Розміри — по зовнішньому контуру, від бази (лівий / нижній край).',
@@ -5951,6 +5980,7 @@ const MTXT = {
 };
 const ML = k => (MTXT[dLang] && MTXT[dLang][k]) || MTXT.ru[k];
 let metal = null, metalPrevFix = 0;
+let blkT = 0, blkAsk = null;                                 // два щелчка по колонке надписей — окно количества
 // «свой лист» (тема 60, Алексей 11.11): лист с видами-блоками для любых деталей модели — выделенных или всех видимых.
 // Та же единица листа, что у металла (u, name, pi, box), но free: виды — те, что поставил человек (un.vs, первый — главный),
 // автоматических размеров, выносок и колонки надписей нет; размеры и сечения ставятся рукой на живом виде.
@@ -5983,6 +6013,43 @@ function metalData() {
              pi: B.groups.length > 1 ? [...new Set(us.flatMap(x => x.pi))] : partsUnder(t),   // виды — только детали комплекта
              boxes: [], box, holes: [], mats: [...new Set(us.flatMap(x => x.mats))], paint: us.map(x => x.paint).find(Boolean) || '' };
   }).filter(Boolean);
+  // сборка без общего полуфабриката-металла (трибуна 002_11, 19.11: каркасы стоят в блоках изделия и стянуты болтами между
+  // собой) — общий вид «Сборка каркасов»: все каркасы комплекта и болты стяжки (ось проходит через два разных каркаса)
+  if (!gen.length && units.filter(x => !x.loose).length > 1) {
+    metalRot(null);
+    const inst = []; for (const x of units) for (const b of x.instBox || [x.wmbox]) inst.push({ x, b, tb: [] });
+    // трубы и листы каждого экземпляра (в мире): болт стяжки проходит МЕТАЛЛ двух каркасов, а не их общие коробки
+    // (муфта поручня лежала в коробке заднего каркаса — «стягивала» его с поручнем)
+    for (let i = 0; i < parts.length; i++) {
+      const o = M.objs[i]; if (!o || !(o.pf || o.k === 'p')) continue;
+      const bx = partBox(i), c = bx.getCenter(V3()), q = inst.find(z => z.b.clone().expandByScalar(1).containsPoint(c)); if (q) q.tb.push(bx);
+    }
+    // стяжка — болт / винт / шпилька, у которого в его блоке есть гайка (муфта и саморез поручня в трубе — не стяжка каркасов)
+    const nutKit = new Set(); for (let i = 0; i < parts.length; i++) if (M.objs[i] && M.objs[i].k === 'f' && /гайк/i.test(M.objs[i].n)) nutKit.add(parts[i].h[0]);
+    const ties = [];
+    for (const h of M.holes || []) {
+      if (!nutKit.has(h[9]) || !/болт|винт|шпильк/i.test((M.hnames || [])[h[8]] || '')) continue;
+      const a = WP(h[0], h[1], h[2]), e = WP(h[3], h[4], h[5]), hit = inst.filter(q => q.tb.some(bb => segIn(a, e, bb, 0.5) > 1));
+      if (hit.length < 2) continue;
+      ties.push({ a, e, d: h[6], name: (M.hnames || [])[h[8]] || '', kit: h[9], pair: hit.slice(0, 2).map(q => q.x.no).sort((p, q) => p - q).join(' ' + ML('and') + ' ') });
+    }
+    if (ties.length) {
+      const box = new THREE.Box3(); for (const q of inst) box.union(q.b);
+      // на видах — только металл (трубы и листы из материалов каркасов, крепёж в них) и комплекты стяжки; облицовка ДСП и
+      // сиденья в коробках каркасов — нет
+      const kits = new Set(ties.map(t => t.kit)), pi = [], mset = new Set(units.flatMap(x => x.mats));
+      for (let i = 0; i < parts.length; i++) {
+        const o = M.objs[i]; if (!o || o.k === 'l') continue;
+        if (kits.has(parts[i].h[0])) { pi.push(i); continue; }
+        if (!(o.pf || o.k === 'p' || o.k === 'f') || ((o.pf || o.k === 'p') && !mset.has(M.mnames[o.mn]))) continue;
+        const c = partBox(i).getCenter(V3()), q = inst.find(z => z.b.clone().expandByScalar(1).containsPoint(c)); if (!q) continue;
+        if (o.k === 'f' && !q.tb.some(bb => bb.clone().expandByScalar(1).containsPoint(c))) continue;   // крепёж — только в металле
+        pi.push(i);
+      }
+      gen.push({ u: -1000 - gi * 100 - 99, top: -1, general: true, assembly: true, gunits: units, ties, kits, many: B.groups.length > 1, name: ML('asm'), no: 0,
+                 pi, boxes: [], box, holes: [], mats: [...new Set(units.flatMap(x => x.mats))], paint: units.map(x => x.paint).find(Boolean) || '' });
+    }
+  }
   return (B.views[g] = { tops: B.tops, groups: B.groups, group: g, units, gen, own: gen.concat(units), all: gen.concat(units, freeUnits) });
 }
 function metalBuild() {
@@ -6017,7 +6084,7 @@ function metalBuild() {
     // детали полуфабриката: трубы (профили) и детали из листа (панели — опоры, рамки столов из нержавейки); крепёж не в счёт
     const tubes = pi.filter(i => M.objs[i] && (M.objs[i].pf || M.objs[i].k === 'p')), tb = new THREE.Box3(), mb = new THREE.Box3();
     // рамки — по вершинам (precise): модель повёрнута под оси рамки, рамка по готовой коробке геометрии даёт 490×490 вместо 560×60
-    const boxes = tubes.map(i => new THREE.Box3().expandByObject(parts[i].g, true));
+    const boxes = tubes.map(i => partBox(i));
     for (const b of boxes) tb.union(b);
     // основные детали (без патрубков): по ним габарит и края, от которых меряются отверстия (Алексей 27.10, Br3).
     // Есть профили — основные только они; платики и заглушки (детали из листа внутри сварного полуфабриката) — приварные
@@ -6031,6 +6098,10 @@ function metalBuild() {
     const sheetI = new Set(sheets.map(x => x.i));
     const mainsI = tubes.filter(i => !(isWeld(i) || sheetI.has(i)));
     const mains = tubes.map((i, k) => isWeld(i) || sheetI.has(i) ? null : boxes[k]).filter(Boolean); for (const b of mains) mb.union(b);
+    // платик в торце трубы (тонкий вдоль трубы, лежит в её сечении у самого конца) — торец заварен
+    const longOf = x => { const s = x.getSize(V3()); return ['x', 'y', 'z'].reduce((p, q) => s[q] > s[p] ? q : p, 'x'); };
+    for (const s of sheets) s.endcap = mains.some(x => longOf(x) === s.thin && ['x', 'y', 'z'].every(a => a === s.thin
+      ? Math.min(Math.abs(s.c[a] - x.min[a]), Math.abs(s.c[a] - x.max[a])) <= 3 : s.c[a] >= x.min[a] - 0.5 && s.c[a] <= x.max[a] + 0.5));
     // крепёж: свой (лежит в полуфабрикате) и чужой, чья ось проходит через тело полуфабриката (саморезы столешницы — в её
     // блоке, а отверстие под них — в опоре; Алексей 28.10, Sg1)
     const inner = boxes.map(b => b.clone().expandByScalar(-0.5));   // касание грани (муфта столешницы над платиком) — не насквозь
@@ -6053,7 +6124,7 @@ function metalBuild() {
       }
       holes.push(...mine);
     }
-    const welds = tubes.filter(isWeld).map(i => { const o = M.objs[i], b = new THREE.Box3().expandByObject(parts[i].g, true), ax = o.pf.ax;
+    const welds = tubes.filter(isWeld).map(i => { const o = M.objs[i], b = partBox(i), ax = o.pf.ax;
       return { c: b.getCenter(V3()), ax: new THREE.Vector3(ax[9], ax[10], ax[11]), l: o.pf.l, mat: M.mnames[o.mn] || o.n }; });
     const mats = [...new Set(tubes.map(i => M.objs[i].mn).filter(m => m !== undefined).map(m => M.mnames[m]))];
     const pmats = [...new Set(tubes.filter(i => M.objs[i].pf).map(i => M.objs[i].mn).filter(m => m !== undefined).map(m => M.mnames[m]))];   // только трубы
@@ -6062,10 +6133,10 @@ function metalBuild() {
     const stainless = (mats.length > 0 && mats.every(m => /нерж/i.test(m))) || /нерж|aisi/i.test(metal);
     // габарит с регулируемыми опорами — второй габарит рядом с габаритом по металлу (Алексей 27.10)
     const legs = legsIn(pi), lb = (mb.isEmpty() ? tb : mb).clone();
-    for (const i of pi) if (M.objs[i].k === 'f' && /опор|ножк|ніжк/i.test(M.objs[i].n)) lb.union(new THREE.Box3().expandByObject(parts[i].g, true));
+    for (const i of pi) if (M.objs[i].k === 'f' && /опор|ножк|ніжк/i.test(M.objs[i].n)) lb.union(partBox(i));
     // габарит и точка выноски в осях изделия (модель как есть) — для общего вида и аксонометрии
     metalRot(null);
-    const wbx = i => new THREE.Box3().expandByObject(parts[i].g, true), wmb = new THREE.Box3();
+    const wbx = i => partBox(i), wmb = new THREE.Box3();
     for (const i of mainsI.length ? mainsI : tubes) wmb.union(wbx(i));
     return { u, name, pi, tubes, boxes, mains, sheets, box: tb, mbox: mb.isEmpty() ? tb : mb, lbox: lb, holes, welds, legs, mats, pmats: pmats.length ? pmats : mats, paint: paintOf(pu), metal, stainless,
              rot, wmbox: wmb, hasProf,                       // hasProf — есть трубы; нет — деталь из листа (гнутые опоры)                                 // rot — поворот модели под лист; wmbox — габарит в осях изделия
@@ -6076,8 +6147,28 @@ function metalBuild() {
   const inLeaf = new Set(units.flatMap(x => x.pi));          // детали всех полуфабрикатов — ДО слияния одинаковых (Br3: два каркаса)
   // одинаковые полуфабрикаты по форме (габарит, число деталей и отверстий, материалы) — один лист «N шт.», имя не в счёт
   // (Алексей 27.10, Br3 «каркас 1» / «каркас 2»: «два одинаковых — один чертёж и две штуки»)
-  { const sig = x => [x.ctr, ...x.mbox.getSize(V3()).toArray().map(Math.round), x.tubes.length, x.holes.length, x.mats.join(',')].join('|'), seenU = new Map();
-    for (let i = units.length - 1; i >= 0; i--) { const s = sig(units[i]); if (seenU.has(s)) { const k = seenU.get(s); k.qty = (k.qty || 1) + 1; k.allbox.union(units[i].wmbox); k.inst.push(...units[i].inst); k.instBox.push(units[i].wmbox); units.splice(i, 1); } else { units[i].allbox = units[i].wmbox.clone(); units[i].instBox = [units[i].wmbox]; seenU.set(s, units[i]); } } }
+  // Форма = место каждой трубы и каждого платика от угла габарита (19.11, трибуна 002_11: по одному числу отверстий передний
+  // левый и правый каркасы — разные — слились в «4 шт.»). Отверстия у одинаковых по форме — все вместе на одном листе:
+  // каркас универсальный, ставится на любое место (Алексей 19.11: «чтобы их не делать разными», задний 12 шт.)
+  // Зеркальная копия (Br3 «каркас 1 / каркас 2», принято 27.10 как одинаковые) — тот же каркас: сравнение и с отражением по X / Z.
+  // Места — с шагом 0,5 мм от центра (178,5 из-за последних знаков округлялось то в 178, то в 179 — рамки Kw1 расходились)
+  { const FL = [[1, 1], [-1, 1], [1, -1], [-1, -1]];
+    const sig = (x, f) => { const c = x.mbox.getCenter(V3()); return [x.ctr, x.mats.join(','), ...x.boxes.map(bb => {
+      const xs = [(bb.min.x - c.x) * f[0], (bb.max.x - c.x) * f[0]].sort((p, q) => p - q), zs = [(bb.min.z - c.z) * f[1], (bb.max.z - c.z) * f[1]].sort((p, q) => p - q);
+      return [xs[0], bb.min.y - c.y, zs[0], xs[1], bb.max.y - c.y, zs[1]].map(v => Math.round(v * 2)).join(','); }).sort()].join('|'); };
+    const seenU = new Map();
+    for (let i = units.length - 1; i >= 0; i--) {
+      const fi = FL.findIndex(f => seenU.has(sig(units[i], f))), s = sig(units[i], FL[0]);
+      if (fi >= 0) {
+        const k = seenU.get(sig(units[i], FL[fi])), f = FL[fi], ci = units[i].mbox.getCenter(V3()), ck = k.mbox.getCenter(V3());
+        const map = p => new THREE.Vector3(ck.x + (p.x - ci.x) * f[0], ck.y + (p.y - ci.y), ck.z + (p.z - ci.z) * f[1]);
+        for (const h of units[i].holes) {
+          const a = map(h.a), e = map(h.e);
+          if (!k.holes.some(x => x.d === h.d && x.a.distanceTo(a) < 1.5 && x.e.distanceTo(e) < 1.5)) k.holes.push(Object.assign({}, h, { a, e }));
+        }
+        k.qty = (k.qty || 1) + 1; k.allbox.union(units[i].wmbox); k.inst.push(...units[i].inst); k.instBox.push(units[i].wmbox); units.splice(i, 1);
+      } else { units[i].allbox = units[i].wmbox.clone(); units[i].instBox = [units[i].wmbox]; seenU.set(s, units[i]); }
+    } }
   // детали прямо в полуфабрикате-металле, мимо вложенных (Br3: две трубы 2560 в металокаркасе) — лист на группу одинаковых
   const loose = new Map();
   for (const t of tops) for (const i of partsUnder(t)) {
@@ -6091,7 +6182,7 @@ function metalBuild() {
       (M.mnames[o.mn] || o.n) + ' L=' + Math.round(o.pf.l), unitFrameQ(own, anc));
     un.loose = true; un.qty = n; un.paint = un.paint || (units.find(x => x.paint) || {}).paint || ''; un.metal = un.metal || (units.find(x => x.metal) || {}).metal || '';   // покраска — как у соседних полуфабрикатов изделия
     un.allbox = un.wmbox.clone(); un.inst = []; un.instBox = [];
-    for (const i of list) { const bx = new THREE.Box3().expandByObject(parts[i].g, true); un.allbox.union(bx); un.inst.push(bx.getCenter(V3())); un.instBox.push(bx); }   // все экземпляры — габарит общего вида и выноска на каждый
+    for (const i of list) { const bx = partBox(i); un.allbox.union(bx); un.inst.push(bx.getCenter(V3())); un.instBox.push(bx); }   // все экземпляры — габарит общего вида и выноска на каждый
     units.push(un);
   }
   // номера листов — по высоте снизу вверх, затем слева направо (номера живут только в этом комплекте)
@@ -6155,6 +6246,8 @@ function metalClear(un) {                                   // автомати�
 }
 function metalLayout(un) {
   if (un.free) return freeLayout(un);
+  // каркас из 20+ труб (трибуна 002_11: 21 и 31; принятый стол St2 — 18) — сразу режим «каркас» (Алексей 19.11)
+  if (!un.general && un.hasProf && (un.mains || []).length >= 20) un.frame = true;
   const v0 = un.general ? '3d' : metalView(un); let vs = v0 === '3d' ? ['front', 'left', 'top'] : [v0];
   // дополнительные виды по просьбе (меню листа: снизу / сзади / справа — «вид по линии вниз, вверх», Алексей 28.10)
   for (const v of un.extra || []) if (!vs.includes(v)) vs.push(v);
@@ -6189,7 +6282,8 @@ function metalLayout(un) {
   // первый проход — только с аксонометрией справа вверху (как на образце); не вышло ни в одном масштабе — второй, где найдётся
   // масштаб, выбранный рукой в ленте (связанный: все виды листа в нём), — единственный в переборе
   const scales = un.forceN ? [un.forceN] : SCALES;
-  for (const pass of [1, 2]) { if (best && best.iso && best.iso.s >= ISO_MIN) break; best = null;
+  // каркас: крупный масштаб важнее места аксонометрии — сразу второй проход (аксонометрия в любое свободное место)
+  for (const pass of un.frame ? [2] : [1, 2]) { if (best && best.iso && best.iso.s >= ISO_MIN) break; best = null;
   for (const n of scales) {
     drawFix = drawN = n; metalClear(un);
     const G = vs.map(v => { const g = metalCam(un, v); metalDims(un); return Object.assign(g, { v, pad: un.padNow }); });
@@ -6205,7 +6299,7 @@ function metalLayout(un) {
       if (T) { const tw = sz(T); views.push({ v: T.v, px: views[0].px, py: occ[0][3] + VGAP + T.pad.t + tw.h / 2 }); occ.push(box(T, views[2])); }
     }
     // надписи — правый нижний угол; над ними, правее видов, — аксонометрия (Алексей 27.10, скрин: «пусто вверху справа»)
-    const tb = metalBlockRect(un, n);
+    un.blkAuto = null; let tb = metalBlockRect(un, n);
     // дополнительные виды (4-й и дальше) — в свободное место листа, не задевая виды и надписи; не влезли — масштаб мельче
     let fits = true;
     for (let q = 3; q < G.length; q++) {
@@ -6221,7 +6315,7 @@ function metalLayout(un) {
     const cw = AW - EDGE_M - (U0[2] + minS[0] + VGAP + 8), ch = tb[1] - VGAP - EDGE_M;   // +8: аксонометрия не касается видов (27.10, стол)
     let iso = Math.min(cw, ch) >= ISO_MIN ? { s: Math.min(ISO_MAX, cw, ch) } : null, shift = minS.slice();
     const mv = sh => occ.map(r => [r[0] + sh[0], r[1] + sh[1], r[2] + sh[0], r[3] + sh[1]]);
-    const onBlock = sh => mv(sh).some(r => r[2] > tb[0] - 4 && r[3] > tb[1] - 4);
+    const onBlock = sh => mv(sh).some(r => r[2] > tb[0] - 4 && r[3] > tb[1] - 4 && (!un.blkAuto || (r[0] < tb[2] + 4 && r[1] < tb[3] + 4)));
     if (iso) {
       iso.x = AW - EDGE_M - iso.s; iso.y = EDGE_M;
       // виды — посередине оставшегося места: по высоте листа, по ширине — между левым краем и аксонометрией
@@ -6233,19 +6327,40 @@ function metalLayout(un) {
       if (onIso(shift)) shift = minS.slice();
       if (onIso(shift)) iso = null;                         // и так задевает — аксонометрия в другое свободное место (второй проход)
     }
+    if (un.frame) iso = null;                                 // каркас: аксонометрия — после колонки и расшифровки букв
+    let leg = null;
     if (!iso) {
-      if (pass === 1 || onBlock(shift)) continue;
-      iso = metalIsoSpot(mv(shift).concat([tb]), AW, AH);
+      if (pass === 1) continue;
+      // каркас: колонка надписей мешает видам — переезжает в свободное место листа (снизу справа к верху), виды крупнее
+      if (onBlock(shift) && un.frame && !un.blk) {
+        const bw = tb[2] - tb[0], bh = tb[3] - tb[1], occB = mv(shift), hitB = (x, y) => occB.some(r => x < r[2] + 4 && x + bw > r[0] - 4 && y < r[3] + 4 && y + bh > r[1] - 4);
+        let sp = null;
+        for (let y = AH - EDGE_M - bh; y >= EDGE_M && !sp; y -= 4) for (let x = AW - EDGE_M - bw; x >= EDGE_M; x -= 4) if (!hitB(x, y)) { sp = [x, y]; break; }
+        if (sp) { un.blkAuto = { x: sp[0], y: sp[1] }; tb = metalBlockRect(un, n); }
+      }
+      if (onBlock(shift)) continue;
+      // каркас: расшифровка букв отверстий — отдельным широким блоком в свободном месте (в колонке она вытягивала её на 120 мм)
+      if (un.frame && (un.legend || []).length) {
+        const LW = LEG_W, LH = legendLines(un, LW).length * 7.4 + 4, occL = mv(shift).concat([tb]);
+        const hitL = (x, y) => occL.some(r => x < r[2] + 4 && x + LW > r[0] - 4 && y < r[3] + 4 && y + LH > r[1] - 4);
+        for (let y = AH - EDGE_M - LH; y >= EDGE_M && !leg; y -= 4) for (let x = AW - EDGE_M - LW; x >= EDGE_M; x -= 4) if (!hitL(x, y)) { leg = { x, y, w: LW, h: LH }; break; }
+        if (!leg) continue;
+      }
+      iso = metalIsoSpot(mv(shift).concat([tb], leg ? [[leg.x, leg.y, leg.x + leg.w, leg.y + leg.h]] : []), AW, AH);
     }
     for (const w of views) { w.px += shift[0]; w.py += shift[1]; }
     const occS = occ.map(r => [r[0] + shift[0], r[1] + shift[1], r[2] + shift[0], r[3] + shift[1]]);
     // увеличенный вид платика — в свободном квадрате, не задевая виды, аксонометрию и надписи
-    const det = (un.sheets || []).some(s => !/заглуш/i.test(s.name)) ? metalIsoSpot(occS.concat([tb], iso ? [[iso.x, iso.y, iso.x + iso.s, iso.y + iso.s]] : []), AW, AH, DET_S) : null;
+    // место — по настоящей высоте увеличенного вида с подписями (квадрат 58 мм был ниже: «отв. ⌀5» налезала на колонку, 19.11)
+    const det = (un.sheets || []).some(s => !isCap(s)) ? detSpot(occS.concat([tb], iso ? [[iso.x, iso.y, iso.x + iso.s, iso.y + iso.s]] : [], leg ? [[leg.x, leg.y, leg.x + leg.w, leg.y + leg.h]] : []), AW, AH, DET_S, detNeed(un)) : null;
     views.forEach((w, i) => { w.gw = G[i].w / n; w.gh = G[i].h / n; w.pad = G[i].pad; });   // рамка вида-блока на листе
-    best = { n, views, iso, occ: occS, det };
-    if (iso && iso.s >= ISO_MIN) break;
+    best = { n, views, iso, occ: occS, det, leg };
+    if (un.frame || (iso && iso.s >= ISO_MIN)) break;      // каркас: первый влезший (самый крупный) масштаб
   }
   }
+  // не влезло ни в одном масштабе — каркас из многих труб (трибуна 002_11, 19.11): режим «каркас» — размеры до осей труб,
+  // отверстие на оси трубы размером не дублируется (место даёт ось), торцевые платики — надписью (Алексей 19.11)
+  if (!best && !un.frame && !un.general && un.hasProf && !un.forceN) { un.frame = true; return metalLayout(un); }
   if (!best) { const n = scales[scales.length - 1]; best = { n, views: vs.map(v => ({ v, px: AW / 2, py: AH / 2 })), iso: null }; }
   if (best.n !== drawN) { drawFix = drawN = best.n; metalClear(un); for (const v of vs) { metalCam(un, v); metalDims(un); } }
   return best;
@@ -6296,7 +6411,7 @@ function freeNew() {
   if (metalCur !== null) metalOff();
   if (selSet.length) clearSel();
   root.updateMatrixWorld(true);
-  const box = new THREE.Box3(); for (const i of pi) box.expandByObject(parts[i].g);
+  const box = new THREE.Box3(); for (const i of pi) box.union(partBox(i, false));
   const un = { u: FREE_U0 - (++freeSeq), free: true, name: ML('f_name') + ' ' + freeSeq, pi, box, boxes: [], holes: [], vs: [v0], no: 0 };
   freeUnits.push(un); metalData(); metalShow(un.u);
   return un;
@@ -6346,7 +6461,7 @@ const FREE_DIR = LOCAL ? LOCAL.order + '\\5. Креслення\\Свои лис
 const freeFile = () => String(M.title || 'изделие').replace(/[\\/:*?"<>|]/g, '_') + '.json';
 function partKey(i) {
   const o = M.objs[i]; if (!o) return 'i' + i;
-  const t = o.t, p = t ? [t[3], t[7], t[11]] : (() => { const c = new THREE.Box3().expandByObject(parts[i].g).getCenter(V3()).sub(root.position); return [c.x, c.y, c.z]; })();
+  const t = o.t, p = t ? [t[3], t[7], t[11]] : (() => { const c = partBox(i, false).getCenter(V3()).sub(root.position); return [c.x, c.y, c.z]; })();
   return (o.n || '') + '|' + p.map(v => Math.round(v)).join(',');
 }
 let freeLoaded = false, freeSaved = '', freeSaveTm = null;
@@ -6385,7 +6500,7 @@ async function freeLoad() {
     const pi = []; s.keys.forEach((k, j) => { const i = byKey.get(k); if (i !== undefined) pi.push(i); else if (M.objs[s.pi[j]] && (M.objs[s.pi[j]].n || '') === k.split('|')[0]) pi.push(s.pi[j]); });
     if (pi.length < s.keys.length) lost.push(s.name + ' — ' + (s.keys.length - pi.length));
     if (!pi.length) continue;
-    const box = new THREE.Box3(); for (const i of pi) box.expandByObject(parts[i].g);
+    const box = new THREE.Box3(); for (const i of pi) box.union(partBox(i, false));
     freeUnits.push({ u: s.u, free: true, name: s.name, pi, box, boxes: [], holes: [], vs: s.vs.slice(), vpos: s.vpos, forceN: s.forceN || 0, no: 0 });
   }
   const V = a => new THREE.Vector3().fromArray(a), ok = new Set(freeUnits.map(x => x.u));
@@ -6434,6 +6549,22 @@ function metalFreeRect(occ, AW, AH, w, h) {
   const hit = (x, y) => occ.some(r => x < r[2] + 4 && x + w > r[0] - 4 && y < r[3] + 4 && y + h > r[1] - 4);
   for (let y = EDGE_M; y + h <= AH - EDGE_M; y += 4) for (let x = EDGE_M; x + w <= AW - EDGE_M; x += 4) if (!hit(x, y)) return [x, y];
   return null;
+}
+// высота увеличенных видов платиков с подписями (как их рисует metalDetailSvg: заголовок 16, вид, 14, строки отверстий по 6, 6)
+function detNeed(un) {
+  const g = new Map(); for (const sh of (un.sheets || []).filter(x => !isCap(x))) if (!g.has(sh.name + '|' + sh.size)) g.set(sh.name + '|' + sh.size, sh);
+  let h = 0;
+  for (const sh of g.values()) {
+    const sz = sh.box.getSize(V3()), [A1, A2] = ['x', 'y', 'z'].filter(a => a !== sh.thin), sc = Math.max(sz[A1], sz[A2]) <= 50 ? 1 : 2, po = M.objs[sh.i] || {};
+    h += 16 + sz[A2] / sc + 14 + 6 * Math.max(1, (po.hc || []).length ? 1 : 0) + 6;
+  }
+  return Math.max(DET_S, h);
+}
+// свободный прямоугольник w×h (от правого нижнего угла); нет — квадрат как раньше
+function detSpot(occ, AW, AH, w, h) {
+  const hit = (x, y) => occ.some(r => x < r[2] + 4 && x + w > r[0] - 4 && y < r[3] + 4 && y + h > r[1] - 4);
+  for (let y = AH - EDGE_M - h; y >= EDGE_M; y -= 4) for (let x = AW - EDGE_M - w; x >= EDGE_M; x -= 4) if (!hit(x, y)) return { x, y, s: w };
+  return metalIsoSpot(occ, AW, AH, w);
 }
 // самый большой квадрат в свободном месте рабочего поля (поиск сеткой 4 мм, от правого нижнего угла)
 function metalIsoSpot(occ, AW, AH, sMax) {
@@ -6691,15 +6822,20 @@ function metalDims(un) {
   const hostBase = (q, a) => { const h = hostOf(q); return (a === R ? rtS : upS) > 0 ? h.min[a] : h.max[a]; };
   const hostFar = (q, a) => { const h = hostOf(q); return (a === R ? rtS : upS) > 0 ? h.max[a] : h.min[a]; };
   const exactR = { t: [], b: [] }, exactU = { l: [], r: [] };
+  // режим «каркас» (лист из многих труб не влез ни в один масштаб): положение труб — по осям, и отверстие, чей центр лежит
+  // на оси поперечной трубы, своим размером не дублируется — место даёт размер до оси (Алексей 19.11, трибуна)
+  const tubeAxes = a => un.frame ? mains.filter(x => longAx(x) !== a).map(x => (x.min[a] + x.max[a]) / 2) : [];
+  const AXR = tubeAxes(R), AXU = tubeAxes(U), onAx = (v, L) => L.some(c => Math.abs(c - v) <= 1);
+  const baseOf = (q, a) => un.frame ? (a === R ? baseR : baseU) : hostBase(q, a);   // каркас: всё от одной базы листа
   for (const q of HS) {
     const axk = axName(q.ax).replace('-', '');
     if (q.soft) continue;
-    if (axk !== R && !centered(q, R)) { const t = onTop(q); rowR(t, q.c[R], hostBase(q, R), CB); exactR[t ? 't' : 'b'].push(q); }
-    if (axk !== U && !centered(q, U)) { const r = onRight(q); rowU(r, q.c[U], hostBase(q, U), CB); exactU[r ? 'r' : 'l'].push(q); }
+    if (axk !== R && !centered(q, R) && !onAx(q.c[R], AXR)) { const t = onTop(q); rowR(t, q.c[R], baseOf(q, R), CB); exactR[t ? 't' : 'b'].push(q); }
+    if (axk !== U && !centered(q, U) && !onAx(q.c[U], AXU)) { const r = onRight(q); rowU(r, q.c[U], baseOf(q, U), CB); exactU[r ? 'r' : 'l'].push(q); }
   }
   // справочный размер от второго края со звёздочкой — к последнему элементу цепочки, если ему ближе до дальнего края
-  for (const sk of ['t', 'b']) { const L = exactR[sk]; if (!L.length) continue; const q = L.reduce((p, x) => Math.abs(x.c[R] - hostBase(x, R)) > Math.abs(p.c[R] - hostBase(p, R)) ? x : p); const g = Math.abs(hostFar(q, R) - q.c[R]); if (g > 1 && g < Math.abs(q.c[R] - hostBase(q, R))) rowR(sk === 't', q.c[R], hostFar(q, R), CB, { star: true }); }
-  for (const sk of ['l', 'r']) { const L = exactU[sk]; if (!L.length) continue; const q = L.reduce((p, x) => Math.abs(x.c[U] - hostBase(x, U)) > Math.abs(p.c[U] - hostBase(p, U)) ? x : p); const g = Math.abs(hostFar(q, U) - q.c[U]); if (g > 1 && g < Math.abs(q.c[U] - hostBase(q, U))) rowU(sk === 'r', q.c[U], hostFar(q, U), CB, { star: true }); }
+  if (!un.frame) for (const sk of ['t', 'b']) { const L = exactR[sk]; if (!L.length) continue; const q = L.reduce((p, x) => Math.abs(x.c[R] - hostBase(x, R)) > Math.abs(p.c[R] - hostBase(p, R)) ? x : p); const g = Math.abs(hostFar(q, R) - q.c[R]); if (g > 1 && g < Math.abs(q.c[R] - hostBase(q, R))) rowR(sk === 't', q.c[R], hostFar(q, R), CB, { star: true }); }
+  if (!un.frame) for (const sk of ['l', 'r']) { const L = exactU[sk]; if (!L.length) continue; const q = L.reduce((p, x) => Math.abs(x.c[U] - hostBase(x, U)) > Math.abs(p.c[U] - hostBase(p, U)) ? x : p); const g = Math.abs(hostFar(q, U) - q.c[U]); if (g > 1 && g < Math.abs(q.c[U] - hostBase(q, U))) rowU(sk === 'r', q.c[U], hostFar(q, U), CB, { star: true }); }
   // гайки под опоры — нежёсткой цепочкой по сторонам
   for (const sk of ['t', 'b']) { const L = HS.filter(q => q.soft && axName(q.ax).replace('-', '') !== R && !centered(q, R) && (onTop(q) === (sk === 't'))); if (L.length) softChain(L.map(q => q.c[R]), baseR, farR, (v, f, col, o) => rowR(sk === 't', v, f, col, o), CB, gabOn(R)); }
   for (const sk of ['l', 'r']) { const L = HS.filter(q => q.soft && axName(q.ax).replace('-', '') !== U && !centered(q, U) && (onRight(q) === (sk === 'r'))); if (L.length) softChain(L.map(q => q.c[U]), baseU, farU, (v, f, col, o) => rowU(sk === 'r', v, f, col, o), CB, gabOn(U)); }
@@ -6731,7 +6867,13 @@ function metalDims(un) {
     const onHostAxis = (x, a) => mains.some(h => h !== x && h.max[a] - h.min[a] > x.max[a] - x.min[a] + 1 && Math.abs((h.min[a] + h.max[a]) / 2 - (x.min[a] + x.max[a]) / 2) <= 1);
     // край трубы, упёртый в другую трубу (штырь от стенки полки — «10»), не подписывается: место даёт та труба и её сечение
     const abuts = (e, a) => mains.some(h => Math.abs(h.max[a] - e) <= 1 || Math.abs(h.min[a] - e) <= 1);
-    for (const x of mains) {
+    // каркас: размер от базы до ОСИ каждой внутренней трубы (одна ось — один размер), крайние трубы — габаритом
+    if (un.frame) for (const x of mains) {
+      const c = x.getCenter(V3()), top = onTop({ c }), right = onRight({ c });
+      if (x.max[R] - x.min[R] < 0.9 * ext && longAx(x) !== R && Math.abs(x.min[R] - b.min[R]) > 1 && Math.abs(x.max[R] - b.max[R]) > 1) rowR(top, c[R], baseR, CT);
+      if (x.max[U] - x.min[U] < 0.9 * extU && longAx(x) !== U && Math.abs(x.min[U] - b.min[U]) > 1 && Math.abs(x.max[U] - b.max[U]) > 1) rowU(right, c[U], baseU, CT);
+    }
+    if (!un.frame) for (const x of mains) {
       const c = x.getCenter(V3()), top = onTop({ c }), right = onRight({ c });
       if (x.max[R] - x.min[R] < 0.9 * ext && longAx(x) !== R && !onHostAxis(x, R)) {
         const e = rtS > 0 ? x.min[R] : x.max[R], e2 = rtS > 0 ? x.max[R] : x.min[R], gL = Math.abs(e - baseR), gR = Math.abs(farR - e2);
@@ -6744,7 +6886,7 @@ function metalDims(un) {
       }
     }
     // платики — только на виде, где видны пластью (ось толщины = ось взгляда); цепочкой по ГОСТ по обеим осям
-    const sh = (un.sheets || []).filter(s => !/заглуш/i.test(s.name) && s.thin === D);
+    const sh = (un.sheets || []).filter(s => !isCap(s) && s.thin === D);
     for (const sk of ['t', 'b']) { const L = sh.filter(s => onTop(s) === (sk === 't')); if (L.length) softChain(L.map(s => s.c[R]), baseR, farR, (v, f, col, o) => rowR(sk === 't', v, f, col, o), CW, gabOn(R)); }
     for (const sk of ['l', 'r']) { const L = sh.filter(s => onRight(s) === (sk === 'r')); if (L.length) softChain(L.map(s => s.c[U]), baseU, farU, (v, f, col, o) => rowU(sk === 'r', v, f, col, o), CW, gabOn(U)); }
     // место выносного элемента — окружность вокруг первого платика с буквой на полке (ГОСТ 2.305 п. 8.2)
@@ -6848,8 +6990,10 @@ function metalDims(un) {
     groups.get(key).list.push(q);
   }
   // платики — без выноски: положение дают размеры, сам платик — увеличенным видом «А»; заглушки — строкой «торцы заглушить»
+  // каркас: число в расшифровке — все такие отверстия детали, не только видимые на этом виде (трибуна: стяжка 16, писалось 6)
+  const gkOf = q => { const nut = /гайк/i.test(q.h.name); return nut ? 'n|' + cleanFast(q.h.name) + '|' + nutSide(q) + '|' + (q.leg || '') : 'h|' + q.h.d + '|' + q.thru + '|' + cleanFast(q.h.name) + '|' + (q.h.cut || ''); };
   for (const [gkey, g] of groups) {
-    if (multi) { if (given.has('N' + gkey)) continue; given.add('N' + gkey); }   // выноска группы — на одном виде
+    if (multi && !un.frame) { if (given.has('N' + gkey)) continue; given.add('N' + gkey); }   // выноска группы — на одном виде (каркас — буква на каждом)
     const q = g.list[0], n = g.list.length, cnt = n > 1 ? n + ' ' + ML('nuts') + ' ' : '';   // одно — без «1 шт.»
     if (g.weld) {
       const txt = [cnt + ML('weld'), q.weld.mat + ', L=' + Math.round(q.weld.l)];
@@ -6867,14 +7011,45 @@ function metalDims(un) {
       // отверстие панели: зенковка над ним — в той же строке; одна зенковка без отверстия — именем паза из модели, без диаметра
       : [(n > 1 ? n + ' ' + ML('holes') + ' ' : '') + (q.h.d > 0 ? '⌀' + fmtN(q.h.d) + ' ' + (q.thru ? ML('thru') : ML('nothru') + ', ' + entry) + (q.h.cut ? ', ' + q.h.cut : '') : q.h.cut || nm)]
         .concat(own ? [] : [ML('under') + ' ' + nm.charAt(0).toLowerCase() + nm.slice(1)]);
+    // каркас: выноски столбиком за рядами не помещаются (трибуна 19.11: 78 мм над видом) — на виде короткая выноска с буквой,
+    // расшифровка — строкой в колонке надписей («Б — 6 отв. ⌀12 насквозь под болт М10х140»). Буквы — после букв платиков
+    if (un.frame) {
+      const L0 = new Set((un.sheets || []).filter(x => !isCap(x)).map(x => x.name + '|' + x.size)).size;
+      const pre = g.nut ? ML('nuts') : ML('holes'), nAll = HSall.filter(x => gkOf(x) === gkey).length;
+      txt[0] = nAll + ' ' + pre + ' ' + txt[0].replace(new RegExp('^' + n + ' ' + pre.replace('.', '\\.') + ' '), '');
+      const ABC = 'АБВГДЕЖИКЛМНПРСТУФЦШЭЮЯ', body = txt.join(' '), lg = un.legend || (un.legend = []);
+      const old = lg.find(s => s.slice(4) === body), letter = old ? old[0] : ABC[(L0 + lg.length) % ABC.length];
+      if (!old) lg.push(letter + ' — ' + body);
+      mnotes.push({ mk: un.u, vk, p: q.c.clone(), dx: onRight(q) ? -1 : 1, dy: onTop(q) ? 1 : -1, ly: 7, txt: [letter] });
+      continue;
+    }
     // выноска уходит за ряды размеров своей стороны; следующая на той же стороне — ниже на высоту предыдущей
     const top = onTop(q), rows = top ? rowsN.t : rowsN.b, sk = top ? 't' : 'b';
     // полка выноски — к середине листа (наружу она уходила за край листа)
     mnotes.push({ mk: un.u, vk, p: q.c.clone(), dx: onRight(q) ? -1 : 1, dy: top ? -1 : 1, ly: 11 + rows * 9 + 5 + (nSide[sk] || 0), txt });
     nSide[sk] = (nSide[sk] || 0) + txt.length * 6.6 + 4;
   }
+  // сборка каркасов: болты стяжки — выноска на пару каркасов («10 шт. Болт М10х140 / стягивает поз. 2 и 2»), один раз на лист
+  if (un.general && un.ties) {
+    const byPair = new Map();
+    for (const t of un.ties) { const key = t.pair + '|' + cleanFast(t.name); if (!byPair.has(key)) byPair.set(key, []); byPair.get(key).push(t); }
+    for (const [key, list] of byPair) {
+      if (given.has('T' + key)) continue; given.add('T' + key);
+      const t0 = list[0], q = { c: t0.a.clone().lerp(t0.e, 0.5) }, txt = [list.length + ' ' + ML('nuts') + ' ' + cleanFast(t0.name), ML('tie') + ' ' + t0.pair];
+      const top = onTop(q), rows = top ? rowsN.t : rowsN.b, sk = top ? 't' : 'b';
+      mnotes.push({ mk: un.u, vk, p: q.c.clone(), dx: onRight(q) ? -1 : 1, dy: top ? -1 : 1, ly: 11 + rows * 9 + 5 + (nSide[sk] || 0), txt });
+      nSide[sk] = (nSide[sk] || 0) + txt.length * 6.6 + 4;
+    }
+  }
   // сами отверстия на виде (в модели их нет — Базис держит их в крепеже): ось и стенки, или кружок с крестом
   (un.marks || (un.marks = {}))[vk] = HSall.map(q => ({ p0: q.p0, p1: q.p1, c: q.c, r: q.h.d / 2, nut: /гайк/i.test(q.h.name) }));
+  if (un.general && un.ties) for (const t of un.ties) un.marks[vk].push({ p0: t.a, p1: t.e, c: t.a.clone().lerp(t.e, 0.5), r: t.d / 2 });
+  // каркас: осевые линии труб, лежащих в плоскости вида (штрихпунктир на 3 мм листа за торцы)
+  if (un.frame && !un.general) for (const x of mains) {
+    const la = longAx(x); if (la === D) continue;
+    const c = x.getCenter(V3()), p0 = c.clone(), p1 = c.clone(); p0[la] = x.min[la]; p1[la] = x.max[la];
+    un.marks[vk].push({ axis: true, p0, p1, c });
+  }
   if (un.detMark && un.detMark.vk === vk) {               // окружность вокруг платика + буква «А» на полке (ГОСТ 2.305 п. 8.2)
     const q = { c: un.detMark.p }, top = onTop(q);
     mnotes.push({ mk: un.u, vk, p: un.detMark.p.clone(), dx: onRight(q) ? -1 : 1, dy: top ? -1 : 1, ly: 11 + (top ? rowsN.t : rowsN.b) * 9 + 5 + (nSide[top ? 't' : 'b'] || 0), txt: ['А'], circ: un.detMark.r / k });
@@ -6924,6 +7099,11 @@ function holeMarkSvg(m, toP, k, exp) {
   const f = v => String(Math.round(v * 100) / 100), a = toP(m.p0), b = toP(m.p1), c = toP(m.c);
   const rp = m.r / drawN * k, sw = exp ? 0.18 : Math.max(1, 0.18 * k), col = m.nut ? '#555555' : '#000000';
   const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  if (m.axis) {                                             // осевая линия трубы каркаса
+    if (L < 1e-6) return '';
+    const ux = (b[0] - a[0]) / L, uy = (b[1] - a[1]) / L, ex = 3 * k;
+    return `<path d="M${f(a[0] - ux * ex)} ${f(a[1] - uy * ex)}L${f(b[0] + ux * ex)} ${f(b[1] + uy * ex)}" stroke="#000000" stroke-width="${f(sw * 0.7)}" stroke-dasharray="${f(6 * k)} ${f(1 * k)} ${f(0.8 * k)} ${f(1 * k)}" fill="none"/>`;
+  }
   if (L > rp * 0.5) {
     const ux = (b[0] - a[0]) / L, uy = (b[1] - a[1]) / L, nx = -uy * rp, ny = ux * rp, ex = 1.5 * k;
     return `<path d="M${f(a[0] + nx)} ${f(a[1] + ny)}L${f(b[0] + nx)} ${f(b[1] + ny)}M${f(a[0] - nx)} ${f(a[1] - ny)}L${f(b[0] - nx)} ${f(b[1] - ny)}" stroke="${col}" stroke-width="${f(sw)}" fill="none"/>` +
@@ -6941,7 +7121,8 @@ const esc = t => String(t).replace(/&/g, '&amp;').replace(/[<]/g, '&lt;').replac
 // (Алексей 28.10: «блок текстовой надписи беру, перетягиваю, он вытягивается, меняется пропорционально»)
 function metalBlockGeo(un, n) {
   const s = (un.blk && un.blk.s) || 1, ls = metalBlockLines(un, n), h = ls.reduce((a, l) => a + (l[1] + 2.4) * s, 0);
-  const x0 = un.blk ? un.blk.x : SHEET_W - 90, y0 = un.blk ? un.blk.y : SHEET_H - 12 - h - 2;
+  const ba = !un.blk && un.blkAuto;                         // каркас: колонка, переставленная раскладкой
+  const x0 = un.blk ? un.blk.x : ba ? ba.x : SHEET_W - 90, y0 = un.blk ? un.blk.y : ba ? ba.y : SHEET_H - 12 - h - 2;
   return { x0, y0, x1: x0 + 86 * s, y1: y0 + h + 6, s, ls };
 }
 function metalBlockRect(un, n) { const g = metalBlockGeo(un, n); return [g.x0, g.y0, g.x1, g.y1]; }
@@ -6954,6 +7135,11 @@ function metalBlockSvg(o, k, ui) {
   for (const [t, h, warn] of G.ls) {
     y += (h + 2.4) * G.s * k;
     s += `<text x="${f(x)}" y="${f(y)}" font-family="${DFONT}" font-size="${f(h * G.s * k)}" fill="${warn ? '#c0392b' : '#000000'}">${esc(t)}</text>`;
+  }
+  // каркас: расшифровка букв отверстий — своим блоком в месте, которое нашла раскладка
+  if (un.frame && !un.general && un.lay && un.lay.leg) {
+    let yy = o[1] + un.lay.leg.y * k;
+    for (const t of legendLines(un, un.lay.leg.w)) { yy += 7.4 * k; s += `<text x="${f(o[0] + un.lay.leg.x * k)}" y="${f(yy)}" font-family="${DFONT}" font-size="${f(5 * k)}" fill="#000000">${esc(t)}</text>`; }
   }
   // увеличенный вид платика «А» в свободном месте листа (Алексей 27.10: на основном виде платик — точка, нечитаемо)
   if (!un.general && un.lay && un.lay.det) s += metalDetailSvg(un, o, k, un.lay.det);
@@ -6990,7 +7176,7 @@ function metalBlockSvg(o, k, ui) {
 function metalDetailSvg(un, o, k, det) {
   const f = v => String(Math.round(v * 100) / 100);
   const groups = new Map();
-  for (const sh of (un.sheets || []).filter(x => !/заглуш/i.test(x.name))) { const key = sh.name + '|' + sh.size; if (!groups.has(key)) groups.set(key, []); groups.get(key).push(sh); }
+  for (const sh of (un.sheets || []).filter(x => !isCap(x))) { const key = sh.name + '|' + sh.size; if (!groups.has(key)) groups.set(key, []); groups.get(key).push(sh); }
   let s = '', y0 = det.y, L = 'А';
   for (const [, list] of groups) {
     const sh = list[0], sz = sh.box.getSize(V3()), [A1, A2] = ['x', 'y', 'z'].filter(a => a !== sh.thin);
@@ -7045,15 +7231,21 @@ function metalBlockLines(un, n) {
   const md = metalData(), page = md.all.indexOf(un) + 1;
   const sz = b => { const s = b.getSize(V3()); return [s.x, s.y, s.z].map(v => Math.round(v)).join('×'); };
   // количество на весь заказ: «Количество изделий» × сколько таких в одном изделии — одним числом, без умножения (Алексей 27.10)
-  const Q = M.qty > 0 ? M.qty : 1, fq = c => c * Q + ' ' + ML('nuts');
+  const Q = un.general && +un.qtyOv > 0 ? +un.qtyOv : M.qty > 0 ? M.qty : 1, fq = c => c * Q + ' ' + ML('nuts');
   // один размер шрифта на всю колонку (5 мм, не меньше), крупнее — только заголовок (Алексей 27.10)
   const F = 5;
   let lines = [[unitTitle(un), 7]];
-  if (un.general) lines.push([ML('orderqty') + ': ' + Q, F]); else lines.push([ML('qty') + ': ' + fq(un.qty || 1), F]);
+  if (un.general) lines.push([ML('orderqty') + ': ' + Q, F]); else lines.push([ML('qty') + ': ' + (un.qtyOv != null ? un.qtyOv : fq(un.qty || 1)), F]);   // вписанное рукой — как есть
   if (un.general) {                                         // спецификация: листы-полуфабрикаты и покупной крепёж (по именам из модели)
     for (const x of md.units) lines.push([x.no + '.  ' + unitTitle(x) + (x.loose ? '' : ' — ' + sz(x.mbox || x.box)) + ' — ' + fq(x.qty || 1), F]);
     const cnt = new Map();
-    for (const x of md.units) for (const h of x.holes) { const n = cleanFast(h.name); if (/^отв/i.test(n)) continue; cnt.set(n, (cnt.get(n) || 0) + (x.qty || 1)); }
+    // сборка каркасов: болт стяжки проходит через два каркаса — считается по самим болтам (не по отверстиям каждого каркаса),
+    // шайбы и гайки — из его комплекта в модели
+    const tieN = new Set((un.ties || []).map(t => cleanFast(t.name)));
+    for (const x of md.units) for (const h of x.holes) { const n = cleanFast(h.name); if (!n || /^отв/i.test(n) || tieN.has(n)) continue; cnt.set(n, (cnt.get(n) || 0) + (x.qty || 1)); }
+    // комплект стяжки — полным именем из модели (без поставщика и артикула): «Гайка М10 6 цб» не сливается с заклёпочной «Гайка М10»
+    const kitName = s => { const w = String(s || '').replace(/^\[[^\]]*\]\s*/, '').trim().split(/\s+/); if (w.length > 1 && w[w.length - 1].length >= 12 && /\d/.test(w[w.length - 1])) w.pop(); return w.join(' '); };
+    if (un.kits) for (let i = 0; i < parts.length; i++) if (M.objs[i] && M.objs[i].k === 'f' && un.kits.has(parts[i].h[0])) { const n = kitName(M.objs[i].n); cnt.set(n, (cnt.get(n) || 0) + 1); }
     for (const x of md.units) for (const L of x.legs || []) { const n = String(L.name).replace(/^\[[^\]]*\]\s*/, '').split(',')[0].trim(); cnt.set(n, (cnt.get(n) || 0) + (x.qty || 1)); }
     for (const [n, c] of cnt) lines.push([n + ' — ' + fq(c), F]);
   }
@@ -7065,7 +7257,7 @@ function metalBlockLines(un, n) {
   // покраска — только если задана (замечание «не задана» — в окне проверки, не на листе)
   if (un.paint) lines.push([ML('paint') + ': ' + un.paint, F]); else if (un.stainless) lines.push([ML('paint') + ': ' + ML('nopaintneed'), F]);
   // торцы — всегда явно: заглушка в модели → заглушить, иначе — не глушить (Алексей 27.10)
-  if (!un.general && un.hasProf) lines.push([(un.sheets || []).some(s => /заглуш/i.test(s.name)) ? ML('capsYes') : ML('capsNo'), F]);   // у детали из листа торцов труб нет
+  if (!un.general && un.hasProf) lines.push([(un.sheets || []).some(s => s.endcap) ? ML('capsWeld') : (un.sheets || []).some(s => /заглуш/i.test(s.name)) ? ML('capsYes') : ML('capsNo'), F]);   // у детали из листа торцов труб нет
   if (un.hasStar) lines.push([ML('refnote'), F]);          // ГОСТ 2.307 п. 4.3: есть «*» — надпись «* Размеры для справок»
   // опоры: на видах два габарита — по металлу и с опорой (Алексей 27.10); масштаб, «лист N из M», «от базы» сняты — их даёт отчёт
   // длинная строка — переносом по словам в ширину колонки (знак ≈ 0,5 высоты шрифта)
@@ -7296,7 +7488,7 @@ function texBuild() {
   root.updateMatrixWorld(true);
   const HL = (M.holes || []).map(h => ({ a: WP(h[0], h[1], h[2]), e: WP(h[3], h[4], h[5]), r: h[6] / 2 }));
   texList = [...by.keys()].sort((a, b) => a - b).map(g => {
-    const panels = by.get(g), boxes = panels.map(i => new THREE.Box3().expandByObject(parts[i].g)), box = new THREE.Box3();
+    const panels = by.get(g), boxes = panels.map(i => partBox(i, false)), box = new THREE.Box3();
     for (const b of boxes) box.union(b);
     // отверстия, что проходят через панель (Алексей 28.10: тело фурнитуры не нужно — на Вияр уходят только отверстия;
     // петля — ⌀35 и два малых, минификс в пласть — ⌀5, шкант — ⌀8): кусок оси внутри панели, не короче 1 мм
@@ -7510,10 +7702,10 @@ function joinBuild() {
     if (!byTop.has(top)) byTop.set(top, []);
     if (byTop.get(top).some(f => f.fr === fr)) continue;
     const fill = pi.map(i => M.objs[i]).find(o => o.k === 'p');
-    const box = pi.reduce((b, i) => b.union(new THREE.Box3().expandByObject(parts[i].g, true)), new THREE.Box3());
+    const box = pi.reduce((b, i) => b.union(partBox(i)), new THREE.Box3());
     const hw = hwAll.filter(q => onFacade(q.b, box)).map(q => q.i);
     // бруски рамки — габаритами: средние (не у края фасада) делят фасад на «фасады-имитации» (050.10, 16.11)
-    const bars = pfI.map(i => new THREE.Box3().expandByObject(parts[i].g, true)), fbox = bars.reduce((b, q) => b.union(q), new THREE.Box3());
+    const bars = pfI.map(i => partBox(i)), fbox = bars.reduce((b, q) => b.union(q), new THREE.Box3());
     // отверстия в фасаде поперёк пласти (чашки петель ⌀35, саморезы) — точки и ось; свои отверстия модели петли (вдоль пласти) мимо
     const fb = box.clone().expandByScalar(0.5), sz = box.getSize(V3()), thin = ['x', 'y', 'z'].reduce((p, q) => sz[q] < sz[p] ? q : p, 'z');
     const holes = (M.holes || []).map(h => ({ a: WP(h[0], h[1], h[2]), e: WP(h[3], h[4], h[5]), r: h[6] / 2 }))
@@ -7528,7 +7720,7 @@ function joinBuild() {
   // Сторона — тонкая ось фасада, знак — от середины изделия к фасаду (фасады снаружи корпуса)
   joinList = []; let n = 0;
   for (const t of [...byTop.keys()].sort((a, b) => a - b)) {
-    const tb = partsUnder(t).reduce((b, i) => b.union(new THREE.Box3().expandByObject(parts[i].g, true)), new THREE.Box3()), tc = tb.getCenter(V3());
+    const tb = partsUnder(t).reduce((b, i) => b.union(partBox(i)), new THREE.Box3()), tc = tb.getCenter(V3());
     const sideOf = f => { const s = f.box.getSize(V3()), thin = ['x', 'y', 'z'].reduce((p, q) => s[q] < s[p] ? q : p, 'z'); return ((f.box.getCenter(V3())[thin] - tc[thin]) < 0 ? '-' : '') + thin; };
     const bySide = new Map();
     for (const f of byTop.get(t)) { const k = sideOf(f); if (!bySide.has(k)) bySide.set(k, []); bySide.get(k).push(f); }
