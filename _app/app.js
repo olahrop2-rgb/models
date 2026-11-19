@@ -1963,7 +1963,7 @@ function wallClick(w, mouse) {
 const ROOM = { groups: [], surfs: [] };
 const ROOM_MAT = {
   wall: new THREE.MeshBasicMaterial({ color: 0xc9d0d8, transparent: true, opacity: 0.32, depthWrite: false, side: THREE.FrontSide }),
-  wallFade: new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, side: THREE.FrontSide }),   // стена без верхней линии — тает кверху
+  wallSoft: new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, side: THREE.DoubleSide }),   // стена замера без верхней линии — тает кверху
   reveal: new THREE.MeshBasicMaterial({ color: 0xc3cad3, transparent: true, opacity: 0.4, depthWrite: false, side: THREE.DoubleSide }),   // откосы окна
   floor: new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, side: THREE.FrontSide }),   // прозрачность — по краю (тает)
   pick: new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, colorWrite: false, side: THREE.FrontSide }),   // потолок — только мишень
@@ -1979,6 +1979,77 @@ function lineKind(c) {
   if (b > 180 && r < 120) return 'blue';
   if (r > 90 && b > 90 && g < 60) return 'purple';
   return 'black';
+}
+// Стены замера другой конторы (Алексей 19.11, трибуна 002_11): верхней чёрной / красной линии нет (верх фиолетовый или
+// никакой), стены бывают наклонные и трапецией (скошенный угол). Стена — плоскость через линию пола и угловую линию,
+// поднимающуюся от её конца («через три отрезка провести плоскость»); форма — выпуклая оболочка всех линий, лежащих в этой
+// плоскости и сцепленных с её линией пола концами (наклонные кромки всех боковых стенок лежат в одной общей плоскости —
+// без сцепки передняя грань выступа 80 мм растягивалась на всю трибуну); допуск 30 мм — замер неровный. Видна с обеих
+// сторон (выступ: две стенки друг к другу), кверху тает.
+function hull2(p) {
+  const q = p.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]), cr = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lo = [], up = [];
+  for (const x of q) { while (lo.length > 1 && cr(lo[lo.length - 2], lo[lo.length - 1], x) <= 0) lo.pop(); lo.push(x); }
+  for (const x of q.slice().reverse()) { while (up.length > 1 && cr(up[up.length - 2], up[up.length - 1], x) <= 0) up.pop(); up.push(x); }
+  return lo.slice(0, -1).concat(up.slice(0, -1));
+}
+function clipPoly(poly, k, lim, keepAbove) {   // выпуклый многоугольник [[a,b]] по линии «координата k = lim»
+  const out = [], ins = p => keepAbove ? p[k] >= lim : p[k] <= lim;
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i], b = poly[(i + 1) % poly.length];
+    if (ins(a)) out.push(a);
+    if (ins(a) !== ins(b)) { const t = (lim - a[k]) / (b[k] - a[k]); out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]); }
+  }
+  return out;
+}
+function softWalls(segs, floor, fy, grp) {
+  const TOL = 30, J = 8, planes = [], covered = new Set();
+  const touch = (a, b) => a.A.distanceTo(b.A) < J || a.A.distanceTo(b.B) < J || a.B.distanceTo(b.A) < J || a.B.distanceTo(b.B) < J;
+  for (const s of floor) {
+    if (covered.has(s)) continue;
+    const d = s.B.clone().sub(s.A); if (d.length() < 20) continue; d.normalize();
+    let C = null, best = 50;
+    for (const t of segs) for (const [p, q] of [[t.A, t.B], [t.B, t.A]]) {
+      if (p.distanceTo(s.A) > J && p.distanceTo(s.B) > J) continue;
+      if (q.y - fy < 200) continue;                        // угловая линия — та, что поднимается от пола
+      const w = q.clone().sub(s.A), off = w.addScaledVector(d, -w.dot(d)).length();
+      if (off > best) { best = off; C = q; }
+    }
+    if (!C) continue;
+    const n = d.clone().cross(C.clone().sub(s.A)).normalize(), c = n.dot(s.A);
+    const inP = t => Math.abs(n.dot(t.A) - c) < TOL && Math.abs(n.dot(t.B) - c) < TOL;
+    const comp = [s], seen = new Set([s]);
+    for (let k = 0; k < comp.length; k++) for (const t of segs) if (!seen.has(t) && inP(t) && touch(comp[k], t)) { seen.add(t); comp.push(t); }
+    for (const t of comp) covered.add(t);
+    planes.push({ n, c, d, comp });
+  }
+  let top = null;
+  const cw = new THREE.Color(0xc9d0d8), A0 = 0.32, N = 10;
+  for (const P of planes) {
+    const pts = [];
+    for (const t of P.comp) pts.push(t.A, t.B);
+    if (pts.length < 3) continue;
+    const u = P.d.clone(), v = P.n.clone().cross(u).normalize(); if (v.y < 0) v.negate();
+    const o = pts[0].clone().addScaledVector(P.n, P.c - P.n.dot(pts[0]));
+    const hull = hull2(pts.map(p => { const w = p.clone().sub(o); return [w.dot(u), w.dot(v)]; }));
+    if (hull.length < 3) continue;
+    const b0 = Math.min(...hull.map(h => h[1])), b1 = Math.max(...hull.map(h => h[1])); if (b1 - b0 < 50) continue;
+    const to3 = h => o.clone().addScaledVector(u, h[0]).addScaledVector(v, h[1]);
+    const yt = Math.max(...hull.map(h => to3(h).y)); if (top === null || yt > top) top = yt;
+    // полосы по высоте: нижние 55 % — как обычная стена, выше тает до нуля у верха
+    const al = b => { const t = (b - b0) / (b1 - b0); return A0 * (t < 0.55 ? 1 : Math.max(0, 1 - (t - 0.55) / 0.45)); };
+    const pos = [], col = [];
+    for (let k = 0; k < N; k++) {
+      const lo = b0 + (b1 - b0) * k / N, hi = b0 + (b1 - b0) * (k + 1) / N;
+      const band = clipPoly(clipPoly(hull, 1, lo, true), 1, hi, false); if (band.length < 3) continue;
+      for (let i = 1; i + 1 < band.length; i++) for (const h of [band[0], band[i], band[i + 1]]) { const p = to3(h); pos.push(p.x, p.y, p.z); col.push(cw.r, cw.g, cw.b, al(h[1])); }
+    }
+    if (!pos.length) continue;
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(col, 4)); g.computeVertexNormals();
+    const m = new THREE.Mesh(g, ROOM_MAT.wallSoft); m.renderOrder = -1; grp.add(m);
+    ROOM.surfs.push({ m, kind: 'wall', n: P.n.clone(), p: o.clone(), g: grp });
+  }
+  return top;
 }
 // низ и верх проёма — одна рамка: в одном месте стены вертикаль от низа до верха, из кусков (фартук делит её); от низа, а не от пола
 function isFramed(P, mids) {
@@ -2058,7 +2129,11 @@ function buildRoom() {
     }
     let cyAll = fy + 2500, gotTop = false;
     const pb = new THREE.Box3();
+    // замер без верхней чёрной / красной линии (другая контора, 19.11, трибуна 002_11) — стены строятся иначе, см. softWalls
+    const softLayer = !segs.some(s => s.hor && (s.kind === 'black' || s.kind === 'red' || s.kind === 'green') && Math.min(s.A.y, s.B.y) > fy + 100);
+    if (softLayer) { const t = softWalls(segs, floor, fy, grp); if (t !== null) { cyAll = t; gotTop = true; } }
     for (const P of planes) {
+      if (softLayer) break;
       const us = [...new Set(P.lines.flatMap(l => [Math.round(l.u0), Math.round(l.u1)]))].sort((a, b) => a - b);
       const mid = P.o.clone().addScaledVector(P.d, ((us[0] || 0) + (us[us.length - 1] || 0)) / 2).setY(fy), nIn = cen.clone().setY(fy).sub(mid);
       const perp = new THREE.Vector3(-P.d.z, 0, P.d.x), inward = perp.multiplyScalar(Math.sign(perp.dot(nIn)) || 1);
@@ -2086,15 +2161,6 @@ function buildRoom() {
         }
         cells.push({ ua, ub, onFloor: cov.some(l => l.floor), onRed: cov.some(l => l.low), hs, top, rawTop });
       }
-      // Верхней линии (чёрной / красной) в плоскости нет — замер другой конторы (19.11, трибуна 002_11: низ красный, углы чёрные,
-      // верх фиолетовый или вовсе без линии). Стена — та же плоскость по линиям пола, высота — до самой высокой точки любой линии,
-      // лежащей в этой плоскости (углы, верх любого цвета), и кверху стена тает (Алексей: «как обрыв, градиентом»).
-      const soft = cells.length && cells.every(c => c.top === null);
-      if (soft) {
-        let hi = null;
-        for (const s of segs) if (offOf(P, s.A) <= 40 && offOf(P, s.B) <= 40) { const y = Math.max(s.A.y, s.B.y); if (y > fy + 100 && (hi === null || y > hi)) hi = y; }
-        if (hi !== null) for (const c of cells) c.top = c.rawTop = hi;
-      }
       cells.forEach((c, k) => {
         if (c.top !== null) return;
         const L = cells.slice(0, k).reverse().find(x => x.top !== null), R = cells.slice(k + 1).find(x => x.top !== null);
@@ -2116,23 +2182,8 @@ function buildRoom() {
         if (top > cyAll || !gotTop) { cyAll = gotTop ? Math.max(cyAll, top) : top; gotTop = true; }
       }
       if (!tri.length) continue;
-      let m;
-      if (soft) {                                // тает кверху: нижние 55 % — как обычная стена, выше — до нуля у верха
-        const pos = [], col = [], cw = new THREE.Color(0xc9d0d8), A0 = 0.32;
-        for (let k = 0; k < tri.length; k += 6) {
-          const q = [tri[k], tri[k + 1], tri[k + 2], tri[k + 5]], y0 = Math.min(...q.map(v => v.y)), y1 = Math.max(...q.map(v => v.y)), ym = y0 + (y1 - y0) * 0.55;
-          for (const [ya, yb, aa, ab] of [[y0, ym, A0, A0], [ym, y1, A0, 0]]) {
-            const r = q.map(v => v.clone().setY(v.y <= y0 + 0.5 ? ya : yb)), al = r.map(v => (Math.abs(v.y - ya) < 0.5 ? aa : ab));
-            for (const i of [0, 1, 2, 0, 2, 3]) { pos.push(r[i].x, r[i].y, r[i].z); col.push(cw.r, cw.g, cw.b, al[i]); }
-          }
-        }
-        const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(col, 4)); g.computeVertexNormals();
-        m = new THREE.Mesh(g, ROOM_MAT.wallFade);
-      } else {
-        const g = new THREE.BufferGeometry().setFromPoints(tri); g.computeVertexNormals();
-        m = new THREE.Mesh(g, ROOM_MAT.wall);
-      }
-      m.renderOrder = -1; grp.add(m);
+      const g = new THREE.BufferGeometry().setFromPoints(tri); g.computeVertexNormals();
+      const m = new THREE.Mesh(g, ROOM_MAT.wall); m.renderOrder = -1; grp.add(m);
       ROOM.surfs.push({ m, kind: 'wall', n: inward.clone().normalize(), p: P.o.clone().setY(fy), g: grp });
       // откосы окна (Алексей 30.10: «откосы тоже создают свою плоскость»): глубина — по линиям ниши поперёк стены, начатым у
       // стены в пределах проёма (030_6: 195 мм до окна); низ, верх и бок, у которого есть такая линия (окно в угол — без бока)
