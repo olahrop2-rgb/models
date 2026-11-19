@@ -2043,7 +2043,7 @@ function buildRoom() {
       }
     }
     for (const s of segs) {
-      if (!s.hor || !(s.kind === 'black' || s.kind === 'red' || s.kind === 'green')) continue;
+      if (!s.hor || !(s.kind === 'black' || s.kind === 'red' || s.kind === 'green' || s.kind === 'purple')) continue;
       const d = s.B.clone().sub(s.A).setY(0), L = d.length(); if (L < 20) continue; d.divideScalar(L);
       for (const P of planes) {
         if (Math.abs(P.d.dot(d)) < 0.995 || offOf(P, s.A) > 40 || offOf(P, s.B) > 40) continue;
@@ -2072,7 +2072,7 @@ function buildRoom() {
       for (let k = 0; k + 1 < us.length; k++) {
         const ua = us[k], ub = us[k + 1]; if (ub - ua < 1) continue;
         const um = (ua + ub) / 2, cov = P.lines.filter(l => l.u0 <= um + 1 && l.u1 >= um - 1);
-        const hl = cov.filter(l => !l.floor && !l.low && l.y > fy + 20).sort((a, b) => a.y - b.y);
+        const hl = cov.filter(l => !l.floor && !l.low && l.kind !== 'purple' && l.y > fy + 20).sort((a, b) => a.y - b.y);
         const hs = []; for (const l of hl) if (!hs.length || l.y - hs[hs.length - 1].y > 5) hs.push(l);
         let top = hs.length ? hs[hs.length - 1].y : null;
         const rawTop = top;
@@ -2080,8 +2080,12 @@ function buildRoom() {
           const clean = hs.filter(l => l.kind === 'black' && l.y > top - 250 && l.y < top - 5);   // чистовой потолок под черновым
           if (hs[hs.length - 1].kind === 'red' && clean.length) top = clean[clean.length - 1].y;
         }
-        cells.push({ ua, ub, onFloor: cov.some(l => l.floor), onRed: cov.some(l => l.low), hs, top, rawTop });
+        // фиолетовая — верх стены, только если ни чёрного, ни красного верха нет во всей плоскости (замер другой конторы, 19.11,
+        // трибуна 002_11: низкая стена 1640 под фермой — верх фиолетовым, чёрные — только углы); у основной фиолетовая — переход материала
+        const pu = cov.filter(l => l.kind === 'purple' && l.y > fy + 20);
+        cells.push({ ua, ub, onFloor: cov.some(l => l.floor), onRed: cov.some(l => l.low), hs, top, rawTop, pTop: pu.length ? Math.max(...pu.map(l => l.y)) : null });
       }
+      if (cells.every(c => c.top === null)) for (const c of cells) if (c.pTop !== null) c.top = c.rawTop = c.pTop;
       cells.forEach((c, k) => {
         if (c.top !== null) return;
         const L = cells.slice(0, k).reverse().find(x => x.top !== null), R = cells.slice(k + 1).find(x => x.top !== null);
