@@ -2061,11 +2061,13 @@ function isFramed(P, mids) {
   });
 }
 function buildRoom() {
-  // линии по слоям помещения («Слой 0», «Слой 0_1»…)
+  // линии по слоям помещения: выгрузка с 21.11 называет их сама (rooml — видимые слои со снятыми галками «учитывать в…»,
+  // у коллег слой помещения назван по-своему); старые страницы — по имени («Слой 0», «Слой 0_1»…)
   const byLayer = new Map();
+  const isRoomL = nm => M.rooml ? M.rooml.includes(nm) : /^слой\s*0/i.test(nm);
   parts.forEach((p, i) => {
     if (!p.isL) return;
-    const top = p.h[p.h.length - 1]; if (!/^слой\s*0/i.test(M.names[top] || '')) return;
+    const top = p.h[p.h.length - 1]; if (!isRoomL(M.names[top] || '')) return;
     const od = M.objs[i], kind = lineKind(od.c), a = od.l;
     if (!byLayer.has(top)) byLayer.set(top, []);
     for (let k = 0; k + 5 < a.length; k += 6) {
