@@ -2778,6 +2778,9 @@ function addDim(a, b, opt) {
     : 'по прямій ' + fmt(a.distanceTo(b)) + ' мм  (ширина ' + fmt(dv.x) + ', висота ' + fmt(dv.y) + ', глибина ' + fmt(dv.z) + ')';
   return dm;
 }
+// удалить рукой: авторазмер листа металла не удаляется, а прячется — перекладка листа и перевыгрузка его не вернут,
+// «показать скрытые размеры» (меню «Металл») — вернёт (ТЗ v3, п. 12)
+function dimDelete(dm) { if (dm.auto === true && dm.id && (dm.mk ?? null) !== null) { dm.hid = true; if (dm === selDim) selDim = null; need(); } else removeDim(dm); }
 function removeDim(dm) { if (dm === selDim) selDim = null; scene.remove(dm.g); dm.el.remove(); dims.splice(dims.indexOf(dm), 1); syncDimBtn(); need(); }
 // оттаскивание: смещение — по одной из двух осей поперёк размера, какая лучше совпадает с движением
 function dragDim(dm, cx, cy, sdx, sdy) {
@@ -3214,7 +3217,7 @@ addEventListener('keydown', e => {
     const ctl = e.ctrlKey || e.metaKey;
     if (ctl && e.code === 'KeyZ') { e.preventDefault(); if (e.shiftKey) drawRedo(); else drawUndo(); return; }
     if (ctl && e.code === 'KeyY') { e.preventDefault(); drawRedo(); return; }
-    if (e.key === 'Delete' && selDim) { pushUndo(); removeDim(selDim); drawOverlay(); return; }
+    if (e.key === 'Delete' && selDim) { pushUndo(); dimDelete(selDim); drawOverlay(); return; }
     if (e.key === 'Delete' && selSec) { secAct('del', selSec); return; }
   if (e.key === 'Delete' && selNote) { pushUndo(); noteDel(selNote); return; }
     if (e.key === 'Delete' && metalSelV && metalCur !== null) { const un = metalData().all.find(x => x.u === metalCur); if (un) metalDelView(un, metalSelV); return; }
@@ -4768,7 +4771,8 @@ function perpAxis(axis) { const { R, U } = viewAxes(); return AX[axis === R ? U 
 function viewKey() { const d = viewDir(); return [d.x, d.y, d.z].map(v => Math.round(v * 100)).join(','); }
 function flags() { const k = viewKey(); return autoFlags[k] || (autoFlags[k] = { mod: false, all: false }); }
 // размер принадлежит виду, на котором поставлен; старые (без вида) — если лежат в плоскости вида
-function dimHere(dm) {
+function dimHere(dm, any) {
+  if (dm.hid && any !== true) return false;                  // скрытый авторазмер листа металла (удалить = скрыть) — не рисуется, но живёт
   if ((dm.mk ?? null) !== metalCur) return false;           // размеры листа металла — только на своём листе (и наоборот)
   // лист «с фасадами» и лист «без фасадов» — у каждого свои размеры (габариты на листе без фасадов не повторяются)
   if (dm.fs !== undefined && dm.fs !== hideFac) return false;
@@ -5101,7 +5105,7 @@ function wireOverlay() {
     e.preventDefault(); e.stopPropagation(); selSec = null;
     if (gr) { dr = { dm: selDim, kind: gr, x: e.clientX, y: e.clientY, moved: false }; return; }
     const dm = dims[+di]; if (!dm) return;
-    if (e.button === 2) { pushUndo(); removeDim(dm); drawOverlay(); return; }
+    if (e.button === 2) { pushUndo(); dimDelete(dm); drawOverlay(); return; }
     selDim = dm; dr = { dm, kind: 'm', x: e.clientX, y: e.clientY, moved: false }; drawOverlay();
   });
   sv.addEventListener('contextmenu', e => e.preventDefault());
@@ -5714,7 +5718,7 @@ function boxTools(all) {
 }
 function autoDims() {
   const F = flags();
-  for (const dm of dims.filter(q => q.auto && q.auto !== 'gab' && dimHere(q))) removeDim(dm);
+  for (const dm of dims.filter(q => typeof q.auto === 'string' && q.auto !== 'gab' && dimHere(q))) removeDim(dm);   // только свои (mod / all): авторазмеры листа металла (auto: true) команда не стирает
   if (!F.mod && !F.all) { drawOverlay(); return; }
   const B = unitBoxes(); if (!B.length) { toast('на виде нет модулей'); return; }
   const all = new THREE.Box3(); B.forEach(b => all.union(b));
@@ -5752,7 +5756,8 @@ function gabCommit() {
 const undoS = [], redoS = [];
 function stateNow() {
   // mk — чей лист: без него отмена отдавала размеры и сечения всех листов тому, что открыт (тема 60, 11.11)
-  return { dims: dims.map(d => ({ a: d.a.toArray(), b: d.b.toArray(), axis: d.axis, off: d.off.toArray(), label: d.label, text: d.text, vdir: d.vdir ? d.vdir.toArray() : null, auto: d.auto, chain: d.chain, fs: d.fs, mk: d.mk ?? null, ang: d.ang ? { c: d.ang.c.toArray(), p: d.ang.p.toArray() } : null })),
+  return { dims: dims.map(d => ({ a: d.a.toArray(), b: d.b.toArray(), axis: d.axis, off: d.off.toArray(), label: d.label, text: d.text, vdir: d.vdir ? d.vdir.toArray() : null, auto: d.auto, chain: d.chain, fs: d.fs, mk: d.mk ?? null, ang: d.ang ? { c: d.ang.c.toArray(), p: d.ang.p.toArray() } : null,
+                                  x: { id: d.id, hid: d.hid, col: d.col, fsz: d.fsz, stag: d.stag, off0: d.off0 ? d.off0.toArray() : null, text0: d.text0 } })),
            ph: parts.map(p => p.hidden ? '1' : '0').join(''), nh: Object.keys(nodes).filter(k => nodes[k].hidden), fac: hideFac, af: JSON.stringify(autoFlags),
            secs: secs.map(q => ({ a: q.a.toArray(), b: q.b.toArray(), s: q.s, vdir: q.vdir.toArray(), fs: q.fs, letter: q.letter, sN: q.sN, rot: q.rot, pos: q.pos.slice(), pi: q.pi, mk: q.mk ?? null })),
            notes: mnotes.filter(n => n.hand).map(n => Object.assign({}, n, { p: n.p.toArray(), q: n.q.slice(), txt: n.txt.slice() })) };   // выноски рукой (тема 60)
@@ -5764,6 +5769,7 @@ function restoreState(s) {
   easyDims.length = 0; partDims.length = 0; gabDims.length = 0;
   for (const q of s.dims) {
     const dm = addDim(new THREE.Vector3().fromArray(q.a), new THREE.Vector3().fromArray(q.b), { label: q.label, text: q.text, fs: q.fs, mk: q.mk === undefined ? undefined : q.mk });
+    if (q.x) { for (const k of ['id', 'hid', 'col', 'fsz', 'stag', 'text0']) if (q.x[k] !== undefined) dm[k] = q.x[k]; if (q.x.off0) dm.off0 = new THREE.Vector3().fromArray(q.x.off0); }
     dm.axis = q.axis; dm.off = new THREE.Vector3().fromArray(q.off); dm.vdir = q.vdir ? new THREE.Vector3().fromArray(q.vdir) : null; dm.auto = q.auto; dm.chain = q.chain;
     if (q.ang) dm.ang = { c: new THREE.Vector3().fromArray(q.ang.c), p: new THREE.Vector3().fromArray(q.ang.p) };
     buildDim(dm);
@@ -6217,7 +6223,7 @@ function ctxAct(k, dm) {
   if (k === 'e_text') { ctxEdit = true; ctxFill(dm, dimPrims(dm, toScr, pxPerPaper())); placeCtx(); return; }
   pushUndo();
   if (k === 'e_reset') { dm.text = null; ctxFill(dm); }
-  if (k === 'e_del') removeDim(dm);
+  if (k === 'e_del') dimDelete(dm);
   if (k === 'e_delchain') for (const o of dims.filter(o => o.chain === dm.chain && dimHere(o))) removeDim(o);
   drawOverlay(); syncPanel();
 }
@@ -6519,18 +6525,26 @@ function metalBuild() {
     const sig = (x, f) => { const c = x.mbox.getCenter(V3()); return [x.ctr, x.mats.join(','), ...x.boxes.map(bb => {
       const xs = [(bb.min.x - c.x) * f[0], (bb.max.x - c.x) * f[0]].sort((p, q) => p - q), zs = [(bb.min.z - c.z) * f[1], (bb.max.z - c.z) * f[1]].sort((p, q) => p - q);
       return [xs[0], bb.min.y - c.y, zs[0], xs[1], bb.max.y - c.y, zs[1]].map(v => Math.round(v * 2)).join(','); }).sort()].join('|'); };
-    const seenU = new Map();
+    // Одинаковые — по ВСЕМ параметрам, отверстия и гайки тоже (Алексей 23.11, Kw1: две рамки 800 с разной присадкой слились в лист
+    // «5 отв. + гайка» — «как могут быть одинаковые, если отверстия разные? нельзя сливать»). Универсальный лист со всеми
+    // отверстиями экземпляров — только у каркаса от 20 труб (трибуна, принято 19.11).
+    const seenU = new Map();                                 // форма → листы с этой формой (с разной присадкой их несколько)
+    const mapTo = (x, k, f) => { const ci = x.mbox.getCenter(V3()), ck = k.mbox.getCenter(V3()); return p => new THREE.Vector3(ck.x + (p.x - ci.x) * f[0], ck.y + (p.y - ci.y), ck.z + (p.z - ci.z) * f[1]); };
+    const sameHoles = (x, k, f) => { if (x.tubes.length >= 20) return true; if (x.holes.length !== k.holes.length) return false; const m = mapTo(x, k, f);
+      return x.holes.every(h => { const a = m(h.a), e = m(h.e); return k.holes.some(q => q.d === h.d && q.name === h.name && q.a.distanceTo(a) < 1.5 && q.e.distanceTo(e) < 1.5); }); };
     for (let i = units.length - 1; i >= 0; i--) {
-      const fi = FL.findIndex(f => seenU.has(sig(units[i], f))), s = sig(units[i], FL[0]);
+      const s = sig(units[i], FL[0]); let fi = -1, kk = null;
+      for (let q = 0; q < FL.length && !kk; q++) { const c = (seenU.get(sig(units[i], FL[q])) || []).find(k => sameHoles(units[i], k, FL[q])); if (c) { kk = c; fi = q; } }
       if (fi >= 0) {
-        const k = seenU.get(sig(units[i], FL[fi])), f = FL[fi], ci = units[i].mbox.getCenter(V3()), ck = k.mbox.getCenter(V3());
+        const k = kk, f = FL[fi], ci = units[i].mbox.getCenter(V3()), ck = k.mbox.getCenter(V3());
         const map = p => new THREE.Vector3(ck.x + (p.x - ci.x) * f[0], ck.y + (p.y - ci.y), ck.z + (p.z - ci.z) * f[1]);
+        (k.same || (k.same = [k.u])).push(units[i].u);         // узлы всех экземпляров листа — их обозначения из модели
         for (const h of units[i].holes) {
           const a = map(h.a), e = map(h.e);
           if (!k.holes.some(x => x.d === h.d && x.a.distanceTo(a) < 1.5 && x.e.distanceTo(e) < 1.5)) k.holes.push(Object.assign({}, h, { a, e }));
         }
         k.qty = (k.qty || 1) + 1; k.allbox.union(units[i].wmbox); k.inst.push(...units[i].inst); k.instBox.push(units[i].wmbox); units.splice(i, 1);
-      } else { units[i].allbox = units[i].wmbox.clone(); units[i].instBox = [units[i].wmbox]; seenU.set(s, units[i]); }
+      } else { units[i].allbox = units[i].wmbox.clone(); units[i].instBox = [units[i].wmbox]; if (!seenU.has(s)) seenU.set(s, []); seenU.get(s).push(units[i]); }
     } }
   // детали прямо в полуфабрикате-металле, мимо вложенных (Br3: две трубы 2560 в металокаркасе) — лист на группу одинаковых
   const loose = new Map();
@@ -6651,12 +6665,98 @@ const RIGHT_COL = 92, GAP = 34;                             // мм листа: 
 // Аксонометрия — в самое большое оставшееся место, соразмерно видам: не меньше 70 мм (иначе масштаб мельче), не больше 150.
 // Масштаб — самый крупный из ряда, при котором всё это помещается. Размеры строятся здесь же (ряды зависят от масштаба).
 const ISO_MIN = 70, ISO_MAX = 150, EDGE_M = 8, VGAP = 6, DET_S = 58;   // DET_S — сторона увеличенного вида платика (мм листа)
+// ---------- правки поверх автоматики (ТЗ чертежей металла v3, п. 12; 23.11) ----------
+// Автоматический лист не хранится — строится из модели. Хранится только то, что человек поменял: место и состав видов,
+// колонка и аксонометрия, скрытые / сдвинутые / переписанные авторазмеры, свои размеры, сечения, выноски. Ключ листа —
+// постоянный номер Базиса (UID узла из выгрузки, M.nuid): правки переживают перевыгрузку. Страница без M.nuid (выгрузка
+// до 23.11) правок листов металла не помнит. Файл — тот же, что у «своих листов» (поле metal).
+const OV = { sheets: {}, loaded: false };
+function sheetKey(un) {
+  if (!un || un.free || !M.nuid || !M.nuid.length) return null;
+  const U = i => (typeof i === 'number' && i >= 0 && M.nuid[i]) || 0;
+  if (un.general) return un.assembly ? 'asm' : (U(un.top) ? 'g:' + U(un.top) : null);
+  if (!un.tubeDet && U(un.u)) return 'u:' + U(un.u);
+  return 'n:' + (un.tubeOf !== undefined && U(un.tubeOf) ? U(un.tubeOf) + ':' : '') + (un.name || '');   // листы труб каркаса, группы одинаковых труб — по имени
+}
+// имя авторазмера: вид + ось + что меряет (концы от угла габарита листа, шаг 0,5 мм) — одно и то же при каждой перестройке
+function ovName(un, dm, vk, gab) {
+  const o = (un.mbox || un.box).min, r = v => Math.round(v * 2) / 2, p = q => [r(q.x - o.x), r(q.y - o.y), r(q.z - o.z)].join(',');
+  let id = vk + '|' + dm.axis + (gab ? 'g' : '') + '|' + p(dm.a) + '|' + p(dm.b);
+  const n = dims.filter(d => d !== dm && d.mk === un.u && d.id && (d.id === id || d.id.startsWith(id + '#'))).length; if (n) id += '#' + n;
+  dm.id = id;
+}
+// первый заход на лист: поднять его правки из файла (виды, блоки, свои размеры / сечения / выноски)
+function ovInit(un) {
+  if (un.ovInit || !OV.loaded) return;
+  const sk = sheetKey(un); if (!sk) return;
+  un.ovInit = true;
+  const e = OV.sheets[sk]; if (!e) return;
+  const J = x => JSON.parse(JSON.stringify(x)), V = a => new THREE.Vector3().fromArray(a);
+  if (e.vpos) un.vpos = J(e.vpos); if (e.vdel) un.vdel = e.vdel.slice(); if (e.extra) un.extra = e.extra.slice(); if (e.forceN) un.forceN = e.forceN;
+  if (e.blk) un.blk = J(e.blk); if (e.isoOv) un.isoOv = J(e.isoOv);
+  const H = e.hand || {};
+  for (const q of H.dims || []) {
+    if (q.chain) chainSeq = Math.max(chainSeq, q.chain);
+    const dm = addDim(V(q.a), V(q.b), { label: q.label, text: q.text, fs: q.fs, mk: un.u, vdir: q.vdir ? V(q.vdir) : null });
+    dm.axis = q.axis; dm.off = V(q.off); dm.chain = q.chain; if (q.ang) dm.ang = { c: V(q.ang.c), p: V(q.ang.p) };
+    buildDim(dm); if (dm.g) dm.g.visible = false;
+  }
+  for (const q of H.secs || []) secs.push(Object.assign({}, q, { a: V(q.a), b: V(q.b), vdir: V(q.vdir), pos: q.pos.slice(), mk: un.u }));
+  for (const n of H.notes || []) mnotes.push(Object.assign({}, n, { mk: un.u, p: V(n.p), q: n.q.slice(), txt: n.txt.slice(), hand: true }));
+}
+// запомнить правки листа в OV (перед перестройкой размеров и перед записью файла). Смещение размера — в мм бумаги.
+function ovCapture(un) {
+  const sk = sheetKey(un); if (!sk || !un.ovInit) return;
+  const e = OV.sheets[sk] || (OV.sheets[sk] = {}), n = (un.lay && un.lay.n) || drawN || 1, A = v => v.toArray().map(x => Math.round(x * 1000) / 1000);
+  const dd = e.dims || (e.dims = {});
+  for (const dm of dims) {
+    if (dm.mk !== un.u || dm.auto !== true || !dm.id || !dm.off0) continue;   // off0 — авторазмер уже прошёл наложение правок
+    const d = {};
+    if (dm.hid) d.h = 1;
+    if (dm.off.distanceTo(dm.off0) > 0.05 * n) d.o = A(dm.off.clone().multiplyScalar(1 / n));
+    if ((dm.text ?? null) !== (dm.text0 ?? null)) d.t = dm.text ?? null;
+    if (Object.keys(d).length) dd[dm.id] = d; else delete dd[dm.id];
+  }
+  for (const k of ['vpos', 'vdel', 'extra', 'forceN', 'blk', 'isoOv']) { const v = un[k]; if (v && (!Array.isArray(v) || v.length)) e[k] = JSON.parse(JSON.stringify(v)); else delete e[k]; }
+  e.hand = {
+    dims: dims.filter(d => d.mk === un.u && !d.auto).map(d => ({ a: A(d.a), b: A(d.b), axis: d.axis, off: A(d.off), label: d.label, text: d.text, vdir: d.vdir ? A(d.vdir) : null, chain: d.chain, fs: d.fs, ang: d.ang ? { c: A(d.ang.c), p: A(d.ang.p) } : null })),
+    secs: secs.filter(q => q.mk === un.u).map(q => ({ a: A(q.a), b: A(q.b), s: q.s, vdir: A(q.vdir), fs: q.fs, letter: q.letter, sN: q.sN, rot: q.rot, pos: q.pos.slice(), pi: q.pi })),
+    notes: mnotes.filter(q => q.hand && q.mk === un.u).map(q => Object.assign({}, q, { p: A(q.p), q: q.q.slice(), txt: q.txt.slice() })) };
+  if (!e.hand.dims.length && !e.hand.secs.length && !e.hand.notes.length) delete e.hand;
+  if (!Object.keys(dd).length) delete e.dims;
+  e.name = unitTitle(un);
+  if (Object.keys(e).length <= 1) delete OV.sheets[sk];
+}
+// наложить правки на только что построенные авторазмеры текущего вида
+function ovApply(un) {
+  const sk = sheetKey(un), e = sk && OV.sheets[sk], dd = (e && e.dims) || {}, n = (un.lay && un.lay.n) || drawN || 1;
+  for (const dm of dims) {
+    if (dm.mk !== un.u || dm.auto !== true || !dm.id || dm.off0) continue;
+    dm.off0 = dm.off.clone(); dm.text0 = dm.text ?? null;
+    const d = un.ovInit ? dd[dm.id] : null; if (!d) continue;
+    if (d.h) dm.hid = true;
+    if (d.o) dm.off = new THREE.Vector3().fromArray(d.o).multiplyScalar(n);
+    if (d.t !== undefined) dm.text = d.t;
+    buildDim(dm);
+  }
+}
+// правки, чей размер после перевыгрузки не нашёлся (отверстие передвинули / убрали) — не пропадают молча: строка в замечаниях
+function ovLost(un) {
+  const sk = sheetKey(un), e = sk && OV.sheets[sk]; if (!e || !e.dims || !un.ovInit || !un.lay) return [];
+  const vks = new Set(dims.filter(d => d.mk === un.u && d.auto === true && d.id).map(d => d.id.split('|')[0])), have = new Set(dims.filter(d => d.mk === un.u && d.id).map(d => d.id));
+  return Object.keys(e.dims).filter(id => vks.has(id.split('|')[0]) && !have.has(id));   // только виды, которые уже построены
+}
+function ovHidden(un) { return dims.filter(d => d.mk === un.u && d.hid); }
+function ovUnhide(un) { pushUndo(); for (const dm of ovHidden(un)) dm.hid = false; drawOverlay(); }
+function ovCaptureAll() { if (!metal) return; for (const un of metal.units) ovCapture(un); for (const g in metal.views) for (const un of metal.views[g].gen || []) ovCapture(un); }
 function metalClear(un) {                                   // автоматические размеры листа; поставленные рукой — остаются
+  ovCapture(un);
   for (const dm of dims.filter(d => d.mk === un.u && d.auto)) removeDim(dm);
   for (let i = mnotes.length - 1; i >= 0; i--) if (mnotes[i].mk === un.u && !mnotes[i].hand) mnotes.splice(i, 1);
   un.given = new Set(); un.marks = {};
 }
-function metalLayout(un) {
+function metalLayout(un) { ovInit(un); return metalLayout0(un); }
+function metalLayout0(un) {
   if (un.free) return freeLayout(un);
   if (un.svgSheet) { un.vs = ['front']; un.multi = false; return { n: un.tsc || tubeScale(un.tg), views: [{ v: 'front', px: SHEET_W / 2, py: SHEET_H / 2, gw: 0, gh: 0, pad: { l: 0, t: 0, r: 0, b: 0 } }], iso: null, occ: [], det: (un.sheets || []).length ? { x: SHEET_W - 112, y: 124, s: 58 } : null }; }   // лист труб — рисунок по данным
   // каркас из 20+ труб (трибуна 002_11: 21 и 31; принятый стол St2 — 18) — сразу режим «каркас» (Алексей 19.11)
@@ -6887,7 +6987,8 @@ function partKey(i) {
 let freeLoaded = false, freeSaved = '', freeSaveTm = null;
 function freeState() {
   const ids = new Set(freeUnits.map(x => x.u)), A = v => v.toArray().map(x => Math.round(x * 1000) / 1000);
-  return JSON.stringify({ v: 1, title: M.title || '', seq: freeSeq,
+  ovCaptureAll();
+  return JSON.stringify({ v: 1, title: M.title || '', seq: freeSeq, metal: OV.sheets,
     sheets: freeUnits.map(x => ({ u: x.u, name: x.name, vs: x.vs, vpos: x.vpos || null, forceN: x.forceN || 0, keys: x.pi.map(partKey), pi: x.pi })),
     dims: dims.filter(d => ids.has(d.mk)).map(d => ({ mk: d.mk, a: A(d.a), b: A(d.b), axis: d.axis, off: A(d.off), label: d.label, text: d.text, vdir: d.vdir ? A(d.vdir) : null, chain: d.chain, fs: d.fs, ang: d.ang ? { c: A(d.ang.c), p: A(d.ang.p) } : null })),
     secs: secs.filter(q => ids.has(q.mk)).map(q => ({ mk: q.mk, a: A(q.a), b: A(q.b), s: q.s, vdir: A(q.vdir), fs: q.fs, letter: q.letter, sN: q.sN, rot: q.rot, pos: q.pos.slice(), pi: q.pi })),
@@ -6903,14 +7004,27 @@ function freeSaveSoon() {
     catch (e) { console.warn('свои листы не записались:', e.message); }
   }, 1000);
 }
+// правки поднялись позже, чем открыли лист металла (чтение файла идёт через сервер) — лист строится заново уже с правками
+function ovReopen() {
+  if (!metal) return;
+  const all = metal.units.slice(); for (const g in metal.views) all.push(...(metal.views[g].gen || []));
+  let again = false;
+  for (const un of all) {
+    const sk = sheetKey(un); if (!sk || un.ovInit) continue;
+    if (!OV.sheets[sk] || !un.lay) { if (un.lay) un.ovInit = true; continue; }   // правок у листа нет — с этого места он их запоминает
+    metalClear(un); un.lay = null; if (un.u === metalCur) again = true;
+  }
+  if (again) metalShow(metalCur);
+}
 async function freeLoad() {
   if (!LOCAL || freeLoaded) return;
   let txt = '';
   try { txt = (await srv('/draw/state', { dir: FREE_DIR, name: freeFile() })).data || ''; }
   catch (e) { console.warn('свои листы не прочитались:', e.message); return; }   // старый сервер / нет сервера — листы просто не помнятся
-  freeLoaded = true;
-  if (!txt.trim()) { freeSaved = freeState(); return; }
+  freeLoaded = true; OV.loaded = true;
+  if (!txt.trim()) { freeSaved = freeState(); ovReopen(); return; }
   let st; try { st = JSON.parse(txt); } catch (e) { console.warn('файл своих листов испорчен'); return; }
+  OV.sheets = st.metal || {};
   root.updateMatrixWorld(true);
   const byKey = new Map(); parts.forEach((p, i) => { const k = partKey(i); if (!byKey.has(k)) byKey.set(k, i); });
   const lost = [], um = new Map();                          // um — прежний номер листа → нынешний (лист успели сделать до чтения файла)
@@ -6934,6 +7048,7 @@ async function freeLoad() {
   }
   for (const q of st.secs || []) if (ok.has(q.mk)) secs.push({ a: V(q.a), b: V(q.b), s: q.s, vdir: V(q.vdir), fs: q.fs, letter: q.letter, sN: q.sN, rot: q.rot, pos: q.pos.slice(), pi: q.pi, mk: q.mk });
   for (const n of st.notes || []) if (ok.has(n.mk)) mnotes.push({ mk: n.mk, vk: n.vk, p: V(n.p), pi: n.pi, q: n.q.slice(), txt: n.txt.slice(), hand: true });
+  ovReopen();
   freeSaved = freeState();
   if (freeUnits.length) toast(ML('f_loaded') + ': ' + freeUnits.length + (lost.length ? '. ' + ML('f_lost') + ': ' + lost.join(', ') : ''));
   syncPanel(); drawOverlay();
@@ -7179,9 +7294,10 @@ function metalOff() {
   for (const p of parts) p.hidden = false; for (const k in nodes) nodes[k].hidden = false;
   applyVis(); renderTree(); setView('front');
 }
-function metalDims(un) {
+function metalDims(un) { ovCapture(un); metalDims0(un); ovApply(un); }
+function metalDims0(un) {
   const vk = viewKey();                                     // размеры, выноски и отверстия — свои у каждого вида
-  for (const dm of dims.filter(d => d.mk === un.u && d.auto && dimHere(d))) removeDim(dm);
+  for (const dm of dims.filter(d => d.mk === un.u && d.auto && dimHere(d, true))) removeDim(dm);
   for (let i = mnotes.length - 1; i >= 0; i--) if (mnotes[i].mk === un.u && mnotes[i].vk === vk && !mnotes[i].hand) mnotes.splice(i, 1);
   if (un.svgSheet) { un.padNow = { l: 0, t: 0, r: 0, b: 0 }; un.lastRows = 0; un.marks = {}; drawOverlay(); return; }   // лист труб — без размеров камерой
   const { R, U } = viewAxes(), b = un.mbox || un.box, k = drawN, ROW = 9 * k, FIRST = 11 * k;
@@ -7352,7 +7468,7 @@ function metalDims(un) {
   // шрифт 5 (ряд ГОСТ 2.304); числа соседних рядов с одной серединой — в шахматном порядке (ГОСТ 2.307 п. 5.26)
   const mids = [];
   const put = (a, bb, axis, offV, gab, col, text) => {
-    const dm = addDim(a, bb, { mk: un.u, auto: true, col: gab ? '#a12a2a' : (un.frame || un.tubeDet) ? CT : col, fsz: 5 }); dm.axis = axis; dm.off = offV; if (text) dm.text = text;   // каркас и его трубы — без синих / оранжевых (Алексей 19.11)
+    const dm = addDim(a, bb, { mk: un.u, auto: true, col: gab ? '#a12a2a' : (un.frame || un.tubeDet) ? CT : col, fsz: 5 }); dm.axis = axis; dm.off = offV; if (text) dm.text = text; ovName(un, dm, vk, gab);   // каркас и его трубы — без синих / оранжевых (Алексей 19.11)
     const m = (a[axis] + bb[axis]) / 2, near = mids.filter(z => z.axis === axis && Math.abs(z.m - m) < 14 * k);
     if (near.length) dm.stag = near.length % 2 ? 1 : -1; mids.push({ axis, m });
     buildDim(dm);
@@ -7979,6 +8095,7 @@ function metalChecks() {
       }
     }
   }
+  for (const un of md.own) { const lost = ovLost(un); if (lost.length) out.push(unitTitle(un) + ': ' + (dLang === 'uk' ? 'загубилися правки розмірів — елемент змінено або видалено з моделі' : 'потерялись правки размеров — элемент изменён или удалён из модели') + ' (' + lost.length + ')'); }
   return out;
 }
 // окно со списком замечаний (или «замечаний нет»)
@@ -8030,7 +8147,7 @@ async function metalPdf(suffix) {
   }
 }
 // для самопроверки в невидимом браузере: данные, лист, размеры и выноски текущего листа
-window.__metal = { data: () => metalData(), show: (u, vi) => metalShow(u, vi), off: () => metalOff(),
+window.__metal = { data: () => metalData(), ov: () => OV, key: u => sheetKey(metalData().all.find(x => x.u === u)), ids: () => dims.filter(d => d.mk === metalCur && d.id).map(d => [d.id, d.hid ? 1 : 0, Math.round(d.off.length() * 10) / 10]), hide: id => { const d = dims.find(q => q.mk === metalCur && q.id === id); if (d) { pushUndo(); dimDelete(d); drawOverlay(); } return !!d; }, unhide: () => ovUnhide(metalData().all.find(x => x.u === metalCur)), state: () => freeState(), auto: () => autoDims(), undo: () => drawUndo(), lost: () => metalData().own.map(u => [u.name, ovLost(u)]).filter(x => x[1].length), show: (u, vi) => metalShow(u, vi), off: () => metalOff(),
   views: () => { const un = metalData().all.find(x => x.u === metalCur); return un ? { act: un.actV, n: drawN, stat: (un.stat || []).map(s => s.v), v: metalViews(un).map(w => [w.v, Math.round(w.px), Math.round(w.py)]) } : null; },
   move: (v, dx, dy) => { const un = metalData().all.find(x => x.u === metalCur), P = {}; for (const w of metalViews(un)) P[w.v] = [w.px, w.py]; metalDragView(un, v, P, dx, dy); drawOverlay(); },
   sheet: () => { const un = metalData().all.find(x => x.u === metalCur), av = un.actV, s = metalSheetSvg(un); metalBackTo(un.u, av); return s; },
@@ -8051,6 +8168,7 @@ function metalMenu(b) {
   const exBtns = back + (cur ? ['bottom', 'back', 'right'].filter(v => !(cur.vdel || []).includes(v)).map(v => `<button data-mv="${v}" class="${(cur.extra || []).includes(v) ? 'on' : ''}"><span>${esc('+ ' + ML('m_view') + ' ' + ML('v_' + v))}</span></button>`).join('') : '');
   el.innerHTML = grpBtns + `<button data-mu="pdf"><span>${esc(ML('m_pdf'))}</span></button><button data-mu="rep"><span>${esc(ML('m_rep'))}</span></button><button data-mu="chk"><span>${esc(ML('m_chk'))}</span></button>` +
     md.own.map(x => `<button data-mu="${x.u}" class="${metalCur === x.u ? 'on' : ''}"><span>${esc(unitTitle(x))}</span></button>`).join('') + exBtns +
+    (cur && ovHidden(cur).length ? `<button data-mu="unhide"><span>${esc((dLang === 'uk' ? 'Показати приховані розміри' : 'Показать скрытые размеры') + ' (' + ovHidden(cur).length + ')')}</span></button>` : '') +
     `<button data-mu="off"><span>${esc(ML('m_off'))}</span></button>`;
   el.querySelectorAll('[data-mv]').forEach(q => { q.onclick = e => {
     e.stopPropagation(); closeFly();
@@ -8067,7 +8185,7 @@ function metalMenu(b) {
   }; });
   el.querySelectorAll('[data-mu]').forEach(q => { q.onclick = e => {
     e.stopPropagation(); closeFly();
-    const v = q.dataset.mu; if (v === 'off') metalOff(); else if (v === 'pdf') metalPdf(); else if (v === 'rep') metalReport(); else if (v === 'chk') metalCheckBox(metalChecks()); else metalShow(+v);
+    const v = q.dataset.mu; if (v === 'unhide') ovUnhide(cur); else if (v === 'off') metalOff(); else if (v === 'pdf') metalPdf(); else if (v === 'rep') metalReport(); else if (v === 'chk') metalCheckBox(metalChecks()); else metalShow(+v);
   }; });
   el.classList.add('show');
   const r = b.getBoundingClientRect();
