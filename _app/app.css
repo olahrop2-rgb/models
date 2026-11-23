@@ -410,3 +410,5 @@ html.draw body, html.draw.dlines body { background: transparent; color: var(--rb
 #dsyms button { width: 24px; height: 24px; border: 1px solid transparent; background: none; border-radius: 4px; cursor: pointer; font: 15px system-ui, sans-serif; color: #222; padding: 0; }
 #dsyms button:hover { background: #eef3fb; border-color: #c9d2dc; }
 #dsyms button.sep { margin-right: 7px; }
+/* выбран инструмент — блоки листа не хватаются, щелчки идут инструменту */
+#dsvg.tooling .bh, #dsvg.tooling .vh, #dsvg.tooling .gr4, #dsvg.tooling [data-vw], #dsvg.tooling [data-vws], #dsvg.tooling [data-vg], #dsvg.tooling [data-vgs], #dsvg.tooling [data-b] { pointer-events: none !important; }

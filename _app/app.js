@@ -3830,7 +3830,20 @@ function ledFacing(s) {
     o.copy(s.ctr).addScaledVector(s.n, sign * 0.1); s.p.g.localToWorld(o);
     rc.set(o, d); rc.near = 0; rc.far = 40; const h = rc.intersectObjects(others, false)[0]; return h ? h.distance : 1e9;
   };
-  if (near(1) < near(-1)) s.n.negate();
+  // есть линза в светильнике — свет выходит через неё, без догадок. Без этого лента в профиле без соседей рядом
+  // (GOLA под верхним модулем у Володимира 23.11) светила как попало: из двух одинаковых лент одна вниз, другая вверх в шкаф
+  const lens = s.fix.filter(q => rawBox(q) && (q.meshes.some(m => m.material.transparent) || /линз/i.test(String(q.n))));
+  if (lens.length) {
+    const lc = new THREE.Vector3();
+    for (const q of lens) lc.add(s.p.g.worldToLocal(q.g.localToWorld(rawBox(q).getCenter(new THREE.Vector3()))));
+    lc.divideScalar(lens.length);
+    if (lc.sub(s.ctr).dot(s.n) < 0) s.n.negate();
+  } else {
+    const up = near(1), dn = near(-1);
+    if (up < dn) s.n.negate();
+    // рядом с обеих сторон пусто — лежащая лента светит вниз
+    else if (up === dn && Math.abs(s.n.y) > 0.7 && s.n.y > 0) s.n.negate();
+  }
   // стенка сбоку от ленты: ровная лента (COB, неон) светит как от широкого рассеивателя — источник дальше от стенки, бусинок нет
   s.off = new THREE.Vector3();
   s.wide = s.cob || TOUCH;   // на телефоне любая лента ровной полосой: Алексей 06.11 — точки на малом экране не нравятся
@@ -4969,6 +4982,7 @@ function dimSvg(g, k, o) {
 // размеры на экране — тем же рисунком, что в файле, в масштабе листа
 function drawOverlay() {
   const sv = $('dsvg'); if (!sv) return;
+  if (detBusy) return;                                       // идёт съёмка линий для выносного элемента — лист не перерисовывается
   if (!drawOn) { if (sv.firstChild) sv.replaceChildren(); return; }
   cam.updateMatrixWorld();
   const k = pxPerPaper();
@@ -5103,6 +5117,13 @@ function wireOverlay() {
     if (bi !== undefined && metalCur !== null) {              // лист металла: колонка надписей / аксонометрия — тянуть, за угол — растягивать
       e.preventDefault(); e.stopPropagation();
       const un = metalData().all.find(x => x.u === metalCur); if (!un) return;
+      if (bi.startsWith('dvl:') || bi.startsWith('dvr:') || bi.startsWith('dvc:')) {   // кружок на виде: буква, край (размер), середина (место)
+        const di = +bi.split(':')[1], d0 = un.dets && un.dets[di]; if (!d0) return;
+        if (e.button === 2) { pushUndo(); un.dets.splice(di, 1); drawOverlay(); return; }
+        if (e.button !== 0) return;
+        const r0 = d0.r / drawN, lp0 = d0.lp || [r0 * 0.707 + 4, -(r0 * 0.707 + 4)];
+        dr = { blk: bi, un, x: e.clientX, y: e.clientY, moved: false, p0: { x: 0, y: 0, lp: lp0.slice(), c: d0.c.slice(), r: d0.r, mx: e.clientX, my: e.clientY } }; return;
+      }
       if (bi.startsWith('dv:') || bi.startsWith('dvs:')) {     // выносной элемент: тянуть, уголок — масштаб, правая — удалить
         const di = +bi.split(':')[1], d0 = un.dets && un.dets[di]; if (!d0) return;
         if (e.button === 2) { pushUndo(); un.dets.splice(di, 1); drawOverlay(); return; }
@@ -5184,6 +5205,13 @@ function wireOverlay() {
     if (dr.blk) {
       const k = pxPerPaper(), dx = (e.clientX - dr.x) / k, dy = (e.clientY - dr.y) / k, p = dr.p0, un = dr.un;
       const cr = dr.cr || 'br', L = cr[1] === 'l', T = cr[0] === 't', ex = L ? -dx : dx, ey = T ? -dy : dy;   // угол, за который тянут
+      if (dr.blk.startsWith('dvl:') || dr.blk.startsWith('dvr:') || dr.blk.startsWith('dvc:')) {
+        const it = (un.dets || [])[+dr.blk.slice(4)]; if (!it) return;
+        if (dr.blk.startsWith('dvl:')) it.lp = [p.lp[0] + dx, p.lp[1] + dy];
+        else if (dr.blk.startsWith('dvc:')) { it.c = [p.c[0] + dx * drawN, p.c[1] + dy * drawN]; detCache.delete(it); }
+        else { const w = metalViews(un).find(q => q.v === it.v), pp = scrToPaper(e.clientX, e.clientY); if (w) it.r = Math.max(3, Math.hypot(SHEET_W / 2 + pp[0] - (w.px + it.c[0] / drawN), SHEET_H / 2 + pp[1] - (w.py + it.c[1] / drawN))) * drawN; }
+        drawOverlay(); return;
+      }
       if (dr.blk.startsWith('dv:')) { const it = (un.dets || [])[+dr.blk.slice(3)]; if (it) it.pos = [p.x + dx, p.y + dy]; drawOverlay(); return; }
       if (dr.blk.startsWith('dvs:')) {                         // масштаб выносного элемента — по ряду (5:1 … 1:10)
         const it = (un.dets || [])[+dr.blk.slice(4)]; if (it) { const cr = dr.cr || 'br', ex = cr[1] === 'l' ? -dx : dx, want = drawN / (p.S * Math.max(0.2, (2 * p.R + ex) / (2 * p.R))), t = DET_T.reduce((a, q) => Math.abs(Math.log(q / want)) < Math.abs(Math.log(a / want)) ? q : a, DET_T[0]); it.S = drawN / t; }
@@ -5221,7 +5249,8 @@ function wireOverlay() {
 const PRESS = new Set(['mod', 'fac', 'easy']);
 const snapTool = () => !!drawTool && drawTool !== 'gab' && !PRESS.has(drawTool);
 function setTool(t) {
-  drawTool = t; tpts = []; tAxis = null; chainPrev = null; preview = null; sd = null; cd = null; hideHover();
+  drawTool = t; tpts = []; tAxis = null; chainPrev = null; preview = null; sd = null; cd = null; detT = null; hideHover();
+  if ($('dsvg')) $('dsvg').classList.toggle('tooling', !!t);
   if (PRESS.has(t)) mcReset(); else mc = null;
   cv.style.cursor = snapTool() ? 'none' : '';
   $('st').textContent = t ? L('h_' + t) : '';
@@ -5288,6 +5317,7 @@ function toolHover(x, y) {
   if (drawTool === 'lead' || drawTool === 'pos' || SYM_TOOLS.includes(drawTool)) { leadHover(x, y); return; }
   if (drawTool === 'ang') { angHover(x, y); return; }
   if (drawTool === 'sect') { secHover(x, y); return; }
+  if (drawTool === 'detail') { if (detT) { const pp = scrToPaper(x, y); detT.hr = Math.max(3, Math.hypot(SHEET_W / 2 + pp[0] - detT.x, SHEET_H / 2 + pp[1] - detT.y)); drawOverlay(); } return; }
   if (drawTool === 'clip') { clipHover(x, y); return; }
   const s = snapDraw(x, y); showSnap(s);
   preview = null;
@@ -5458,7 +5488,7 @@ function secHatch(S, step) {
   }
   return out;
 }
-const secLabel = sc => sc.letter + '–' + sc.letter + (sc.sN && Math.abs(sc.sN - drawN) > 1e-6 ? ' (1:' + fmtN(sc.sN) + ')' : '');
+const secLabel = sc => sc.letter + '–' + sc.letter + (sc.sN && Math.abs(sc.sN - drawN) > 1e-6 ? (sc.sN < 1 ? ' (' + fmtN(Math.round(100 / sc.sN) / 100) + ':1)' : ' (1:' + fmtN(sc.sN) + ')') : '');
 // рисунок сечения: o — середина листа в единицах вывода, k — единиц на мм бумаги, toP — точка модели → вывод (линия на виде)
 function secPrims(sc, o, k, toP, noSec) {
   const g = { O: [], H: [], C: [], F: [], T: [] };
@@ -5586,6 +5616,7 @@ function secClick(x, y) {
   const used = new Set(secs.map(q => q.letter)), letter = [...SEC_LET].find(c => !used.has(c)) || '?';
   const sc = { a: sd.a, b: sd.b, s: secSide(sd.a, sd.b, x, y), vdir: viewDir().clone(), fs: hideFac, letter, sN: 0, rot: 0, pos: scrToPaper(x, y), mk: metalCur };
   Object.assign(sc, secCut(sc));
+  if (sc.G.length && sc.box) { const sz = Math.max(sc.box[2] - sc.box[0], sc.box[3] - sc.box[1]); if (sz / drawN < 18) sc.sN = [10, 5, 4, 2.5, 2, 1, 0.5, 0.2].find(q => q < drawN && sz / q >= 18) || 0.2; }
   if (!sc.G.length) { toast(L('sect_empty')); sd = null; $('st').textContent = L('h_sect'); drawOverlay(); return; }
   sd = { sec: sc }; $('st').textContent = L('h_sect4'); drawOverlay();
 }
@@ -6116,6 +6147,7 @@ const DTXT = {
 const keep = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
 const kept = (k, d) => { try { return localStorage.getItem(k) || d; } catch (e) { return d; } };
 let dLang = kept('drawLang', 'ru'), dTheme = kept('drawTheme', 'light'), ribTab = kept('drawTab', 'dims');
+let detBusy = false;
 let frameName = 'вид спереди', lastDim = 'lin', lastAuto = 'mod', flyFor = null, ctxFor = null, ctxEdit = false;
 const L = k => (DTXT[dLang] && DTXT[dLang][k]) || DTXT.ru[k] || k;
 // какой строгий вид сейчас (для подсветки кнопки и строки внизу)
@@ -6134,7 +6166,7 @@ function setView(k) {
 }
 function setLook(on) { drawLines = on; applyLook(); if (drawLines && !view.strict) strictView(0, 0); need(); }
 const isT = t => () => drawTool === t;
-const pickT = t => () => { if (PRESS.has(t)) lastAuto = t; else lastDim = t; setTool(drawTool === t ? null : t); };
+const pickT = t => () => { if (PRESS.has(t)) lastAuto = t; else if (FLY.dimfly.includes(t)) lastDim = t; setTool(drawTool === t ? null : t); };
 const soon = { act: () => toast(L('soon')), dis: () => true };
 const DCMD = {
   exit: { act: () => setDraw(false) },
@@ -6989,6 +7021,10 @@ async function sheetToReport(un) {
 // Листы труб одной рамки сводятся на один лист (Алексей 23.11: «две полоски бы объединил»): правая кнопка в дереве →
 // «Объединить с …»; обратно — «Разделить». Хранится у рамки: имя листа → имя листа, на который он переехал.
 function tubeMergeApply() {
+  if (!metal || tubeMergeApply.busy) return;
+  tubeMergeApply.busy = true; try { tubeMergeApply0(); } finally { tubeMergeApply.busy = false; }
+}
+function tubeMergeApply0() {
   if (!metal) return;
   const ones = metal.units.filter(x => x.one); if (!ones.length) return;
   const mapOf = fu => { const fk = sheetKey(fu), e = fk && OV.sheets[fk]; return (e && e.tmerge) || null; };
@@ -8900,13 +8936,15 @@ function variantSwitch(i, make) {
 // линии вида берутся один раз и хранятся от середины вида, поэтому блок живёт при сдвиге вида; сменился масштаб листа или
 // модель — берутся заново. Блок тянется, масштаб — за уголок (по ряду), правая кнопка — удалить. Хранится в правках листа.
 const DET_LET = 'АБВГДЕЖИКЛМНПРСТ', DET_T = [0.2, 0.5, 1, 2, 2.5, 4, 5, 10];   // DET_T — «1:N» выносного элемента (0,5 = 2:1)
-const detCache = new WeakMap(); let detBusy = false, detT = null;
+const detCache = new WeakMap(); let detT = null, detQ = 0;
 const detLabel = (d, n) => { const t = n / d.S; return d.letter + ' (' + (t >= 1 ? '1:' + fmtN(Math.round(t * 100) / 100) : fmtN(Math.round(100 / t) / 100) + ':1') + ')'; };
-function detailLines(un, d) {
+function detailLines(un, d, lazy) {
   const n = drawN, vw = metalViews(un), w = vw.find(q => q.v === d.v); if (!w) return null;
   const sig = n + '|' + d.v + '|' + (un.lay ? un.lay.n : 0);
   let c = detCache.get(d); if (c && c.sig === sig) return c;
   if (detBusy) return c || null;
+  // во время перерисовки листа камеру трогать нельзя — линии снимаются сразу после неё, блок дорисуется следующим проходом
+  if (lazy) { if (!detQ) detQ = setTimeout(() => { detQ = 0; if (metalCur === un.u && (un.dets || []).includes(d)) { detailLines(un, d); drawOverlay(); } }, 0); return c && c.sig.split('|')[1] === d.v ? c : null; }
   detBusy = true;
   try {
     const keepV = un.actV, nb = metalNoBlock;
@@ -8920,17 +8958,23 @@ function detailLines(un, d) {
   return c;
 }
 function detailSvg(un, o, k, ui) {
-  if (!un.dets || !un.dets.length || detBusy) return '';
-  const f = v => String(Math.round(v * 100) / 100), n = drawN, vw = metalViews(un); let s = '';
+  const f = v => String(Math.round(v * 100) / 100), n = drawN; let s = '';
+  if (detT && detT.hr && ui) s += `<circle cx="${f(o[0] + detT.x * k)}" cy="${f(o[1] + detT.y * k)}" r="${f(detT.hr * k)}" fill="none" stroke="#1f6fe0" stroke-width="1" stroke-dasharray="4 3"/>`;
+  if (!un.dets || !un.dets.length || detBusy || !un.lay) return s;   // лист ещё раскладывается — блок дорисуется следующим проходом
+  const vw = metalViews(un);
   un.dets.forEach((d, i) => {
     const w = vw.find(q => q.v === d.v); if (!w) return;
     const cx = w.px + d.c[0] / n, cy = w.py + d.c[1] / n, r = d.r / n, R = r * d.S, X = o[0] + d.pos[0] * k, Y = o[1] + d.pos[1] * k, sw = 0.18 * k;
     // на виде: тонкая окружность и буква на полке
     s += `<circle cx="${f(o[0] + cx * k)}" cy="${f(o[1] + cy * k)}" r="${f(r * k)}" fill="none" stroke="#000000" stroke-width="${f(sw)}"/>` +
-      `<path d="M${f(o[0] + (cx + r * 0.707) * k)} ${f(o[1] + (cy - r * 0.707) * k)}l${f(4 * k)} ${f(-4 * k)}h${f(6 * k)}" fill="none" stroke="#000000" stroke-width="${f(sw)}"/>` +
-      `<text x="${f(o[0] + (cx + r * 0.707 + 5) * k)}" y="${f(o[1] + (cy - r * 0.707 - 5) * k)}" font-family="${DFONT}" font-size="${f(5 * k)}" fill="#000000">${esc(d.letter)}</text>`;
+      (() => { const lp = d.lp || [r * 0.707 + 4, -(r * 0.707 + 4)], ll = Math.hypot(lp[0], lp[1]) || 1, ex = cx + lp[0] / ll * r, ey = cy + lp[1] / ll * r, lx = cx + lp[0], ly = cy + lp[1], sd = lp[0] >= 0 ? 1 : -1;
+        return `<path d="M${f(o[0] + ex * k)} ${f(o[1] + ey * k)}L${f(o[0] + lx * k)} ${f(o[1] + ly * k)}h${f(sd * 6 * k)}" fill="none" stroke="#000000" stroke-width="${f(sw)}"/>` +
+          `<text x="${f(o[0] + (lx + sd * 3) * k)}" y="${f(o[1] + (ly - 1) * k)}" font-family="${DFONT}" font-size="${f(5 * k)}" fill="#000000" text-anchor="middle">${esc(d.letter)}</text>` +
+          (ui ? `<rect class="bh" data-b="dvl:${i}" x="${f(o[0] + (lx + (sd > 0 ? 0 : -6)) * k)}" y="${f(o[1] + (ly - 6) * k)}" width="${f(6 * k)}" height="${f(7 * k)}"/>` +
+            `<circle class="bh" data-b="dvr:${i}" cx="${f(o[0] + cx * k)}" cy="${f(o[1] + cy * k)}" r="${f(r * k)}" style="fill:none;stroke:transparent;stroke-width:9px;pointer-events:stroke;cursor:nwse-resize"/>` +
+            `<circle class="bh" data-b="dvc:${i}" cx="${f(o[0] + cx * k)}" cy="${f(o[1] + cy * k)}" r="${f(Math.max(1.5, r * 0.35) * k)}"/>` : ''); })();
     // блок: то же место крупнее, обрезано кружком
-    const L = detailLines(un, d), id = 'dc' + String(un.u).replace('-', 'm') + '_' + i + (ui ? 'u' : 'e');
+    const L = detailLines(un, d, ui), id = 'dc' + String(un.u).replace('-', 'm') + '_' + i + (ui ? 'u' : 'e');
     if (L) {
       const tr = `translate(${f(X)} ${f(Y)}) scale(${f(d.S * k)}) translate(${f(-(L.px + d.c[0] / n))} ${f(-(L.py + d.c[1] / n))})`;
       s += `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(R * k)}" fill="#ffffff"/><clipPath id="${id}"><circle cx="${f(X)}" cy="${f(Y)}" r="${f(R * k)}"/></clipPath><g clip-path="url(#${id})">` +
@@ -8939,14 +8983,14 @@ function detailSvg(un, o, k, ui) {
     }
     s += `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(R * k)}" fill="none" stroke="#000000" stroke-width="${f(sw)}"/>` +
       `<text x="${f(X)}" y="${f(Y - (R + 2.5) * k)}" font-family="${DFONT}" font-size="${f(5.5 * k)}" fill="#000000" text-anchor="middle">${esc(detLabel(d, n))}</text>`;
-    if (ui) s += `<rect class="bh" data-b="dv:${i}" x="${f(X - R * k)}" y="${f(Y - R * k)}" width="${f(2 * R * k)}" height="${f(2 * R * k)}"/>` + grips4(`data-b="dvs:${i}"`, X - R * k, Y - R * k, X + R * k, Y + R * k);
+    if (ui) s += `<circle class="bh" data-b="dv:${i}" cx="${f(X)}" cy="${f(Y)}" r="${f(R * k)}" style="fill:none;stroke:transparent;stroke-width:11px;pointer-events:stroke"/><rect class="bh" data-b="dv:${i}" x="${f(X - 14 * k)}" y="${f(Y - (R + 8) * k)}" width="${f(28 * k)}" height="${f(7 * k)}"/>` + grips4(`data-b="dvs:${i}"`, X - R * k, Y - R * k, X + R * k, Y + R * k);
   });
   return s;
 }
 function detailClick(x, y) {
   const un = metalCur !== null && metal ? metalData().all.find(q => q.u === metalCur) : null, uk = dLang === 'uk';
   if (!un || un.svgSheet) { toast(uk ? 'виносний елемент ставиться на аркуші з видами' : 'выносной элемент ставится на листе с видами'); return; }
-  const S = sheetRect(), k = S.w / SHEET_W, mx = (x - S.x0) / k, my = (y - S.y0) / k, n = drawN;
+  const pp = scrToPaper(x, y), mx = SHEET_W / 2 + pp[0], my = SHEET_H / 2 + pp[1], n = drawN;   // мм листа от левого верхнего угла
   if (!detT) {
     const w = metalViews(un).find(q => { const r = metalViewRect(q); return mx >= r[0] && mx <= r[2] && my >= r[1] && my <= r[3]; });
     if (!w) { toast(uk ? 'клікни всередині виду' : 'щёлкни внутри вида'); return; }
