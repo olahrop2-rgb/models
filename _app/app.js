@@ -8927,6 +8927,8 @@ function texMenu(b) {
 }
 // ---------- лист SVG ----------
 function buildSVG() {
+  const fn0 = freeNow(), metalHidOn = metalCur !== null && !texCur && !joinCur && !fn0;   // лист металла (не «свой лист»)
+  let hidOK = true;
   for (const p of parts) if (p.isF) drawEdgesFor(p);
   root.updateMatrixWorld(true); cam.updateMatrixWorld();
   // камера листа: тот же ракурс, кадр ровно по листу, глубина — по видимому
@@ -8972,7 +8974,8 @@ function buildSVG() {
     const n = Math.max(1, Math.ceil(L)), v = new Uint8Array(n + 1);
     for (let s = 0; s <= n; s++) { const t = s / n; v[s] = visAt(ax + (bx - ax) * t, ay + (by - ay) * t, az + (bz - az) * t) ? 1 : 0; }
     for (let s = 1; s < n; s++) if (v[s - 1] === v[s + 1] && v[s] !== v[s - 1]) v[s] = v[s - 1];   // одиночные выбросы
-    for (const [want, dst] of drawHid || texCur || joinCur ? [[1, out], [0, outH]] : [[1, out]]) {   // переход текстуры / столярка — невидимое всегда (пунктир)
+    for (const [want, dst] of drawHid || texCur || joinCur || metalHidOn ? [[1, out], [0, outH]] : [[1, out]]) {   // переход текстуры / столярка — невидимое всегда (пунктир)
+      if (want === 0 && !hidOK) continue;                  // лист металла: невидимое — только значимое (крепёж, платики), стенки труб — нет
       let s0 = -1;
       for (let s = 0; s <= n + 1; s++) {
         const on = s <= n && v[s] === want;
@@ -8997,12 +9000,17 @@ function buildSVG() {
       seg(A.project(camD), B.project(camD));
     }
   };
-  for (const p of parts) {
+  for (let pi = 0; pi < parts.length; pi++) {
+    const p = parts[pi];
     if (!p.g.visible) continue;
+    // ТЗ v3, п. 11: на листе металла штриховой показывается значимое с обратной стороны — крепёж (гайки, винты, отверстия) и
+    // детали из листа (платики); внутренние стенки и дальние рёбра труб — нет. Кнопка «Невидимые» — показать всё.
+    hidOK = !metalHidOn || drawHid || p.isF || !(M.objs[pi] && M.objs[pi].pf);
     if (p.isL) { p.g.traverse(o => { if (o.isLineSegments) lines(o); }); continue; }
     for (const ln of p.edges) if (ln.visible) lines(ln);
     if (p.isF) for (const ln of p.dEdges) lines(ln);
   }
+  hidOK = true;
   if (capObj && capObj.visible) lines(capObj);              // контур среза разреза вида
   // размеры: тем же рисунком, что на экране, в мм бумаги
   const P2 = v => { const q = v.clone().project(camD); return [(q.x + 1) / 2 * SHEET_W, (1 - q.y) / 2 * SHEET_H]; };
@@ -9023,7 +9031,7 @@ function buildSVG() {
   console.log('лист: рёбер на листе ' + out.length + ', размеров ' + nd + ', масштаб 1:' + fmtN(drawN));
   return '<?xml version="1.0" encoding="UTF-8"?>\n' +
     `<svg xmlns="http://www.w3.org/2000/svg" width="${SHEET_W}mm" height="${SHEET_H}mm" viewBox="0 0 ${SHEET_W} ${SHEET_H}">\n` +
-    (pathsH.length ? '<g id="nevidimye" fill="none" stroke="' + (texCur || joinCur ? '#555555" stroke-dasharray="1.6 0.9' : '#a9b1ba') + '" stroke-width="0.13" stroke-linecap="round">\n' + pathsH.map(d => `<path d="${d}"/>`).join('\n') + '\n</g>\n' : '') +
+    (pathsH.length ? '<g id="nevidimye" fill="none" stroke="' + (texCur || joinCur || metalHidOn ? '#555555" stroke-dasharray="1.6 0.9' : '#a9b1ba') + '" stroke-width="0.13" stroke-linecap="round">\n' + pathsH.map(d => `<path d="${d}"/>`).join('\n') + '\n</g>\n' : '') +
     '<g id="detali" fill="none" stroke="#000000" stroke-width="0.3" stroke-linecap="round">\n' + paths.map(d => `<path d="${d}"/>`).join('\n') + '\n</g>\n' +
     (ds ? `<g id="razmery">${ds}</g>\n` : '') + (ss ? `<g id="secheniya">${ss}</g>\n` : '') +
     `<g id="masshtab"><text x="2" y="${SHEET_H - 2}" font-family="${DFONT}" font-size="3.5" fill="#000000">М 1:${fmtN(drawN)}</text></g>\n</svg>\n`;
