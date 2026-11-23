@@ -6604,8 +6604,12 @@ function metalBuild() {
   // Отверстия — все экземпляры каркаса вместе (как на листе каркаса).
   for (let ui = 0; ui < units.length; ui++) {
     const fu = units[ui];
-    if (!fu.hasProf || (fu.mains || []).length < 20) continue;
-    fu.frame = true; fu.tubeNo = {};
+    if (!fu.hasProf || fu.loose) continue;
+    // Обычная рамка (меньше 20 труб; Алексей 23.11): её лист остаётся как есть, а каждая труба с присадкой получает ещё и свой
+    // лист — под рамкой в дереве («(6-2) рамка → 6.2-2 труба»): трубы сверлят до сварки, размер нужен от торца своей трубы.
+    // Труба без обработки — только строка таблицы (длина и рез). Ненужный лист убирается правой кнопкой в дереве.
+    const big = (fu.mains || []).length >= 20;
+    if (big) fu.frame = true; fu.tubeNo = {};
     const longOf = x => { const s = x.getSize(V3()); return ['x', 'y', 'z'].reduce((p, q) => s[q] > s[p] ? q : p, 'x'); };
     const grp = new Map();
     fu.tubes.forEach((ti, k) => {
@@ -6627,24 +6631,28 @@ function metalBuild() {
     // трубы рисуются по данным (не камерой): горизонтально, крупно, по нескольку на лист; листов — сколько понадобится
     let N = 0;
     const tg = [];
-    for (const g of grp.values()) { N++; for (const k of g.list) fu.tubeNo[k] = N; tg.push(Object.assign(g, { N, fu, qty: g.list.length * (fu.qty || 1) })); }
+    for (const g of grp.values()) { N++; const des = !big && M.objs[fu.tubes[g.k]].d; for (const k of g.list) fu.tubeNo[k] = N; tg.push(Object.assign(g, { N: des || N, des: des || '', fu, qty: g.list.length * (fu.qty || 1) })); }
+    if (!big) tg.sort((p, q) => String(p.N).localeCompare(String(q.N), undefined, { numeric: true }));
     // листы поровну (Алексей 19.11: «4 и 1 — зачем? три и два, и места побольше»): листов — сколько нужно по высоте,
     // трубы делятся между ними примерно поровну по высоте
     const tsc = tubeScale(tg), AV = SHEET_H - 26, hs = tg.map(g => tubeBlockH(g, tsc)), tot = hs.reduce((a, b) => a + b, 0);
     let pages = [];
-    for (let np = Math.max(1, Math.ceil(tot / AV)); np <= tg.length; np++) {
+    if (!big) pages = tg.map(g => [g]);                      // обычная рамка: одна труба — один лист
+    else for (let np = Math.max(1, Math.ceil(tot / AV)); np <= tg.length; np++) {
       pages = []; let cur = [], hu = 0; const tgt = tot / np;
       tg.forEach((g, i) => { if (cur.length && pages.length < np - 1 && (hu + hs[i] > AV || hu + hs[i] / 2 > tgt)) { pages.push(cur); cur = []; hu = 0; } cur.push(g); hu += hs[i]; });
       if (cur.length) pages.push(cur);
       if (pages.every(pg => pg.reduce((a, g) => a + hs[tg.indexOf(g)], 0) <= AV)) break;
-    }    const tus = pages.map((pg, i) => ({ u: -5000 - ui * 100 - i, tubeOf: fu, svgSheet: true, tsc, tubeDet: true, loose: true, tg: pg,
+    }    const tus = pages.map((pg, i) => ({ u: -5000 - ui * 100 - i, tubeOf: fu, svgSheet: true, tsc: big ? tsc : tubeScale(pg), tubeDet: true, loose: true, tg: pg, one: !big,
       hiParts: pg.flatMap(g => g.list.map(k => fu.tubes[k])),   // трубы листа — выделены на картинке каркаса справа
-      name: fu.name + ' — ' + ML('tubesT') + (pages.length > 1 ? ' (' + ML('sheet').toLowerCase() + ' ' + (i + 1) + ' / ' + pages.length + ')' : ''),
+      name: !big ? (pg[0].des ? pg[0].des + ' ' : '') + ML('tubeN') + ' L=' + Math.round(M.objs[fu.tubes[pg[0].k]].pf.l) : fu.name + ' — ' + ML('tubesT') + (pages.length > 1 ? ' (' + ML('sheet').toLowerCase() + ' ' + (i + 1) + ' / ' + pages.length + ')' : ''),
       pi: [], tubes: [], boxes: [], mains: [], sheets: i === 0 ? (fu.sheets || []).filter(x => !isCap(x)) : [], box: fu.box, mbox: fu.mbox, lbox: fu.mbox, holes: [], welds: [], legs: [], mats: fu.mats, pmats: fu.pmats,
       paint: fu.paint, metal: fu.metal, stainless: fu.stainless, rot: fu.rot, wmbox: fu.wmbox, hasProf: false, inst: [], ctr: fu.ctr, top: fu.top, qty: fu.qty }));
     // схема труб: объёмная картинка одного каркаса, у каждой трубы — кружок с её номером (Алексей 19.11: «какие это трубы на
     // каркасе — непонятно; нужен общий вид с выносками 1, 2, 3, как на листах труб»)
 
+    // две трубы с одним обозначением, но разной присадкой (зеркальные: гайка с другой стороны) — у каждой свой лист и своё имя
+    if (!big) { const seenN = new Map(); for (const q of tus) { const c = (seenN.get(q.name) || 0) + 1; seenN.set(q.name, c); if (c > 1) q.name += ' (' + c + ')'; } }
     units.splice(ui + 1, 0, ...tus); ui += tus.length;
   }
   // общий вид — только у изделия с полуфабрикатами внутри (собирается по комплекту в metalData)
@@ -6777,7 +6785,17 @@ function sheetKey(un) {
   const U = i => (typeof i === 'number' && i >= 0 && M.nuid[i]) || 0;
   if (un.general) return un.assembly ? 'asm' : (U(un.top) ? 'g:' + U(un.top) : null);
   if (!un.tubeDet && U(un.u)) return 'u:' + U(un.u);
-  return 'n:' + (un.tubeOf !== undefined && U(un.tubeOf) ? U(un.tubeOf) + ':' : '') + (un.name || '');   // листы труб каркаса, группы одинаковых труб — по имени
+  const tf = un.tubeOf && typeof un.tubeOf === 'object' ? un.tubeOf.u : un.tubeOf;
+  return 'n:' + (tf !== undefined && U(tf) ? U(tf) + ':' : '') + (un.name || '');   // листы труб каркаса, группы одинаковых труб — по имени (и UID своего каркаса)
+}
+// лист, убранный из комплекта правой кнопкой в дереве (удалить = скрыть): в дереве, проверке и выдаче его нет, вернуть — строка
+// «скрытые листы» внизу дерева
+function sheetOff(un) { const sk = sheetKey(un); return !!(sk && OV.sheets[sk] && OV.sheets[sk].off); }
+function sheetSetOff(un, off) {
+  const sk = sheetKey(un); if (!sk) { toast(dLang === 'uk' ? 'цю сторінку вивантажено до 23.11 — перевивантаж проєкт' : 'эта страница выгружена до 23.11 — перевыгрузи проект'); return; }
+  const e = OV.sheets[sk] || (OV.sheets[sk] = {}); if (off) { e.off = true; e.name = unitTitle(un); } else delete e.off;
+  if (off && metalCur === un.u) { const nx = metalData().own.find(x => !sheetOff(x)); if (nx) metalShow(nx.u); }
+  metalTreeHtml = ''; syncPanel(); freeSaveSoon();
 }
 // имя авторазмера: вид + ось + что меряет (концы от угла габарита листа, шаг 0,5 мм) — одно и то же при каждой перестройке
 function ovName(un, dm, vk, gab) {
@@ -8314,7 +8332,7 @@ async function metalReport() {
   if (!got) return;
   const md = metalData(), cur = metalCur, av = cur !== null ? (md.all.find(x => x.u === cur) || {}).actV : 0; let n = 0;
   const A = await metalAuditAll(); if (!metalAskBad(A.bad)) return 0;
-  for (const un of md.own) {
+  for (const un of md.own.filter(x => !sheetOff(x))) {
     // картинкой PNG 15 точек на мм (6000 точек в ширину): отчёт переводил SVG в картинку 2000 точек — было размыто (27.10)
     const b64 = await svgPng(A.svgs.get(un.u) || metalSheetSvg(un), 15), name = catName(got, unitTitle(un).replace(/\.+$/, ''), '.png');
     try { await srv('/draw/save', { dir, name, b64 }); if (!got.some(f => f.name === name)) got.push({ name }); n++; }
@@ -8327,7 +8345,7 @@ async function metalReport() {
 }
 function metalPdfHtml(svgs) {
   const md = metalData(), pages = [], cur = metalCur, av = cur !== null ? (md.all.find(x => x.u === cur) || {}).actV : 0;
-  for (const un of md.own) pages.push((svgs && svgs.get(un.u)) || metalSheetSvg(un));
+  for (const un of md.own.filter(x => !sheetOff(x))) pages.push((svgs && svgs.get(un.u)) || metalSheetSvg(un));
   metalBackTo(cur, av);
   return '<!doctype html><html><head><meta charset="utf-8">' +
     `<link href="https://fonts.googleapis.com/css2?family=${DFONT.replace(/ /g, '+')}&display=block" rel="stylesheet">` +
@@ -8373,16 +8391,18 @@ function metalTree() {
   if (LOCAL && freeLoaded) { const cj = JSON.stringify(metalTree.chk); if (cj !== metalTree.saved) { metalTree.saved = cj;
     srv('/draw/state', { dir: FREE_DIR, name: freeFile().replace(/\.json$/, '.checks.json'), data: JSON.stringify({ title: M.title || '', model: M.date || '', checks: metalTree.chk }, null, 1) }).catch(e => { metalTree.saved = null; console.warn('замечания не записались:', e.message); }); } }   // замечания — не чаще раза в 3 с (панель перерисовывается часто)
   const md = metalData(), chk = metalTree.chk, uk = dLang === 'uk';
+  const offN = md.own.filter(sheetOff);
   const row = (un, lvl, title) => {
+    if (sheetOff(un)) return '';
     const sk = sheetKey(un), e = sk && OV.sheets[sk], t = unitTitle(un);
     const edit = e && (e.dims || e.hand || e.vpos || e.vhide || e.vdel || e.extra || e.blk || e.isoOv || e.forceN), hid = (un.vhide || []).length || dims.some(d => d.mk === un.u && d.hid);
     const warn = chk.some(c => c.startsWith(t + ' ') || c.startsWith(t + ':')), ovl = un.aud && (un.aud.over || un.aud.edge);
     return `<div class="mtr${metalCur === un.u ? ' on' : ''}" data-mt="${un.u}" style="padding-left:${8 + lvl * 14}px" title="${esc(title)}"><span>${esc(title)}</span>` +
       (hid ? `<i class="mh" title="${uk ? 'є приховане' : 'есть скрытое'}">◌</i>` : '') + (edit ? `<i class="me" title="${uk ? 'є правки' : 'есть правки'}">✎</i>` : '') + (warn ? `<i class="mw" title="${uk ? 'є зауваження' : 'есть замечания'}">!</i>` : '') + (ovl ? `<i class="mo" title="${uk ? 'на аркуші накладення' : 'на листе наложения'}">▦</i>` : '') + '</div>';
   };
-  let h = `<div class="dlh"><span>${esc(ML('metal'))}</span><em>${md.own.length}</em></div>`;
+  let h = `<div class="dlh"><span>${esc(ML('metal'))}</span><em>${md.own.length - offN.length}</em></div>`;
   const tubesOf = u => md.own.filter(x => x.tubeDet && (x.tubeOf === u || (x.tubeOf && x.tubeOf.u === u)));   // tubeOf — сам каркас или его номер
-  const unitRow = (un, lvl) => { const d = unitDes(un); let s = row(un, lvl, (d ? d + ' ' : '') + un.name + ((un.qty || 1) > 1 ? ' — ' + un.qty + ' ' + ML('nuts') : '')); for (const tq of tubesOf(un.u)) s += row(tq, lvl + 1, tq.name.replace(un.name + ' — ', '')); return s; };
+  const unitRow = (un, lvl) => { const d = unitDes(un); let s = row(un, lvl, (d ? d + ' ' : '') + un.name + ((un.qty || 1) > 1 ? ' — ' + un.qty + ' ' + ML('nuts') : '')); for (const tq of tubesOf(un.u)) if (!sheetOff(tq)) s += row(tq, lvl + 1, tq.name.replace(un.name + ' — ', '')); return s; };
   const done = new Set();
   for (const g of md.gen) {
     const top = !g.assembly && g.top >= 0 ? ((M.ndes || [])[g.top] || '') + ' ' + (M.names[g.top] || '') : g.name;
@@ -8391,9 +8411,20 @@ function metalTree() {
     for (const un of (g.gunits || []).slice().sort(byDes)) { if (un.tubeDet || done.has(un.u)) continue; done.add(un.u); h += unitRow(un, 1); }
   }
   for (const un of md.own) { if (un.general || un.tubeDet || done.has(un.u)) continue; done.add(un.u); h += unitRow(un, 0); }
+  if (offN.length) h += `<div class="mtoff" title="${esc(offN.map(unitTitle).join('\n'))}">${uk ? 'приховані аркуші' : 'скрытые листы'} (${offN.length}) — ${uk ? 'повернути' : 'вернуть'}</div>`;
   if (h === metalTreeHtml && el.firstChild) return;
   metalTreeHtml = h; el.innerHTML = h;
-  el.querySelectorAll('[data-mt]').forEach(q => { q.onclick = () => { const u = +q.dataset.mt; if (metalCur !== u) metalShow(u); }; });
+  el.querySelectorAll('[data-mt]').forEach(q => {
+    q.onclick = () => { const u = +q.dataset.mt; if (metalCur !== u) metalShow(u); };
+    q.oncontextmenu = e => {                                 // правая кнопка по листу — «Удалить лист»
+      e.preventDefault(); e.stopPropagation();
+      const un = metalData().own.find(x => x.u === +q.dataset.mt); if (!un) return;
+      let m = $('mtmenu'); if (!m) { m = document.createElement('div'); m.id = 'mtmenu'; document.body.appendChild(m); addEventListener('pointerdown', ev => { if (!m.contains(ev.target)) m.style.display = 'none'; }); }
+      m.innerHTML = `<button>${uk ? 'Видалити аркуш' : 'Удалить лист'}</button>`; m.style.cssText = `display:block;left:${Math.min(e.clientX, innerWidth - 170)}px;top:${e.clientY}px`;
+      m.firstChild.onclick = () => { m.style.display = 'none'; sheetSetOff(un, true); };
+    };
+  });
+  const back = el.querySelector('.mtoff'); if (back) back.onclick = () => { for (const un of metalData().own.filter(sheetOff)) sheetSetOff(un, false); };
 }
 // ---------- проверка листа по картинке (ТЗ чертежей металла v3, п. 10.6) ----------
 // Лист рисуется в картинку двумя слоями — только надписи и всё остальное; точки, где чернила обоих слоёв совпали, — наложение
@@ -8435,7 +8466,7 @@ async function metalAudit(un, ready) {
 // Заодно отдаёт сами картинки листов — выдача (отчёт / PDF) берёт их отсюда и не рисует второй раз.
 async function metalAuditAll() {
   const md = metalData(), cur = metalCur, av = cur !== null ? (md.all.find(x => x.u === cur) || {}).actV : 0, uk = dLang === 'uk', svgs = new Map(), bad = [];
-  for (const un of md.own) {
+  for (const un of md.own.filter(x => !sheetOff(x))) {
     const sv = metalSheetSvg(un); svgs.set(un.u, sv);
     try {
       const r = await metalAudit(un, sv); un.aud = { over: r.over.length, edge: r.edge, fill: r.fill };

@@ -226,6 +226,11 @@ html.draw body, html.draw.dlines body { background: transparent; color: var(--rb
 #dpanel .mtr .me { color: #1f6fe0; }
 #dpanel .mtr .mw { color: #fff; background: #d23b2a; border-radius: 8px; width: 14px; height: 14px; text-align: center; line-height: 14px; font-weight: 700; }
 #dpanel .mtr .mo { color: #d23b2a; }
+#dpanel .mtoff { margin: 4px 6px; padding: 4px 8px; font-size: 11.5px; color: var(--rb-muted); border: 1px dashed var(--rb-line, #c9d2dc); border-radius: 4px; cursor: pointer; }
+#dpanel .mtoff:hover { color: var(--rb-text); background: var(--rb-hover); }
+#mtmenu { position: fixed; z-index: 70; display: none; background: #fff; border: 1px solid #c9d2dc; border-radius: 6px; box-shadow: 0 6px 20px rgba(0,0,0,.2); padding: 4px; }
+#mtmenu button { display: block; width: 160px; text-align: left; padding: 6px 10px; border: 0; background: none; font: 13px system-ui, sans-serif; color: #222; border-radius: 4px; cursor: pointer; }
+#mtmenu button:hover { background: #eef3fb; }
 #dpanel .mtr .mh { color: var(--rb-muted); }
 #dpanel .mtr.on .me, #dpanel .mtr.on .mh { color: #fff; }
 #dList { flex: 1; overflow: auto; padding: 0 6px 6px; }
