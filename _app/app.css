@@ -405,3 +405,8 @@ html.draw body, html.draw.dlines body { background: transparent; color: var(--rb
 #ddlg .b { grid-column: 1 / 3; display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
 #ddlg .b button { padding: 6px 16px; border: 1px solid #c9d2dc; background: #f4f7fb; border-radius: 6px; cursor: pointer; font: inherit; }
 #ddlg .b .ok { background: #1f6fe0; border-color: #1f6fe0; color: #fff; }
+/* палитра символов у поля текста размера / выноски */
+#dsyms { position: fixed; z-index: 90; display: none; gap: 2px; padding: 4px; background: #fff; border: 1px solid #c9d2dc; border-radius: 7px; box-shadow: 0 6px 18px rgba(0,0,0,.2); }
+#dsyms button { width: 24px; height: 24px; border: 1px solid transparent; background: none; border-radius: 4px; cursor: pointer; font: 15px system-ui, sans-serif; color: #222; padding: 0; }
+#dsyms button:hover { background: #eef3fb; border-color: #c9d2dc; }
+#dsyms button.sep { margin-right: 7px; }

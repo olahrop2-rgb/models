@@ -6321,6 +6321,38 @@ function ctxFill(dm, g) {
   el.innerHTML = it.map(([k, ic]) => `<button data-x="${k}">${DS(DIC[ic], 18)}<span>${L(k)}</span></button>`).join('');
   el.querySelectorAll('[data-x]').forEach(b => { b.onclick = e => { e.stopPropagation(); ctxAct(b.dataset.x, dm); }; });
 }
+// ---------- палитра символов (ТЗ чертежей металла v3, п. 19): вставляются в любой текст чертежа ----------
+// Появляется рядом с полем, когда правят текст размера или выноски. Сверху — последние использованные. С клавиатуры:
+// %d → ⌀, %p → ±, %c → °, %x → ×, %k → □ (как в привычных САПР).
+const SYMS = ['⌀', '±', '°', '×', '□', '∥', '⟂', '∠', '⌒', '≤', '≥', '≈', '→', '↔', '№', '²'], SYM_KEYS = { '%d': '⌀', '%p': '±', '%c': '°', '%x': '×', '%k': '□' };
+{ const isTxt = e => e && e.matches && e.matches('#dctxIn, #ddlg input:not([type=checkbox])');
+  let bar = null, cur = null, hideT = 0;
+  const recent = () => { try { return JSON.parse(localStorage.getItem('dSyms') || '[]').filter(s => SYMS.includes(s)); } catch (e) { return []; } };
+  const put = s => {
+    if (!cur) return;
+    const a = cur.selectionStart ?? cur.value.length, b = cur.selectionEnd ?? a; cur.value = cur.value.slice(0, a) + s + cur.value.slice(b); cur.selectionStart = cur.selectionEnd = a + s.length;
+    try { localStorage.setItem('dSyms', JSON.stringify([s, ...recent().filter(x => x !== s)].slice(0, 6))); } catch (e) {}
+    cur.dispatchEvent(new Event('input', { bubbles: true })); fill();
+  };
+  const fill = () => {
+    const r = recent(), list = r.concat(SYMS.filter(s => !r.includes(s)));
+    bar.innerHTML = list.map((s, i) => `<button type="button" data-s="${s}"${i === r.length - 1 ? ' class="sep"' : ''}>${s}</button>`).join('');
+    bar.querySelectorAll('button').forEach(b => { b.onmousedown = e => { e.preventDefault(); put(b.dataset.s); }; });
+  };
+  document.addEventListener('focusin', e => {
+    if (!isTxt(e.target)) return;
+    clearTimeout(hideT); cur = e.target;
+    if (!bar) { bar = document.createElement('div'); bar.id = 'dsyms'; document.body.appendChild(bar); bar.onpointerdown = ev => ev.stopPropagation(); }
+    fill(); bar.style.display = 'flex';
+    const r = cur.getBoundingClientRect(); bar.style.left = Math.max(6, Math.min(innerWidth - 420, r.left)) + 'px'; bar.style.top = (r.bottom + 4) + 'px';
+  });
+  document.addEventListener('focusout', e => { if (isTxt(e.target)) hideT = setTimeout(() => { if (bar) bar.style.display = 'none'; cur = null; }, 150); });
+  document.addEventListener('input', e => {
+    if (!isTxt(e.target)) return; const i = e.target, m = /%[dpcxk]/i.exec(i.value); if (!m) return;
+    const p = m.index, s = SYM_KEYS[m[0].toLowerCase()]; i.value = i.value.slice(0, p) + s + i.value.slice(p + 2); i.selectionStart = i.selectionEnd = p + 1;
+    i.dispatchEvent(new Event('input', { bubbles: true }));
+  }, true);
+}
 // ---------- окно «Изменить размер» (ТЗ чертежей металла v3, п. 17) ----------
 const dimModelNum = dm => dm.ang ? '' : String(Math.round(Math.abs(dm.axis ? dm.b.clone().sub(dm.a).dot(AX[dm.axis]) : dm.a.distanceTo(dm.b))));
 function dimDialog(dm) {
