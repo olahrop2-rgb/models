@@ -273,6 +273,7 @@ html.draw body, html.draw.dlines body { background: transparent; color: var(--rb
 #dsvg .vb { fill: none; stroke: transparent; stroke-width: 10px; pointer-events: stroke; cursor: move; }
 #dsvg .vb:hover { stroke: rgba(122,167,224,.35); }
 #dsvg .vpre { fill: none; stroke: #1f6fe0; stroke-width: 1px; stroke-dasharray: 5 3; pointer-events: none; }
+#dsvg .vpre2 { fill: rgba(31,111,224,.05); stroke: #9db7d9; stroke-width: 1px; stroke-dasharray: 2 4; pointer-events: none; }
 #dsvg .vtip { font: 600 13px system-ui, sans-serif; fill: #1f6fe0; pointer-events: none; }
 /* тема 60: что поймал прицел размера — линия целиком / угол; крестик «убрать вид»; линии связи видов */
 #dsvg .snapl { fill: none; stroke: #ff7a00; stroke-width: 3px; stroke-opacity: .85; stroke-linecap: round; pointer-events: none; }

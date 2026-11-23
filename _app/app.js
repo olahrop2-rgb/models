@@ -5141,7 +5141,7 @@ function wireOverlay() {
       if (dr.scale) {                                         // масштаб — ближайший из ряда, рамки показывают, как ляжет
         const r = dr.r0, f0 = Math.max(0.1, Math.max((r[2] - r[0] + dx) / (r[2] - r[0]), (r[3] - r[1] + dy) / (r[3] - r[1])));
         const n = SCALES.reduce((p, q) => Math.abs(Math.log(q / (dr.n0 / f0))) < Math.abs(Math.log(p / (dr.n0 / f0))) ? q : p, SCALES[0]);
-        metalScaleDr = { n, f: dr.n0 / n, x: e.clientX, y: e.clientY };
+        metalScaleDr = { n, f: dr.n0 / n, fc: f0, x: e.clientX, y: e.clientY };   // fc — как тянут (плавно), f — куда встанет (ступенька ряда)
       } else if (dr.grp) metalDragGroup(dr.un, dr.grp, dr.P, dx, dy); else metalDragView(dr.un, dr.vw, dr.P, dx, dy);
       drawOverlay(); return;
     }
@@ -7441,9 +7441,11 @@ function metalViewsSvg(un, S) {
   const box = (r, cls, extra) => `<rect class="${cls}" ${extra || ''} x="${f(S.x0 + r[0] * k)}" y="${f(S.y0 + r[1] * k)}" width="${f((r[2] - r[0]) * k)}" height="${f((r[3] - r[1]) * k)}"/>`;
   if (metalScaleDr) {                                       // тянут угол: будущие рамки видов и масштаб
     const D = metalScaleDr, F = vw.find(w => w.v === mainView(un)) || vw[0];
-    for (const w of vw) {
-      const r = metalViewRect(w), c = [F.px + (w.px - F.px) * D.f, F.py + (w.py - F.py) * D.f], hw = (r[2] - r[0]) * D.f / 2, hh = (r[3] - r[1]) * D.f / 2;
-      s += box([c[0] - hw, c[1] - hh, c[0] + hw, c[1] + hh], 'vpre');
+    // рамки видов идут за мышью плавно (Алексей 23.11: «почему рывками?»); бледные — где блок встанет при отпускании
+    // (масштаб только из ряда, чтобы на листе стояло честное «М 1:N»); пересчёт размеров — один раз, при отпускании
+    for (const [ff, cls] of [[D.f, 'vpre2'], [D.fc || D.f, 'vpre']]) for (const w of vw) {
+      const r = metalViewRect(w), c = [F.px + (w.px - F.px) * ff, F.py + (w.py - F.py) * ff], hw = (r[2] - r[0]) * ff / 2, hh = (r[3] - r[1]) * ff / 2;
+      s += box([c[0] - hw, c[1] - hh, c[0] + hw, c[1] + hh], cls);
     }
     s += `<text class="vtip" x="${f(D.x + 12)}" y="${f(D.y + 24)}">М 1:${fmtN(D.n)}</text>`;
     return s;
