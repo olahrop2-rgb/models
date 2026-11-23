@@ -5253,6 +5253,13 @@ function leadClick(x, y) {
   if (isPos && !des) { toast(dLang === 'uk' ? 'у цієї деталі немає позначення в моделі' : 'у этой детали нет обозначения в модели'); tpts = []; preview = null; drawOverlay(); return; }
   const n = { mk: metalCur, vk: viewKey(), p: tpts[0].clone(), pi: tpts.pi, q: [(x - a[0]) / k, (y - a[1]) / k], txt: isPos ? [des] : leadText(tpts.pi), hand: true };
   if (isPos) n.posn = true;
+  if (SYM_TOOLS.includes(drawTool)) {                       // составной знак ГОСТ: значение спрашивается сразу, правится плашкой «Текст»
+    const uk = dLang === 'uk', ask = { rough: [uk ? 'Шорсткість (ГОСТ 2.309), напр. Ra 3,2' : 'Шероховатость (ГОСТ 2.309), напр. Ra 3,2', 'Ra 3,2'],
+      tolf: [uk ? 'Допуск форми (ГОСТ 2.308): знак, значення, база — через пробіл' : 'Допуск формы (ГОСТ 2.308): знак, значение, база — через пробел', '∥ 0,1 А'],
+      datum: [uk ? 'База: літера' : 'База: буква', 'А'], weld: [uk ? 'Зварний шов (ГОСТ 2.312): тип і катет' : 'Сварной шов (ГОСТ 2.312): тип и катет', 'ГОСТ 14771-76-Т1-△3'] }[drawTool];
+    const v = prompt(ask[0], ask[1]); if (v === null || !v.trim()) { tpts = []; preview = null; undoS.pop(); drawOverlay(); return; }
+    n.sym = drawTool; n.txt = [v.trim()];
+  }
   mnotes.push(n); selNote = n; selDim = selSec = null; ctxFor = null;
   tpts = []; preview = null; $('st').textContent = L('h_lead'); drawOverlay();
 }
@@ -5265,7 +5272,7 @@ function noteDel(n) {
   const i = mnotes.indexOf(n); if (i >= 0) mnotes.splice(i, 1); if (selNote === n) selNote = null; drawOverlay();
 }
 function toolHover(x, y) {
-  if (drawTool === 'lead' || drawTool === 'pos') { leadHover(x, y); return; }
+  if (drawTool === 'lead' || drawTool === 'pos' || SYM_TOOLS.includes(drawTool)) { leadHover(x, y); return; }
   if (drawTool === 'ang') { angHover(x, y); return; }
   if (drawTool === 'sect') { secHover(x, y); return; }
   if (drawTool === 'clip') { clipHover(x, y); return; }
@@ -5325,7 +5332,9 @@ function tubeToolClick(un, x, y) {
   tubeT = drawTool === 'chain' ? best : drawTool === 'base' ? tubeT : null;   // цепочка — от последней точки, от базы — от первой
   drawOverlay();
 }
+const SYM_TOOLS = ['rough', 'tolf', 'datum', 'weld'];
 function toolClick(x, y) {
+  if (SYM_TOOLS.includes(drawTool)) { leadClick(x, y); return; }
   if (drawTool === 'pos') {
     if (metalCur !== null && metal && (metalData().all.find(q => q.u === metalCur) || {}).svgSheet) { toast(dLang === 'uk' ? 'на аркуші труби позначення вже в заголовку — постав виноску' : 'на листе трубы обозначение уже в заголовке — поставь выноску'); return; }
     leadClick(x, y); return;
@@ -5943,7 +5952,7 @@ const DIC = {
   clr: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/>',
   dia: '<circle cx="12" cy="12" r="7.5"/><path d="M6.7 17.3L17.3 6.7"/><path d="M14 6.7h3.3V10"/>',
   rad: '<circle cx="12" cy="12" r="7.5"/><path d="M12 12l5.3-5.3"/><circle cx="12" cy="12" r=".9" fill="currentColor"/>',
-  lead: '<path d="M4 20l7-7h9"/><circle cx="4" cy="20" r="1.4" fill="currentColor"/><path d="M12 9.5h8"/>',
+  lead: '<path d="M4 20l7-7h9"/><circle cx="4" cy="20" r="1.4" fill="currentColor"/><path d="M12 9.5h8"/>', rough: '<path d="M4 12l4 8 7-15h6"/>', tolf: '<rect x="3" y="8" width="18" height="8"/><path d="M9 8v8M15 8v8"/>', datum: '<path d="M6 20h8l-4-6z" fill="currentColor"/><path d="M10 14V9"/><rect x="6" y="3" width="8" height="6"/>', weld: '<path d="M4 20l8-10h9"/><path d="M4 20l1.5-4.5M4 20l4.5-1.2"/><path d="M14 10l2-4 2 4"/>',
   pos: '<circle cx="16" cy="8" r="5"/><path d="M3.5 20.5l8.8-8.8"/><circle cx="3.5" cy="20.5" r="1.3" fill="currentColor"/>',
   cut: '<path d="M4 3.5h5M4 3.5v4.5M20 20.5h-5M20 20.5V16"/><path d="M4 20L20 4" stroke-dasharray="3.2 2"/>',
   sect: '<path d="M4 8l8-4 8 4v8l-8 4-8-4z"/><path d="M4 12l8-4 8 4-8 4z" fill="currentColor" fill-opacity=".3"/>',
@@ -5973,7 +5982,7 @@ const DTXT = {
     exit: 'Модель', tab_view: 'Вид', tab_dims: 'Размеры', tab_marks: 'Обозначения', tab_sheet: 'Лист', tab_set: 'Настройки',
     g_views: 'Виды', g_look: 'Отображение', g_fac: 'Фасады', g_scale: 'Масштаб', g_show: 'Показ',
     g_put: 'Проставить', g_auto: 'По модели', g_ends: 'Концы', g_edit: 'Правка',
-    g_mdia: 'Отверстия', g_mlead: 'Выноски', g_mcut: 'Разрезы', g_frame: 'Кадр', g_save: 'Сохранить', g_folder: 'Папки отчёта',
+    g_mdia: 'Отверстия', g_mlead: 'Выноски', g_mcut: 'Разрезы', g_msym: 'Знаки ГОСТ', rough: 'Шерохо-ватость', tolf: 'Допуск формы', datum: 'База', weld: 'Сварной шов', g_frame: 'Кадр', g_save: 'Сохранить', g_folder: 'Папки отчёта',
     g_theme: 'Оформление', g_lang: 'Язык',
     front: 'Спереди', back: 'Сзади', left: 'Слева', right: 'Справа', top: 'Сверху', iso: 'Изометрия',
     lines: 'Линии', color: 'Цвет', hid: 'Невидимые', t_hid: 'Линии за деталями — тонкие светлые, на экране и в листе SVG', nofac: 'Без фасадов',
@@ -6020,7 +6029,7 @@ const DTXT = {
     t_sect: 'Профиль детали по линии А–А: срез со штриховкой рядом на листе, в своём масштабе',
     sn_pt: 'Угол — размер пойдёт от этой точки', sn_edge: 'Линия', sn_mm: 'мм', v_x: 'Убрать вид с листа',
     t_lead: 'Щелчок по детали — точка выноски, второй щелчок — где полка с текстом. Текст — обозначение и имя детали, правится',
-    h_lead: 'Выноска: щёлкни по детали', h_lead2: 'Выноска: щёлкни, где поставить полку с текстом', e_ntext: 'Текст (строки через /)',
+    h_lead: 'Выноска: щёлкни по детали', h_pos: 'Позиция: щёлкни по детали, потом — где поставить полку', h_rough: 'Шероховатость: щёлкни по поверхности, потом — куда вынести', h_tolf: 'Допуск формы: щёлкни по элементу, потом — где поставить рамку', h_datum: 'База: щёлкни по элементу, потом — где поставить букву', h_weld: 'Сварной шов: щёлкни по шву, потом — где поставить полку', h_lead2: 'Выноска: щёлкни, где поставить полку с текстом', e_ntext: 'Текст (строки через /)',
     h_sect: 'Сечение: первая точка линии А–А', h_sect2: 'Сечение: вторая точка линии (почти ровная — выпрямится)',
     h_sect3: 'Сечение: щелчок с той стороны, куда смотреть', h_sect4: 'Сечение: щелчок — положить на лист. Потом щелчок по сечению — масштаб, поворот',
     sect_empty: 'линия не пересекает ни одной детали', s_view: 'как вид', s_rot: 'Повернуть',
@@ -6033,7 +6042,7 @@ const DTXT = {
     exit: 'Модель', tab_view: 'Вигляд', tab_dims: 'Розміри', tab_marks: 'Позначення', tab_sheet: 'Аркуш', tab_set: 'Налаштування',
     g_views: 'Види', g_look: 'Відображення', g_fac: 'Фасади', g_scale: 'Масштаб', g_show: 'Показ',
     g_put: 'Проставити', g_auto: 'За моделлю', g_ends: 'Кінці', g_edit: 'Правка',
-    g_mdia: 'Отвори', g_mlead: 'Виноски', g_mcut: 'Розрізи', g_frame: 'Кадр', g_save: 'Зберегти', g_folder: 'Теки звіту',
+    g_mdia: 'Отвори', g_mlead: 'Виноски', g_mcut: 'Розрізи', g_msym: 'Знаки ГОСТ', rough: 'Шорсткість', tolf: 'Допуск форми', datum: 'База', weld: 'Зварний шов', g_frame: 'Кадр', g_save: 'Зберегти', g_folder: 'Теки звіту',
     g_theme: 'Оформлення', g_lang: 'Мова',
     front: 'Спереду', back: 'Ззаду', left: 'Зліва', right: 'Справа', top: 'Згори', iso: 'Ізометрія',
     lines: 'Лінії', color: 'Колір', hid: 'Невидимі', t_hid: 'Лінії за деталями — тонкі світлі, на екрані й в аркуші SVG', nofac: 'Без фасадів',
@@ -6080,7 +6089,7 @@ const DTXT = {
     t_sect: 'Профіль деталі по лінії А–А: зріз зі штрихуванням поруч на аркуші, у своєму масштабі',
     sn_pt: 'Кут — розмір піде від цієї точки', sn_edge: 'Лінія', sn_mm: 'мм', v_x: 'Прибрати вид з аркуша',
     t_lead: 'Клік по деталі — точка виноски, другий клік — де полиця з текстом. Текст — позначення й ім’я деталі, правиться',
-    h_lead: 'Виноска: клікни по деталі', h_lead2: 'Виноска: клікни, де поставити полицю з текстом', e_ntext: 'Текст (рядки через /)',
+    h_lead: 'Виноска: клікни по деталі', h_pos: 'Позиція: клікни по деталі, потім — де поставити полицю', h_rough: 'Шорсткість: клікни по поверхні, потім — куди винести', h_tolf: 'Допуск форми: клікни по елементу, потім — де поставити рамку', h_datum: 'База: клікни по елементу, потім — де поставити літеру', h_weld: 'Зварний шов: клікни по шву, потім — де поставити полицю', h_lead2: 'Виноска: клікни, де поставити полицю з текстом', e_ntext: 'Текст (рядки через /)',
     h_sect: 'Переріз: перша точка лінії А–А', h_sect2: 'Переріз: друга точка лінії (майже рівна — випрямиться)',
     h_sect3: 'Переріз: клік з того боку, куди дивитися', h_sect4: 'Переріз: клік — покласти на аркуш. Потім клік по перерізу — масштаб, поворот',
     sect_empty: 'лінія не перетинає жодної деталі', s_view: 'як вид', s_rot: 'Повернути',
@@ -6135,7 +6144,7 @@ const DCMD = {
   clr: { act: () => { pushUndo(); for (const dm of dims.filter(dimHere)) removeDim(dm); for (const q of secs.filter(secHere)) secs.splice(secs.indexOf(q), 1);
     { const vk = viewKey(); for (let i = mnotes.length - 1; i >= 0; i--) if (mnotes[i].hand && (mnotes[i].mk ?? null) === metalCur && mnotes[i].vk === vk) mnotes.splice(i, 1); selNote = null; } const F = flags(); F.mod = F.all = false; selDim = selSec = null; drawOverlay(); } },
   sect: { act: () => setTool(drawTool === 'sect' ? null : 'sect'), on: isT('sect') },
-  lead: { act: () => setTool(drawTool === 'lead' ? null : 'lead'), on: isT('lead') },
+  lead: { act: () => setTool(drawTool === 'lead' ? null : 'lead'), on: isT('lead') }, rough: { act: pickT('rough'), on: isT('rough') }, tolf: { act: pickT('tolf'), on: isT('tolf') }, datum: { act: pickT('datum'), on: isT('datum') }, weld: { act: pickT('weld'), on: isT('weld') },
   dia: soon, rad: soon, pos: { act: () => setTool(drawTool === 'pos' ? null : 'pos'), on: isT('pos') }, cut: soon, detail: soon,
   svg: { act: () => saveSheet() }, png: { act: () => saveShot() }, refresh: { act: () => refreshList() },
   th_light: { act: () => setTheme('light'), on: () => dTheme === 'light' }, th_dark: { act: () => setTheme('dark'), on: () => dTheme === 'dark' },
@@ -6159,7 +6168,7 @@ const RIB = {
          ['scale', 'scale'], ['show', 'big', ['showall', 'tree']]],
   dims: [['put', 'big', ['sel', 'lin', 'chain', 'base', 'gab', 'ang']], ['auto', 'big', ['mod', 'fac', 'easy', 'all']], ['ends', 'sm', ['tick', 'arrow']],
          ['edit', 'sm', ['undo', 'redo', 'clr']]],
-  marks: [['mdia', 'big', ['dia', 'rad']], ['mlead', 'big', ['lead', 'pos']], ['mcut', 'big', ['cut', 'sect', 'detail']]],
+  marks: [['mdia', 'big', ['dia', 'rad']], ['mlead', 'big', ['lead', 'pos']], ['msym', 'big', ['rough', 'tolf', 'datum', 'weld']], ['mcut', 'big', ['cut', 'sect', 'detail']]],
   sheet: [['frame', 'frame'], ['save', 'big', ['svg', 'png']], ['folder', 'big', ['refresh']]],
   set: [['theme', 'big', ['th_light', 'th_dark', 'th_blue']], ['lang', 'big', ['ru', 'uk']]],
 };
@@ -7321,7 +7330,7 @@ function freeState() {
     sheets: freeUnits.map(x => ({ u: x.u, name: x.name, vs: x.vs, vpos: x.vpos || null, forceN: x.forceN || 0, keys: x.pi.map(partKey), pi: x.pi })),
     dims: dims.filter(d => ids.has(d.mk)).map(d => ({ mk: d.mk, a: A(d.a), b: A(d.b), axis: d.axis, off: A(d.off), label: d.label, text: d.text, fx: d.fx, vdir: d.vdir ? A(d.vdir) : null, chain: d.chain, fs: d.fs, ang: d.ang ? { c: A(d.ang.c), p: A(d.ang.p) } : null })),
     secs: secs.filter(q => ids.has(q.mk)).map(q => ({ mk: q.mk, a: A(q.a), b: A(q.b), s: q.s, vdir: A(q.vdir), fs: q.fs, letter: q.letter, sN: q.sN, rot: q.rot, pos: q.pos.slice(), pi: q.pi })),
-    notes: mnotes.filter(n => n.hand && ids.has(n.mk)).map(n => ({ mk: n.mk, vk: n.vk, p: A(n.p), pi: n.pi, q: n.q.slice(), txt: n.txt.slice() })) });
+    notes: mnotes.filter(n => n.hand && ids.has(n.mk)).map(n => ({ mk: n.mk, vk: n.vk, p: A(n.p), pi: n.pi, q: n.q.slice(), txt: n.txt.slice(), sym: n.sym, posn: n.posn })) });
 }
 // после любой перемены на листе (перерисовка листа) — запись через секунду тишины, только если что-то поменялось
 function freeSaveSoon() {
@@ -7378,7 +7387,7 @@ async function freeLoad() {
     buildDim(dm); if (dm.g) dm.g.visible = false;
   }
   for (const q of st.secs || []) if (ok.has(q.mk)) secs.push({ a: V(q.a), b: V(q.b), s: q.s, vdir: V(q.vdir), fs: q.fs, letter: q.letter, sN: q.sN, rot: q.rot, pos: q.pos.slice(), pi: q.pi, mk: q.mk });
-  for (const n of st.notes || []) if (ok.has(n.mk)) mnotes.push({ mk: n.mk, vk: n.vk, p: V(n.p), pi: n.pi, q: n.q.slice(), txt: n.txt.slice(), hand: true });
+  for (const n of st.notes || []) if (ok.has(n.mk)) mnotes.push({ mk: n.mk, vk: n.vk, p: V(n.p), pi: n.pi, q: n.q.slice(), txt: n.txt.slice(), hand: true, sym: n.sym, posn: n.posn });
   ovReopen();
   freeSaved = freeState();
   if (freeUnits.length) toast(ML('f_loaded') + ': ' + freeUnits.length + (lost.length ? '. ' + ML('f_lost') + ': ' + lost.join(', ') : ''));
@@ -8090,6 +8099,34 @@ function noteSvg(n, toP, k, exp, idx) {
   const Q = noteQ(n), dx = n.q ? (Q[0] >= 0 ? 1 : -1) : n.dx;
   const q = [p[0] + Q[0] * k, p[1] + Q[1] * k], wTxt = Math.max(...n.txt.map(t => t.length)) * 2.5 * k;
   const end = [q[0] + dx * wTxt, q[1]], sw = exp ? 0.18 : Math.max(1, 0.18 * k);
+  if (n.sym) {                                              // знаки ГОСТ: шероховатость, допуск формы, база, сварной шов
+    const P = (a, b) => `M${f(a[0])} ${f(a[1])}L${f(b[0])} ${f(b[1])}`, st = `fill="none" stroke="${col}" stroke-width="${f(sw)}"`, tx = String(n.txt[0] || ''), F = 4.6 * k;
+    const T = (x, y, t, anc) => `<text x="${f(x)}" y="${f(y)}" font-family="${DFONT}" font-size="${f(F)}" fill="${col}"${anc ? ` text-anchor="${anc}"` : ''}>${esc(t)}</text>`;
+    let g = '', bx = [q[0] - 2, q[1] - 9 * k, 30 * k, 11 * k];
+    if (n.sym === 'rough') {                                // ГОСТ 2.309: знак-«галочка» остриём в поверхность, значение над полкой знака
+      const w = Math.max(10, tx.length * 2.4 + 3) * k;
+      g = `<path d="M${f(p[0] - 2.2 * k)} ${f(p[1] - 3.8 * k)}L${f(p[0])} ${f(p[1])}L${f(p[0] + 4.4 * k)} ${f(p[1] - 7.6 * k)}h${f(w)}" ${st}/>` + T(p[0] + 5.4 * k, p[1] - 8.6 * k, tx);
+      bx = [p[0] - 3 * k, p[1] - 14 * k, w + 9 * k, 15 * k];
+    } else if (n.sym === 'tolf') {                          // ГОСТ 2.308: рамка «знак | значение | база», стрелка в элемент
+      const cells = tx.split(/\s+/).filter(Boolean), ws = cells.map(c => Math.max(7, c.length * 2.6 + 3) * k), W = ws.reduce((a, b) => a + b, 0), H = 7.5 * k, x0 = dx > 0 ? q[0] : q[0] - W, y0 = q[1] - H / 2;
+      g = `<path d="${P(p, [dx > 0 ? x0 : x0 + W, q[1]])}" ${st}/><rect x="${f(x0)}" y="${f(y0)}" width="${f(W)}" height="${f(H)}" ${st}/>`;
+      let xx = x0; cells.forEach((c, i) => { if (i) g += `<path d="M${f(xx)} ${f(y0)}v${f(H)}" ${st}/>`; g += T(xx + ws[i] / 2, y0 + H * 0.72, c, 'middle'); xx += ws[i]; });
+      const a = Math.atan2(p[1] - q[1], p[0] - (dx > 0 ? x0 : x0 + W)), ah = 2.6 * k;
+      g += `<path d="M${f(p[0])} ${f(p[1])}L${f(p[0] - ah * Math.cos(a - 0.3))} ${f(p[1] - ah * Math.sin(a - 0.3))}L${f(p[0] - ah * Math.cos(a + 0.3))} ${f(p[1] - ah * Math.sin(a + 0.3))}Z" fill="${col}"/>`;
+      bx = [x0 - 1, y0 - 1, W + 2, H + 2];
+    } else if (n.sym === 'datum') {                         // знак базы: зачернённый треугольник на элементе, линия, буква в рамке
+      const a = Math.atan2(q[1] - p[1], q[0] - p[0]), t = 3 * k, nx = -Math.sin(a), ny = Math.cos(a), b0 = [p[0] + Math.cos(a) * t * 0.9, p[1] + Math.sin(a) * t * 0.9], S = 7 * k;
+      g = `<path d="M${f(p[0] + nx * t * 0.6)} ${f(p[1] + ny * t * 0.6)}L${f(p[0] - nx * t * 0.6)} ${f(p[1] - ny * t * 0.6)}L${f(b0[0])} ${f(b0[1])}Z" fill="${col}"/><path d="${P(b0, q)}" ${st}/>` +
+        `<rect x="${f(q[0] - S / 2)}" y="${f(q[1] - S / 2)}" width="${f(S)}" height="${f(S)}" fill="#ffffff" stroke="${col}" stroke-width="${f(sw)}"/>` + T(q[0], q[1] + F * 0.36, tx, 'middle');
+      bx = [q[0] - S / 2 - 1, q[1] - S / 2 - 1, S + 2, S + 2];
+    } else {                                                // сварной шов, ГОСТ 2.312: односторонняя стрелка в шов, обозначение над полкой
+      const w = (tx.length * 2.4 + 3) * k, a = Math.atan2(p[1] - q[1], p[0] - q[0]), ah = 3.2 * k;
+      g = `<path d="${P(p, q)}M${f(q[0])} ${f(q[1])}h${f(dx * w)}" ${st}/><path d="M${f(p[0])} ${f(p[1])}L${f(p[0] - ah * Math.cos(a - 0.38))} ${f(p[1] - ah * Math.sin(a - 0.38))}" ${st}/>` + T(dx > 0 ? q[0] + 1 * k : q[0] - w + 1 * k, q[1] - 1.3 * k, tx);
+      bx = [Math.min(q[0], q[0] + dx * w) - 1, q[1] - 7 * k, w + 2, 9 * k];
+    }
+    if (!exp && idx !== undefined) g += `<rect class="nh${n === selNote ? ' on' : ''}" data-n="${idx}" x="${f(bx[0])}" y="${f(bx[1])}" width="${f(bx[2])}" height="${f(bx[3])}"/>`;
+    return g;
+  }
   let s;
   if (n.circ) {                                             // место выносного элемента: тонкая окружность, выноска от её края
     const rr = n.circ * k, L0 = Math.hypot(q[0] - p[0], q[1] - p[1]) || 1, sx = p[0] + (q[0] - p[0]) / L0 * rr, sy = p[1] + (q[1] - p[1]) / L0 * rr;
