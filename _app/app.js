@@ -5103,6 +5103,12 @@ function wireOverlay() {
     if (bi !== undefined && metalCur !== null) {              // лист металла: колонка надписей / аксонометрия — тянуть, за угол — растягивать
       e.preventDefault(); e.stopPropagation();
       const un = metalData().all.find(x => x.u === metalCur); if (!un) return;
+      if (bi.startsWith('dv:') || bi.startsWith('dvs:')) {     // выносной элемент: тянуть, уголок — масштаб, правая — удалить
+        const di = +bi.split(':')[1], d0 = un.dets && un.dets[di]; if (!d0) return;
+        if (e.button === 2) { pushUndo(); un.dets.splice(di, 1); drawOverlay(); return; }
+        if (e.button !== 0) return;
+        dr = { blk: bi, cr: e.target.dataset.cr || 'br', un, x: e.clientX, y: e.clientY, moved: false, p0: { x: d0.pos[0], y: d0.pos[1], S: d0.S, R: d0.r / drawN * d0.S } }; return;
+      }
       if (bi.startsWith('td:') || bi.startsWith('tn:')) {      // размер / выноска рукой на трубе
         const arr = bi.startsWith('td:') ? un.tdim : un.tnote, it = arr && arr[+bi.slice(3)]; if (!it) return;
         if (e.button === 2) { pushUndo(); arr.splice(+bi.slice(3), 1); drawOverlay(); return; }
@@ -5178,6 +5184,11 @@ function wireOverlay() {
     if (dr.blk) {
       const k = pxPerPaper(), dx = (e.clientX - dr.x) / k, dy = (e.clientY - dr.y) / k, p = dr.p0, un = dr.un;
       const cr = dr.cr || 'br', L = cr[1] === 'l', T = cr[0] === 't', ex = L ? -dx : dx, ey = T ? -dy : dy;   // угол, за который тянут
+      if (dr.blk.startsWith('dv:')) { const it = (un.dets || [])[+dr.blk.slice(3)]; if (it) it.pos = [p.x + dx, p.y + dy]; drawOverlay(); return; }
+      if (dr.blk.startsWith('dvs:')) {                         // масштаб выносного элемента — по ряду (5:1 … 1:10)
+        const it = (un.dets || [])[+dr.blk.slice(4)]; if (it) { const cr = dr.cr || 'br', ex = cr[1] === 'l' ? -dx : dx, want = drawN / (p.S * Math.max(0.2, (2 * p.R + ex) / (2 * p.R))), t = DET_T.reduce((a, q) => Math.abs(Math.log(q / want)) < Math.abs(Math.log(a / want)) ? q : a, DET_T[0]); it.S = drawN / t; }
+        drawOverlay(); return;
+      }
       if (dr.blk.startsWith('td:')) { const it = (un.tdim || [])[+dr.blk.slice(3)]; if (it) it.off = p.off - dy; drawOverlay(); return; }
       if (dr.blk.startsWith('tn:')) { const it = (un.tnote || [])[+dr.blk.slice(3)]; if (it) it.q = [p.x + dx, p.y + dy]; drawOverlay(); return; }
       if (dr.blk.startsWith('ip:')) { (un.ipos || (un.ipos = {}))[dr.blk.slice(3)] = [p.x + dx / p.s, p.y + dy / p.s]; drawOverlay(); return; }
@@ -5347,6 +5358,7 @@ function toolClick(x, y) {
   if (drawTool === 'ang') { angClick(x, y); return; }
   if (drawTool === 'easy') { pushUndo(); easyPick(x, y); drawOverlay(); return; }
   if (drawTool === 'sect') { secClick(x, y); return; }
+  if (drawTool === 'detail') { detailClick(x, y); return; }
   if (drawTool === 'clip') { clipClick(x, y); return; }
   const s = snapDraw(x, y);
   if (tAxis === null) {
@@ -5857,7 +5869,7 @@ function stateNow() {
            notes: mnotes.filter(n => n.hand).map(n => Object.assign({}, n, { p: n.p.toArray(), q: n.q.slice(), txt: n.txt.slice() })),   // выноски рукой (тема 60)
            mu: muNow() };                                    // открытый лист металла: виды, блоки, масштаб
 }
-const MU_KEYS = ['vpos', 'vdel', 'vhide', 'extra', 'forceN', 'blk', 'isoOv', 'tpos', 'tscG', 'ipos', 'tdim', 'tnote', 'nhid'];
+const MU_KEYS = ['vpos', 'vdel', 'vhide', 'extra', 'forceN', 'blk', 'isoOv', 'tpos', 'tscG', 'ipos', 'tdim', 'tnote', 'nhid', 'dets'];
 function muNow() {
   if (metalCur === null || !metal) return null;
   const un = metalData().all.find(x => x.u === metalCur); if (!un || un.free) return null;
@@ -6032,7 +6044,7 @@ const DTXT = {
     sn_pt: 'Угол — размер пойдёт от этой точки', sn_edge: 'Линия', sn_mm: 'мм', v_x: 'Убрать вид с листа',
     t_lead: 'Щелчок по детали — точка выноски, второй щелчок — где полка с текстом. Текст — обозначение и имя детали, правится',
     h_lead: 'Выноска: щёлкни по детали', h_pos: 'Позиция: щёлкни по детали, потом — где поставить полку', h_rough: 'Шероховатость: щёлкни по поверхности, потом — куда вынести', h_tolf: 'Допуск формы: щёлкни по элементу, потом — где поставить рамку', h_datum: 'База: щёлкни по элементу, потом — где поставить букву', h_weld: 'Сварной шов: щёлкни по шву, потом — где поставить полку', h_lead2: 'Выноска: щёлкни, где поставить полку с текстом', e_ntext: 'Текст (строки через /)',
-    h_sect: 'Сечение: первая точка линии А–А', h_sect2: 'Сечение: вторая точка линии (почти ровная — выпрямится)',
+    h_detail: 'Выносной элемент: щёлкни в середину места, потом — край кружка', h_sect: 'Сечение: первая точка линии А–А', h_sect2: 'Сечение: вторая точка линии (почти ровная — выпрямится)',
     h_sect3: 'Сечение: щелчок с той стороны, куда смотреть', h_sect4: 'Сечение: щелчок — положить на лист. Потом щелчок по сечению — масштаб, поворот',
     sect_empty: 'линия не пересекает ни одной детали', s_view: 'как вид', s_rot: 'Повернуть',
     metal: 'Металл', g_metal: 'Металлоизделия', t_metal: 'Лист на каждый металлический полуфабрикат: размеры и подписи по модели',
@@ -6092,7 +6104,7 @@ const DTXT = {
     sn_pt: 'Кут — розмір піде від цієї точки', sn_edge: 'Лінія', sn_mm: 'мм', v_x: 'Прибрати вид з аркуша',
     t_lead: 'Клік по деталі — точка виноски, другий клік — де полиця з текстом. Текст — позначення й ім’я деталі, правиться',
     h_lead: 'Виноска: клікни по деталі', h_pos: 'Позиція: клікни по деталі, потім — де поставити полицю', h_rough: 'Шорсткість: клікни по поверхні, потім — куди винести', h_tolf: 'Допуск форми: клікни по елементу, потім — де поставити рамку', h_datum: 'База: клікни по елементу, потім — де поставити літеру', h_weld: 'Зварний шов: клікни по шву, потім — де поставити полицю', h_lead2: 'Виноска: клікни, де поставити полицю з текстом', e_ntext: 'Текст (рядки через /)',
-    h_sect: 'Переріз: перша точка лінії А–А', h_sect2: 'Переріз: друга точка лінії (майже рівна — випрямиться)',
+    h_detail: 'Виносний елемент: клікни в середину місця, потім — край кружка', h_sect: 'Переріз: перша точка лінії А–А', h_sect2: 'Переріз: друга точка лінії (майже рівна — випрямиться)',
     h_sect3: 'Переріз: клік з того боку, куди дивитися', h_sect4: 'Переріз: клік — покласти на аркуш. Потім клік по перерізу — масштаб, поворот',
     sect_empty: 'лінія не перетинає жодної деталі', s_view: 'як вид', s_rot: 'Повернути',
     metal: 'Метал', g_metal: 'Металовироби', t_metal: 'Аркуш на кожен металевий напівфабрикат: розміри й підписи за моделлю',
@@ -6147,7 +6159,7 @@ const DCMD = {
     { const vk = viewKey(); for (let i = mnotes.length - 1; i >= 0; i--) if (mnotes[i].hand && (mnotes[i].mk ?? null) === metalCur && mnotes[i].vk === vk) mnotes.splice(i, 1); selNote = null; } const F = flags(); F.mod = F.all = false; selDim = selSec = null; drawOverlay(); } },
   sect: { act: () => setTool(drawTool === 'sect' ? null : 'sect'), on: isT('sect') },
   lead: { act: () => setTool(drawTool === 'lead' ? null : 'lead'), on: isT('lead') }, rough: { act: pickT('rough'), on: isT('rough') }, tolf: { act: pickT('tolf'), on: isT('tolf') }, datum: { act: pickT('datum'), on: isT('datum') }, weld: { act: pickT('weld'), on: isT('weld') },
-  dia: soon, rad: soon, pos: { act: () => setTool(drawTool === 'pos' ? null : 'pos'), on: isT('pos') }, cut: soon, detail: soon,
+  dia: soon, rad: soon, pos: { act: () => setTool(drawTool === 'pos' ? null : 'pos'), on: isT('pos') }, cut: soon, detail: { act: pickT('detail'), on: isT('detail') },
   svg: { act: () => saveSheet() }, png: { act: () => saveShot() }, refresh: { act: () => refreshList() },
   th_light: { act: () => setTheme('light'), on: () => dTheme === 'light' }, th_dark: { act: () => setTheme('dark'), on: () => dTheme === 'dark' },
   th_blue: { act: () => setTheme('blue'), on: () => dTheme === 'blue' },
@@ -7031,7 +7043,7 @@ function ovInit(un) {
   const e = OV.sheets[sk]; if (!e) return;
   const J = x => JSON.parse(JSON.stringify(x)), V = a => new THREE.Vector3().fromArray(a);
   if (e.vpos) un.vpos = J(e.vpos); if (e.vdel) un.vdel = e.vdel.slice(); if (e.vhide) un.vhide = e.vhide.slice(); if (e.extra) un.extra = e.extra.slice(); if (e.forceN) un.forceN = e.forceN;
-  if (e.blk) un.blk = J(e.blk); if (e.isoOv) un.isoOv = J(e.isoOv); if (e.tpos) un.tpos = J(e.tpos); if (e.tscG) un.tscG = J(e.tscG); if (e.ipos) un.ipos = J(e.ipos); if (e.tdim) un.tdim = J(e.tdim); if (e.tnote) un.tnote = J(e.tnote); if (e.nhid) un.nhid = e.nhid.slice();
+  if (e.blk) un.blk = J(e.blk); if (e.isoOv) un.isoOv = J(e.isoOv); if (e.tpos) un.tpos = J(e.tpos); if (e.tscG) un.tscG = J(e.tscG); if (e.ipos) un.ipos = J(e.ipos); if (e.tdim) un.tdim = J(e.tdim); if (e.tnote) un.tnote = J(e.tnote); if (e.nhid) un.nhid = e.nhid.slice(); if (e.dets) un.dets = J(e.dets);
   const H = e.hand || {};
   for (const q of H.dims || []) {
     if (q.chain) chainSeq = Math.max(chainSeq, q.chain);
@@ -7056,7 +7068,7 @@ function ovCapture(un) {
     if (dm.fx) d.f = JSON.parse(JSON.stringify(dm.fx));
     if (Object.keys(d).length) dd[dm.id] = d; else delete dd[dm.id];
   }
-  for (const k of ['vpos', 'vdel', 'vhide', 'extra', 'forceN', 'blk', 'isoOv', 'tpos', 'tscG', 'ipos', 'tdim', 'tnote', 'nhid']) { const v = un[k]; if (v && (!Array.isArray(v) || v.length)) e[k] = JSON.parse(JSON.stringify(v)); else delete e[k]; }
+  for (const k of ['vpos', 'vdel', 'vhide', 'extra', 'forceN', 'blk', 'isoOv', 'tpos', 'tscG', 'ipos', 'tdim', 'tnote', 'nhid', 'dets']) { const v = un[k]; if (v && (!Array.isArray(v) || v.length)) e[k] = JSON.parse(JSON.stringify(v)); else delete e[k]; }
   e.hand = {
     dims: dims.filter(d => d.mk === un.u && !d.auto).map(d => ({ a: A(d.a), b: A(d.b), axis: d.axis, off: A(d.off), label: d.label, text: d.text, fx: d.fx, vdir: d.vdir ? A(d.vdir) : null, chain: d.chain, fs: d.fs, ang: d.ang ? { c: A(d.ang.c), p: A(d.ang.p) } : null })),
     secs: secs.filter(q => q.mk === un.u).map(q => ({ a: A(q.a), b: A(q.b), s: q.s, vdir: A(q.vdir), fs: q.fs, letter: q.letter, sN: q.sN, rot: q.rot, pos: q.pos.slice(), pi: q.pi })),
@@ -8199,7 +8211,8 @@ function metalBlockSvg(o, k, ui) {
   // увеличенный вид платика «А» в свободном месте листа (Алексей 27.10: на основном виде платик — точка, нечитаемо)
   if (!un.general && un.lay && un.lay.det) s += metalDetailSvg(un, o, k, un.lay.det);
   // аксонометрия: всё изделие серой дымкой, этот полуфабрикат выделен — в место, которое нашла раскладка
-  if (un.svgSheet) s += tubeSheetSvg(un, o, k, ui);              // лист труб каркаса (полосы + картинка каркаса справа)
+  if (un.svgSheet) s += tubeSheetSvg(un, o, k, ui);
+  s += detailSvg(un, o, k, ui);                                // выносные элементы «А (2:1)»              // лист труб каркаса (полосы + картинка каркаса справа)
   const th = un.svgSheet ? null : metalThumb(un);
   const iso = metalIsoGeo(un);
   if (th) s += `<image href="${th}" x="${f(o[0] + iso.x * k)}" y="${f(o[1] + iso.y * k)}" width="${f(iso.s * k)}" height="${f(iso.s * k)}" preserveAspectRatio="xMidYMid meet"/>`;
@@ -8211,6 +8224,7 @@ function metalBlockSvg(o, k, ui) {
     if (un.svgSheet) { const tI = tubeIsoGeo(un); s += R('iso', tI.x, tI.y, tI.x + tI.s, tI.y + tI.s); }   // картинка рамки на листе труб — тоже блок
     // лист труб: каждая полоса — блок, тянется мышью за любое своё место
     // выбран инструмент — блок трубы не перехватывает щелчки: они идут размеру / выноске
+
     if (un.svgSheet && un.tgRect && !drawTool) for (const key in un.tgRect) { const r = un.tgRect[key]; s += `<rect class="bh" data-b="tg:${esc(key)}" x="${f(o[0] + r[0] * k)}" y="${f(o[1] + r[1] * k)}" width="${f((r[2] - r[0]) * k)}" height="${f((r[3] - r[1]) * k)}"/>` + grips4(`data-b="tgs:${esc(key)}"`, o[0] + r[0] * k, o[1] + r[1] * k, o[0] + r[2] * k, o[1] + r[3] * k); }
   }
   // общий вид: выноски с номерами позиций на аксонометрии — те же номера, что в списке (Алексей 27.10)
@@ -8880,6 +8894,75 @@ function variantSwitch(i, make) {
   if (tgt) metalShow(tgt.u);
   metalTreeHtml = ''; syncPanel(); freeSaveSoon();
   toast((dLang === 'uk' ? 'варіант: ' : 'вариант: ') + OV.vars[OV.cur].name);
+}
+// ---------- выносной элемент (ТЗ чертежей металла v3, п. 15; ГОСТ 2.305 п. 8) ----------
+// Кружок на виде → отдельный блок «А (2:1)» с тем же местом крупнее. Рисуется из настоящих линий вида (не картинкой):
+// линии вида берутся один раз и хранятся от середины вида, поэтому блок живёт при сдвиге вида; сменился масштаб листа или
+// модель — берутся заново. Блок тянется, масштаб — за уголок (по ряду), правая кнопка — удалить. Хранится в правках листа.
+const DET_LET = 'АБВГДЕЖИКЛМНПРСТ', DET_T = [0.2, 0.5, 1, 2, 2.5, 4, 5, 10];   // DET_T — «1:N» выносного элемента (0,5 = 2:1)
+const detCache = new WeakMap(); let detBusy = false, detT = null;
+const detLabel = (d, n) => { const t = n / d.S; return d.letter + ' (' + (t >= 1 ? '1:' + fmtN(Math.round(t * 100) / 100) : fmtN(Math.round(100 / t) / 100) + ':1') + ')'; };
+function detailLines(un, d) {
+  const n = drawN, vw = metalViews(un), w = vw.find(q => q.v === d.v); if (!w) return null;
+  const sig = n + '|' + d.v + '|' + (un.lay ? un.lay.n : 0);
+  let c = detCache.get(d); if (c && c.sig === sig) return c;
+  if (detBusy) return c || null;
+  detBusy = true;
+  try {
+    const keepV = un.actV, nb = metalNoBlock;
+    metalPlace(metalCam(un, d.v), w.px, w.py); metalNoBlock = true;
+    const sv = buildSVG(); metalNoBlock = nb;
+    const grab = id => { const m = new RegExp('<g id="' + id + '"[^>]*>([\\s\\S]*?)\\n?</g>').exec(sv); return m ? [...m[1].matchAll(/ d="([^"]+)"/g)].map(x => x[1]).join('') : ''; };
+    c = { sig, vis: grab('detali'), hid: grab('nevidimye'), px: w.px, py: w.py };
+    detCache.set(d, c);
+    const wa = vw.find(q => q.v === keepV); if (wa && keepV !== d.v) metalPlace(metalCam(un, keepV), wa.px, wa.py);   // живой вид — на место
+  } finally { detBusy = false; }
+  return c;
+}
+function detailSvg(un, o, k, ui) {
+  if (!un.dets || !un.dets.length || detBusy) return '';
+  const f = v => String(Math.round(v * 100) / 100), n = drawN, vw = metalViews(un); let s = '';
+  un.dets.forEach((d, i) => {
+    const w = vw.find(q => q.v === d.v); if (!w) return;
+    const cx = w.px + d.c[0] / n, cy = w.py + d.c[1] / n, r = d.r / n, R = r * d.S, X = o[0] + d.pos[0] * k, Y = o[1] + d.pos[1] * k, sw = 0.18 * k;
+    // на виде: тонкая окружность и буква на полке
+    s += `<circle cx="${f(o[0] + cx * k)}" cy="${f(o[1] + cy * k)}" r="${f(r * k)}" fill="none" stroke="#000000" stroke-width="${f(sw)}"/>` +
+      `<path d="M${f(o[0] + (cx + r * 0.707) * k)} ${f(o[1] + (cy - r * 0.707) * k)}l${f(4 * k)} ${f(-4 * k)}h${f(6 * k)}" fill="none" stroke="#000000" stroke-width="${f(sw)}"/>` +
+      `<text x="${f(o[0] + (cx + r * 0.707 + 5) * k)}" y="${f(o[1] + (cy - r * 0.707 - 5) * k)}" font-family="${DFONT}" font-size="${f(5 * k)}" fill="#000000">${esc(d.letter)}</text>`;
+    // блок: то же место крупнее, обрезано кружком
+    const L = detailLines(un, d), id = 'dc' + String(un.u).replace('-', 'm') + '_' + i + (ui ? 'u' : 'e');
+    if (L) {
+      const tr = `translate(${f(X)} ${f(Y)}) scale(${f(d.S * k)}) translate(${f(-(L.px + d.c[0] / n))} ${f(-(L.py + d.c[1] / n))})`;
+      s += `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(R * k)}" fill="#ffffff"/><clipPath id="${id}"><circle cx="${f(X)}" cy="${f(Y)}" r="${f(R * k)}"/></clipPath><g clip-path="url(#${id})">` +
+        (L.hid ? `<path transform="${tr}" d="${L.hid}" fill="none" stroke="#555555" stroke-width="${f(0.13 / d.S)}" stroke-dasharray="${f(1.6 / d.S)} ${f(0.9 / d.S)}"/>` : '') +
+        `<path transform="${tr}" d="${L.vis}" fill="none" stroke="#000000" stroke-width="${f(0.3 / d.S)}" stroke-linecap="round"/></g>`;
+    }
+    s += `<circle cx="${f(X)}" cy="${f(Y)}" r="${f(R * k)}" fill="none" stroke="#000000" stroke-width="${f(sw)}"/>` +
+      `<text x="${f(X)}" y="${f(Y - (R + 2.5) * k)}" font-family="${DFONT}" font-size="${f(5.5 * k)}" fill="#000000" text-anchor="middle">${esc(detLabel(d, n))}</text>`;
+    if (ui) s += `<rect class="bh" data-b="dv:${i}" x="${f(X - R * k)}" y="${f(Y - R * k)}" width="${f(2 * R * k)}" height="${f(2 * R * k)}"/>` + grips4(`data-b="dvs:${i}"`, X - R * k, Y - R * k, X + R * k, Y + R * k);
+  });
+  return s;
+}
+function detailClick(x, y) {
+  const un = metalCur !== null && metal ? metalData().all.find(q => q.u === metalCur) : null, uk = dLang === 'uk';
+  if (!un || un.svgSheet) { toast(uk ? 'виносний елемент ставиться на аркуші з видами' : 'выносной элемент ставится на листе с видами'); return; }
+  const S = sheetRect(), k = S.w / SHEET_W, mx = (x - S.x0) / k, my = (y - S.y0) / k, n = drawN;
+  if (!detT) {
+    const w = metalViews(un).find(q => { const r = metalViewRect(q); return mx >= r[0] && mx <= r[2] && my >= r[1] && my <= r[3]; });
+    if (!w) { toast(uk ? 'клікни всередині виду' : 'щёлкни внутри вида'); return; }
+    detT = { v: w.v, c: [(mx - w.px) * n, (my - w.py) * n], x: mx, y: my }; $('st').textContent = uk ? 'тепер — край кружка' : 'теперь — край кружка'; return;
+  }
+  const r = Math.max(3, Math.hypot(mx - detT.x, my - detT.y));
+  pushUndo();
+  const used = new Set((un.dets || []).map(d => d.letter)), letter = [...DET_LET].find(c => !used.has(c)) || 'А';
+  const t = DET_T.filter(q => q < n).pop() || DET_T[0], Sc = n / (DET_T.filter(q => q <= n / 2).pop() || t);   // по умолчанию — вдвое-втрое крупнее вида, масштаб из ряда
+  // блок — в свободное место листа: мимо видов с их размерами, колонки надписей, аксонометрии и прежних выносных элементов
+  let R2 = r * Sc; const ig = metalIsoGeo(un), occ = ((un.lay && un.lay.occ) || metalViews(un).map(metalViewRect)).concat([metalBlockRect(un, n), [ig.x, ig.y, ig.x + ig.s, ig.y + ig.s]], (un.dets || []).map(q => { const rr = q.r / n * q.S; return [q.pos[0] - rr, q.pos[1] - rr - 8, q.pos[0] + rr, q.pos[1] + rr]; }));
+  let spot = null, S2 = Sc;                                   // не влезает — масштаб блока мельче по ряду, пока крупнее вида
+  for (const q of DET_T.filter(q => q < n && n / q <= Sc + 1e-6).sort((a, b) => a - b)) { S2 = n / q; R2 = r * S2; spot = metalFreeRect(occ, SHEET_W, SHEET_H, 2 * R2, 2 * R2 + 7); if (spot) break; }
+  if (!spot) { S2 = Sc; R2 = r * Sc; toast(uk ? 'вільного місця немає — перетягни блок сам' : 'свободного места нет — перетащи блок сам'); }
+  (un.dets || (un.dets = [])).push({ v: detT.v, c: detT.c, r: r * n, S: S2, pos: spot ? [spot[0] + R2, spot[1] + R2 + 7] : [Math.min(SHEET_W - 100 - R2, detT.x + r + R2 + 12), Math.max(R2 + 12, detT.y - R2 * 0.3)], letter });
+  detT = null; setTool(null); drawOverlay();
 }
 // «Переразложить»: лист встаёт как после автоматики — места и состав видов, масштаб, колонка, аксонометрия, блоки труб, полки
 // позиций сбрасываются; размеры, выноски и скрытое — остаются (ТЗ v3, п. 12)
