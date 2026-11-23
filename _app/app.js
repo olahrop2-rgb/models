@@ -6850,7 +6850,7 @@ function metalClear(un) {                                   // автомати�
   ovCapture(un);
   for (const dm of dims.filter(d => d.mk === un.u && d.auto)) removeDim(dm);
   for (let i = mnotes.length - 1; i >= 0; i--) if (mnotes[i].mk === un.u && !mnotes[i].hand) mnotes.splice(i, 1);
-  un.given = new Set(); un.marks = {};
+  un.given = new Set(); un.marks = {}; un.tgiven = {};
 }
 function metalLayout(un) { ovInit(un); return metalLayout0(un); }
 function metalLayout0(un) {
@@ -7766,11 +7766,31 @@ function metalDims0(un) {
   const padOf = n => n ? 11 + (n - 1) * 9 + 6 : 3, pad = { t: padOf(rowsN.t), b: padOf(rowsN.b), l: padOf(rowsN.l), r: padOf(rowsN.r) };
   const halfW = Math.abs(b.max[R] - b.min[R]) / k / 2;
   for (const n of mnotes) {
-    if (n.mk !== un.u || n.vk !== vk || n.hand) continue;
+    if (n.mk !== un.u || n.vk !== vk || n.hand || n.pos) continue;
     const ly = n.ly - (n.gap || 0);                         // поле — от края вида (выноска идёт от точки внутри вида)
     if (n.dy < 0) pad.t = Math.max(pad.t, ly + 6); else pad.b = Math.max(pad.b, ly + n.txt.length * 6.6 + 2);
     const x0 = (n.p[R] - mid[R]) * rtS / k, x1 = x0 + n.dx * (n.ly * 0.5 + Math.max(...n.txt.map(t => t.length)) * 2.5);
     if (x1 > halfW) pad.r = Math.max(pad.r, x1 - halfW + 2); if (x1 < -halfW) pad.l = Math.max(pad.l, -halfW - x1 + 2);
+  }
+  // позиции труб (ТЗ v3, п. 3): выноска с обозначением из модели — внутрь рамки (там пусто, ряды размеров снаружи), на виде,
+  // где труба видна вдоль; одна выноска на обозначение на весь лист. Номер выноски = обозначение = строка таблицы в колонке.
+  if (!un.general && !un.frame && !un.svgSheet && un.hasProf) {
+    const D = ['x', 'y', 'z'].find(a => a !== R && a !== U), tg = un.tgiven || (un.tgiven = {}), placedT = [];
+    for (const d in tg) if (tg[d] === vk) delete tg[d];
+    for (const i of un.tubes || []) {
+      const o = M.objs[i]; if (!o || !o.pf || !o.d || tg[o.d]) continue;
+      const bx = partBox(i), s = bx.getSize(V3()), la = ['x', 'y', 'z'].reduce((p, q) => s[q] > s[p] ? q : p, 'x');
+      if (la === D) continue;                               // труба торцом к нам — на этом виде её не подписать
+      tg[o.d] = vk;
+      const c = bx.getCenter(V3()), toR = Math.sign((mid[R] - c[R]) * rtS) || 1, toU = Math.sign((mid[U] - c[U]) * upS) || 1, p = c.clone();
+      p[la] += s[la] * 0.2;                                 // не в самой середине трубы: там чаще стоят отверстия и их размеры
+      const q = la === R ? [6, -toU * 9] : [toR * 9, -6], wT = o.d.length * 2.5 + 2;
+      // подписи соседних труб не ложатся друг на друга: занято — точка съезжает вдоль своей трубы на шаг (10 мм листа)
+      const at = pp => [(pp[R] - mid[R]) * rtS / k + q[0], -(pp[U] - mid[U]) * upS / k + q[1]], hit = pp => { const a = at(pp); return placedT.some(z => Math.abs(z[1] - a[1]) < 7 && a[0] < z[0] + z[2] && z[0] < a[0] + wT); };
+      for (let tr = 1; tr <= 8 && hit(p); tr++) { const pp = c.clone(); pp[la] += s[la] * 0.2 - 10 * k * tr; if (Math.abs(pp[la] - c[la]) < s[la] * 0.45) p.copy(pp); else break; }
+      const a = at(p); placedT.push([Math.min(a[0], a[0] + (q[0] < 0 ? -wT : 0)), a[1], wT]);
+      mnotes.push({ mk: un.u, vk, p, pos: true, dx: la === R ? 1 : toR, dy: 1, q, txt: [o.d] });
+    }
   }
   un.padNow = pad;
   drawOverlay();
