@@ -4930,14 +4930,25 @@ function dimPrims(dm, toP, k) {
   const ang = Math.atan2(ey, ex) * 180 / Math.PI, r = ang * Math.PI / 180;
   const tp = [(pa2[0] + pb2[0]) / 2, (pa2[1] + pb2[1]) / 2];
   // на листе — до целого (Алексей 06.10: сотые заказчика путают; цепочка может не сойтись с общим на мм — так и оставить)
-  const txt = dm.text != null ? String(dm.text) : String(Math.round(Math.abs(val)));
+  const txt = dimText(dm, dm.text != null ? String(dm.text) : String(Math.round(Math.abs(val))));
   // лист металла: число шире интервала («30» у основания цепочки) — вынести за интервал в сторону от базы (Алексей 27.10)
   if (dm.mk != null && dm.axis) {
     const tw = txt.length * (dm.fsz || 3.5) * 0.55 * k;
     if (Ln < tw + 2 * k) { const sh = sg * (Ln / 2 + tw / 2 + 1.5 * k); tp[0] += ex * sh; tp[1] += ey * sh; }
     else if (dm.stag) { const sh = dm.stag * (tw * 0.6 + 1 * k); tp[0] += ex * sh; tp[1] += ey * sh; }   // шахматный порядок соседних рядов
   }
-  return { L, T, F, txt, x: tp[0] + Math.sin(r) * k, y: tp[1] - Math.cos(r) * k, ang, pa, pb, tp, col: dm.col, fsz: dm.fsz };
+  const fz = (dm.fsz || 3.5) * k, fx = dm.fx || {}, nx = Math.sin(r), ny = -Math.cos(r);
+  return { L, T, F, txt, x: tp[0] + nx * k, y: tp[1] + ny * k, ang, pa, pb, tp, col: dm.col, fsz: dm.fsz, hand: dm.text != null,
+           over: fx.over || '', ox: tp[0] + nx * (k + fz * 1.12), oy: tp[1] + ny * (k + fz * 1.12),      // уточнение над числом
+           under: fx.under || '', ux: tp[0] - nx * (fz * 0.82 + 0.6 * k), uy: tp[1] - ny * (fz * 0.82 + 0.6 * k) };   // уточнение под размерной линией
+}
+// Текст размера собирается из частей (окно «Изменить размер», ТЗ v3, п. 17): перед числом (⌀, □, M, R, Сфера, любой текст),
+// число, после числа, отклонение (± / верхнее и нижнее / посадка), «*» у справочного. Число — из модели; переписанное рукой
+// остаётся, но подсвечивается на экране и попадает в замечания.
+function dimText(dm, num) {
+  const x = dm.fx; if (!x) return num;
+  const t = x.tol || {}, tol = t.t === 'sym' && t.a ? '±' + t.a : t.t === 'dev' && (t.a || t.b) ? ' (' + (t.a || '0') + ' / ' + (t.b || '0') + ')' : t.t === 'fit' && t.a ? ' ' + t.a : '';
+  return (x.pre || '') + num + (x.suf || '') + tol + (x.ref ? '*' : '');
 }
 function dimSvg(g, k, o) {
   const col = o.sel ? '#e0301e' : o.prev ? '#7aa7e0' : (g.col || '#1f5fbf'), f = v => String(Math.round(v * 100) / 100);
@@ -4947,7 +4958,9 @@ function dimSvg(g, k, o) {
   if (g.T.length) s += `<path d="${seg(g.T)}" fill="none" stroke="${col}" stroke-width="${f(tw)}" stroke-linecap="round"/>`;
   if (g.F.length) s += `<path d="${g.F.map(t => 'M' + f(t[0]) + ' ' + f(t[1]) + 'L' + f(t[2]) + ' ' + f(t[3]) + 'L' + f(t[4]) + ' ' + f(t[5]) + 'Z').join('')}" fill="${col}" stroke="none"/>`;
   s += `<text x="${f(g.x)}" y="${f(g.y)}" font-family="${DFONT}" font-size="${f((g.fsz || 3.5) * k)}" fill="${col}" text-anchor="middle"` +
-    (Math.abs(g.ang) > 0.01 ? ` transform="rotate(${f(g.ang)} ${f(g.x)} ${f(g.y)})"` : '') + (o.exp || o.prev ? '' : ` class="dt" data-d="${o.i}"`) + `>${g.txt}</text>`;
+    (Math.abs(g.ang) > 0.01 ? ` transform="rotate(${f(g.ang)} ${f(g.x)} ${f(g.y)})"` : '') + (o.exp || o.prev ? '' : ` class="dt" data-d="${o.i}"`) + (g.hand && !o.exp ? ' text-decoration="underline"' : '') + `>${esc(g.txt)}</text>`;
+  // уточнения над числом и под линией — тем же шрифтом, мельче
+  for (const [tx, x, y] of [[g.over, g.ox, g.oy], [g.under, g.ux, g.uy]]) if (tx) s += `<text x="${f(x)}" y="${f(y)}" font-family="${DFONT}" font-size="${f((g.fsz || 3.5) * 0.8 * k)}" fill="${col}" text-anchor="middle"` + (Math.abs(g.ang) > 0.01 ? ` transform="rotate(${f(g.ang)} ${f(x)} ${f(y)})"` : '') + `>${esc(tx)}</text>`;
   if (!o.exp && !o.prev) s += `<path d="${seg(g.L)}" class="dh" data-d="${o.i}"/>`;
   return s;
 }
@@ -5812,7 +5825,7 @@ const undoS = [], redoS = [];
 function stateNow() {
   // mk — чей лист: без него отмена отдавала размеры и сечения всех листов тому, что открыт (тема 60, 11.11)
   return { dims: dims.map(d => ({ a: d.a.toArray(), b: d.b.toArray(), axis: d.axis, off: d.off.toArray(), label: d.label, text: d.text, vdir: d.vdir ? d.vdir.toArray() : null, auto: d.auto, chain: d.chain, fs: d.fs, mk: d.mk ?? null, ang: d.ang ? { c: d.ang.c.toArray(), p: d.ang.p.toArray() } : null,
-                                  x: { id: d.id, hid: d.hid, col: d.col, fsz: d.fsz, stag: d.stag, off0: d.off0 ? d.off0.toArray() : null, text0: d.text0 } })),
+                                  x: { id: d.id, hid: d.hid, col: d.col, fsz: d.fsz, stag: d.stag, off0: d.off0 ? d.off0.toArray() : null, text0: d.text0, fx: d.fx ? JSON.parse(JSON.stringify(d.fx)) : undefined } })),
            ph: parts.map(p => p.hidden ? '1' : '0').join(''), nh: Object.keys(nodes).filter(k => nodes[k].hidden), fac: hideFac, af: JSON.stringify(autoFlags),
            secs: secs.map(q => ({ a: q.a.toArray(), b: q.b.toArray(), s: q.s, vdir: q.vdir.toArray(), fs: q.fs, letter: q.letter, sN: q.sN, rot: q.rot, pos: q.pos.slice(), pi: q.pi, mk: q.mk ?? null })),
            notes: mnotes.filter(n => n.hand).map(n => Object.assign({}, n, { p: n.p.toArray(), q: n.q.slice(), txt: n.txt.slice() })),   // выноски рукой (тема 60)
@@ -5842,7 +5855,7 @@ function restoreState(s) {
   easyDims.length = 0; partDims.length = 0; gabDims.length = 0;
   for (const q of s.dims) {
     const dm = addDim(new THREE.Vector3().fromArray(q.a), new THREE.Vector3().fromArray(q.b), { label: q.label, text: q.text, fs: q.fs, mk: q.mk === undefined ? undefined : q.mk });
-    if (q.x) { for (const k of ['id', 'hid', 'col', 'fsz', 'stag', 'text0']) if (q.x[k] !== undefined) dm[k] = q.x[k]; if (q.x.off0) dm.off0 = new THREE.Vector3().fromArray(q.x.off0); }
+    if (q.x) { for (const k of ['id', 'hid', 'col', 'fsz', 'stag', 'text0', 'fx']) if (q.x[k] !== undefined) dm[k] = q.x[k]; if (q.x.off0) dm.off0 = new THREE.Vector3().fromArray(q.x.off0); }
     dm.axis = q.axis; dm.off = new THREE.Vector3().fromArray(q.off); dm.vdir = q.vdir ? new THREE.Vector3().fromArray(q.vdir) : null; dm.auto = q.auto; dm.chain = q.chain;
     if (q.ang) dm.ang = { c: new THREE.Vector3().fromArray(q.ang.c), p: new THREE.Vector3().fromArray(q.ang.p) };
     buildDim(dm);
@@ -5965,7 +5978,7 @@ const DTXT = {
     dimfly: 'Размеры', autofly: 'Размеры по модели', endfly: 'Концы размеров', pcol: 'Свернуть / развернуть',
     scaleAuto: 'по виду', scaleFix: 'закрепить 1:', frameName: 'название кадра', frameHint: 'так назовётся файл',
     noScale: 'перспектива — без масштаба', fixed: 'закреплён', byView: 'по виду',
-    e_text: 'Текст', e_reset: 'Исходный', e_del: 'Удалить', e_delchain: 'Цепочку',
+    e_text: 'Изменить', e_reset: 'Исходный', e_del: 'Удалить', e_delchain: 'Цепочку',
     p_sheets: 'Листы зоны', p_draw: 'Листы', p_shot: 'Снимки', p_empty: 'пусто', p_prev: 'Предпросмотр',
     p_noSrv: 'локальный сервер не отвечает', p_noZone: 'нет папки заказа — перевыгрузите проект из Базиса',
     soon: 'будет следующим шагом',
@@ -6025,7 +6038,7 @@ const DTXT = {
     dimfly: 'Розміри', autofly: 'Розміри за моделлю', endfly: 'Кінці розмірів', pcol: 'Згорнути / розгорнути',
     scaleAuto: 'за видом', scaleFix: 'закріпити 1:', frameName: 'назва кадру', frameHint: 'так називатиметься файл',
     noScale: 'перспектива — без масштабу', fixed: 'закріплено', byView: 'за видом',
-    e_text: 'Текст', e_reset: 'Початковий', e_del: 'Видалити', e_delchain: 'Ланцюжок',
+    e_text: 'Змінити', e_reset: 'Початковий', e_del: 'Видалити', e_delchain: 'Ланцюжок',
     p_sheets: 'Аркуші зони', p_draw: 'Аркуші', p_shot: 'Знімки', p_empty: 'порожньо', p_prev: 'Попередній перегляд',
     p_noSrv: 'локальний сервер не відповідає', p_noZone: 'немає теки замовлення — перевивантажте проєкт з Базиса',
     soon: 'буде наступним кроком',
@@ -6293,8 +6306,44 @@ function ctxFill(dm, g) {
   el.innerHTML = it.map(([k, ic]) => `<button data-x="${k}">${DS(DIC[ic], 18)}<span>${L(k)}</span></button>`).join('');
   el.querySelectorAll('[data-x]').forEach(b => { b.onclick = e => { e.stopPropagation(); ctxAct(b.dataset.x, dm); }; });
 }
+// ---------- окно «Изменить размер» (ТЗ чертежей металла v3, п. 17) ----------
+const dimModelNum = dm => dm.ang ? '' : String(Math.round(Math.abs(dm.axis ? dm.b.clone().sub(dm.a).dot(AX[dm.axis]) : dm.a.distanceTo(dm.b))));
+function dimDialog(dm) {
+  let el = $('ddlg'); if (el) el.remove();
+  el = document.createElement('div'); el.id = 'ddlg'; document.body.appendChild(el);
+  const uk = dLang === 'uk', keep = { text: dm.text, fx: dm.fx ? JSON.parse(JSON.stringify(dm.fx)) : undefined }, x = dm.fx ? JSON.parse(JSON.stringify(dm.fx)) : {};
+  x.tol = x.tol || { t: '' };
+  const T = (ru, ua) => uk ? ua : ru, v = s => esc(s == null ? '' : String(s));
+  el.innerHTML = `<h4>${T('Размер', 'Розмір')}</h4>
+    <label>${T('Перед числом', 'Перед числом')}</label><div class="r"><span class="pb">${['⌀', '□', 'M', 'R', T('Сфера ', 'Сфера ')].map(p => `<button type="button" data-p="${p}">${p.trim()}</button>`).join('')}</span><input data-k="pre" value="${v(x.pre)}"></div>
+    <label>${T('Число', 'Число')}</label><div class="r"><input data-k="num" placeholder="${v(dimModelNum(dm))} — ${T('из модели', 'з моделі')}" value="${v(dm.text)}"><button type="button" data-a="model">${T('из модели', 'з моделі')}</button></div>
+    <label>${T('После числа', 'Після числа')}</label><div class="r"><input data-k="suf" placeholder="×45°, (2 шт.)" value="${v(x.suf)}"></div>
+    <label>${T('Над числом', 'Над числом')}</label><div class="r"><input data-k="over" value="${v(x.over)}"></div>
+    <label>${T('Под линией', 'Під лінією')}</label><div class="r"><input data-k="under" value="${v(x.under)}"></div>
+    <label>${T('Отклонение', 'Відхилення')}</label><div class="r"><select data-k="tt"><option value="">${T('нет', 'немає')}</option><option value="sym">± ${T('симметричное', 'симетричне')}</option><option value="dev">${T('верхнее и нижнее', 'верхнє і нижнє')}</option><option value="fit">${T('посадка', 'посадка')}</option></select><input data-k="ta" class="s" placeholder="0,5 / +0,2 / H7" value="${v(x.tol.a)}"><input data-k="tb" class="s" placeholder="−0,1" value="${v(x.tol.b)}"></div>
+    <label></label><div class="r"><label class="c"><input type="checkbox" data-k="ref"${x.ref ? ' checked' : ''}> ${T('справочный (со звёздочкой)', 'довідковий (із зірочкою)')}</label></div>
+    <div class="b"><button type="button" data-a="ok" class="ok">OK</button><button type="button" data-a="cancel">${T('Отмена', 'Скасувати')}</button></div>`;
+  const q = k => el.querySelector(`[data-k="${k}"]`);
+  q('tt').value = x.tol.t || '';
+  const apply = () => {
+    const fx = { pre: q('pre').value, suf: q('suf').value, over: q('over').value.trim(), under: q('under').value.trim(), ref: q('ref').checked, tol: { t: q('tt').value, a: q('ta').value.trim(), b: q('tb').value.trim() } };
+    if (!fx.tol.t) delete fx.tol; for (const k of ['pre', 'suf', 'over', 'under', 'ref']) if (!fx[k]) delete fx[k];
+    dm.fx = Object.keys(fx).length ? fx : undefined;
+    const n = q('num').value.trim(); dm.text = n === '' ? null : n;
+    q('tb').style.display = q('tt').value === 'dev' ? '' : 'none'; q('ta').style.display = q('tt').value ? '' : 'none';
+    drawOverlay();
+  };
+  el.querySelectorAll('input,select').forEach(i => { i.oninput = apply; i.onchange = apply; i.onkeydown = e => { e.stopPropagation(); if (e.key === 'Enter') close(true); if (e.key === 'Escape') close(false); }; });
+  el.querySelectorAll('[data-p]').forEach(b => { b.onclick = () => { const i = q('pre'); i.value = i.value === b.dataset.p ? '' : b.dataset.p; apply(); }; });
+  const close = ok => { if (!ok) { dm.text = keep.text; dm.fx = keep.fx; } el.remove(); ctxFill(dm); drawOverlay(); syncPanel(); };
+  el.querySelector('[data-a="model"]').onclick = () => { q('num').value = ''; apply(); };
+  el.querySelector('[data-a="ok"]').onclick = () => close(true);
+  el.querySelector('[data-a="cancel"]').onclick = () => close(false);
+  el.onpointerdown = e => e.stopPropagation();
+  apply(); setTimeout(() => q('suf').focus());
+}
 function ctxAct(k, dm) {
-  if (k === 'e_text') { ctxEdit = true; ctxFill(dm, dimPrims(dm, toScr, pxPerPaper())); placeCtx(); return; }
+  if (k === 'e_text') { pushUndo(); dimDialog(dm); return; }
   pushUndo();
   if (k === 'e_reset') { dm.text = null; ctxFill(dm); }
   if (k === 'e_del') dimDelete(dm);
@@ -6901,7 +6950,7 @@ function ovInit(un) {
   for (const q of H.dims || []) {
     if (q.chain) chainSeq = Math.max(chainSeq, q.chain);
     const dm = addDim(V(q.a), V(q.b), { label: q.label, text: q.text, fs: q.fs, mk: un.u, vdir: q.vdir ? V(q.vdir) : null });
-    dm.axis = q.axis; dm.off = V(q.off); dm.chain = q.chain; if (q.ang) dm.ang = { c: V(q.ang.c), p: V(q.ang.p) };
+    dm.axis = q.axis; dm.off = V(q.off); dm.chain = q.chain; if (q.fx) dm.fx = q.fx; if (q.ang) dm.ang = { c: V(q.ang.c), p: V(q.ang.p) };
     buildDim(dm); if (dm.g) dm.g.visible = false;
   }
   for (const q of H.secs || []) secs.push(Object.assign({}, q, { a: V(q.a), b: V(q.b), vdir: V(q.vdir), pos: q.pos.slice(), mk: un.u }));
@@ -6918,11 +6967,12 @@ function ovCapture(un) {
     if (dm.hid) d.h = 1;
     if (dm.off.distanceTo(dm.off0) > 0.05 * n) d.o = A(dm.off.clone().multiplyScalar(1 / n));
     if ((dm.text ?? null) !== (dm.text0 ?? null)) d.t = dm.text ?? null;
+    if (dm.fx) d.f = JSON.parse(JSON.stringify(dm.fx));
     if (Object.keys(d).length) dd[dm.id] = d; else delete dd[dm.id];
   }
   for (const k of ['vpos', 'vdel', 'vhide', 'extra', 'forceN', 'blk', 'isoOv', 'tpos', 'tscG', 'ipos', 'tdim', 'tnote']) { const v = un[k]; if (v && (!Array.isArray(v) || v.length)) e[k] = JSON.parse(JSON.stringify(v)); else delete e[k]; }
   e.hand = {
-    dims: dims.filter(d => d.mk === un.u && !d.auto).map(d => ({ a: A(d.a), b: A(d.b), axis: d.axis, off: A(d.off), label: d.label, text: d.text, vdir: d.vdir ? A(d.vdir) : null, chain: d.chain, fs: d.fs, ang: d.ang ? { c: A(d.ang.c), p: A(d.ang.p) } : null })),
+    dims: dims.filter(d => d.mk === un.u && !d.auto).map(d => ({ a: A(d.a), b: A(d.b), axis: d.axis, off: A(d.off), label: d.label, text: d.text, fx: d.fx, vdir: d.vdir ? A(d.vdir) : null, chain: d.chain, fs: d.fs, ang: d.ang ? { c: A(d.ang.c), p: A(d.ang.p) } : null })),
     secs: secs.filter(q => q.mk === un.u).map(q => ({ a: A(q.a), b: A(q.b), s: q.s, vdir: A(q.vdir), fs: q.fs, letter: q.letter, sN: q.sN, rot: q.rot, pos: q.pos.slice(), pi: q.pi })),
     notes: mnotes.filter(q => q.hand && q.mk === un.u).map(q => Object.assign({}, q, { p: A(q.p), q: q.q.slice(), txt: q.txt.slice() })) };
   if (!e.hand.dims.length && !e.hand.secs.length && !e.hand.notes.length) delete e.hand;
@@ -6940,6 +6990,7 @@ function ovApply(un) {
     if (d.h) dm.hid = true;
     if (d.o) dm.off = new THREE.Vector3().fromArray(d.o).multiplyScalar(n);
     if (d.t !== undefined) dm.text = d.t;
+    if (d.f) dm.fx = JSON.parse(JSON.stringify(d.f));
     buildDim(dm);
   }
 }
@@ -7193,7 +7244,7 @@ function freeState() {
   ovCaptureAll();
   return JSON.stringify({ v: 1, title: M.title || '', seq: freeSeq, metal: OV.sheets,
     sheets: freeUnits.map(x => ({ u: x.u, name: x.name, vs: x.vs, vpos: x.vpos || null, forceN: x.forceN || 0, keys: x.pi.map(partKey), pi: x.pi })),
-    dims: dims.filter(d => ids.has(d.mk)).map(d => ({ mk: d.mk, a: A(d.a), b: A(d.b), axis: d.axis, off: A(d.off), label: d.label, text: d.text, vdir: d.vdir ? A(d.vdir) : null, chain: d.chain, fs: d.fs, ang: d.ang ? { c: A(d.ang.c), p: A(d.ang.p) } : null })),
+    dims: dims.filter(d => ids.has(d.mk)).map(d => ({ mk: d.mk, a: A(d.a), b: A(d.b), axis: d.axis, off: A(d.off), label: d.label, text: d.text, fx: d.fx, vdir: d.vdir ? A(d.vdir) : null, chain: d.chain, fs: d.fs, ang: d.ang ? { c: A(d.ang.c), p: A(d.ang.p) } : null })),
     secs: secs.filter(q => ids.has(q.mk)).map(q => ({ mk: q.mk, a: A(q.a), b: A(q.b), s: q.s, vdir: A(q.vdir), fs: q.fs, letter: q.letter, sN: q.sN, rot: q.rot, pos: q.pos.slice(), pi: q.pi })),
     notes: mnotes.filter(n => n.hand && ids.has(n.mk)).map(n => ({ mk: n.mk, vk: n.vk, p: A(n.p), pi: n.pi, q: n.q.slice(), txt: n.txt.slice() })) });
 }
@@ -7247,7 +7298,7 @@ async function freeLoad() {
     if (!ok.has(q.mk)) continue;
     if (q.chain) chainSeq = Math.max(chainSeq, q.chain);   // цепочки после подъёма не сливаются с новыми
     const dm = addDim(V(q.a), V(q.b), { label: q.label, text: q.text, fs: q.fs, mk: q.mk });
-    dm.axis = q.axis; dm.off = V(q.off); dm.vdir = q.vdir ? V(q.vdir) : null; dm.chain = q.chain; if (q.ang) dm.ang = { c: V(q.ang.c), p: V(q.ang.p) };
+    dm.axis = q.axis; dm.off = V(q.off); dm.vdir = q.vdir ? V(q.vdir) : null; dm.chain = q.chain; if (q.fx) dm.fx = q.fx; if (q.ang) dm.ang = { c: V(q.ang.c), p: V(q.ang.p) };
     buildDim(dm); if (dm.g) dm.g.visible = false;
   }
   for (const q of st.secs || []) if (ok.has(q.mk)) secs.push({ a: V(q.a), b: V(q.b), s: q.s, vdir: V(q.vdir), fs: q.fs, letter: q.letter, sN: q.sN, rot: q.rot, pos: q.pos.slice(), pi: q.pi, mk: q.mk });
@@ -8348,7 +8399,7 @@ function metalBlockLines(un, n) {
   else if (!un.general) lines.push([ML('paint') + ': ' + ML('paintask'), F, true]);
   // торцы — всегда явно: заглушка в модели → заглушить, иначе — не глушить (Алексей 27.10)
   if (!un.general && un.hasProf) lines.push([(un.sheets || []).some(s => s.endcap) ? ML('capsWeld') : (un.sheets || []).some(s => /заглуш/i.test(s.name)) ? ML('capsYes') : ML('capsNo'), F]);   // у детали из листа торцов труб нет
-  if (un.hasStar) lines.push([ML('refnote'), F]);          // ГОСТ 2.307 п. 4.3: есть «*» — надпись «* Размеры для справок»
+  if (un.hasStar || dims.some(d => d.mk === un.u && !d.hid && d.fx && d.fx.ref)) lines.push([ML('refnote'), F]);          // ГОСТ 2.307 п. 4.3: есть «*» — надпись «* Размеры для справок»
   if (un.general) lines.push([ML('kitsN') + ': ' + Q, 6]);   // внизу общего вида — «Таких комплектов: 3» (Алексей 19.11)
   // опоры: на видах два габарита — по металлу и с опорой (Алексей 27.10); масштаб, «лист N из M», «от базы» сняты — их даёт отчёт
   // длинная строка — переносом по словам в ширину колонки (знак ≈ 0,5 высоты шрифта)
@@ -8474,6 +8525,7 @@ function metalChecks() {
     const nd = (un.tubes || []).filter(i => M.objs[i] && M.objs[i].pf && !M.objs[i].d).length;
     if (nd) out.push(unitTitle(un) + ': ' + (dLang === 'uk' ? 'труб без позначення' : 'труб без обозначения') + ' — ' + nd);
   }
+  for (const un of md.own) { const hn = dims.filter(d => d.mk === un.u && !d.hid && d.text != null && !d.ang && String(d.text) !== dimModelNum(d)); for (const d of hn) out.push(unitTitle(un) + ': ' + (dLang === 'uk' ? 'число розміру змінено вручну' : 'число размера изменено вручную') + ' — ' + dimModelNum(d) + ' → ' + d.text); }
   for (const un of md.own) { const lost = ovLost(un); if (lost.length) out.push(unitTitle(un) + ': ' + (dLang === 'uk' ? 'загубилися правки розмірів — елемент змінено або видалено з моделі' : 'потерялись правки размеров — элемент изменён или удалён из модели') + ' (' + lost.length + ')'); }
   return out;
 }
