@@ -7772,27 +7772,51 @@ function metalDims0(un) {
     const x0 = (n.p[R] - mid[R]) * rtS / k, x1 = x0 + n.dx * (n.ly * 0.5 + Math.max(...n.txt.map(t => t.length)) * 2.5);
     if (x1 > halfW) pad.r = Math.max(pad.r, x1 - halfW + 2); if (x1 < -halfW) pad.l = Math.max(pad.l, -halfW - x1 + 2);
   }
-  // позиции труб (ТЗ v3, п. 3): выноска с обозначением из модели — внутрь рамки (там пусто, ряды размеров снаружи), на виде,
-  // где труба видна вдоль; одна выноска на обозначение на весь лист. Номер выноски = обозначение = строка таблицы в колонке.
+  // позиции труб (ТЗ v3, п. 3): выноска с обозначением из модели на виде, где труба видна вдоль; одна на обозначение на весь
+  // лист. Номер выноски = обозначение = строка таблицы в колонке. Надпись ставится только в пустое место: сначала внутрь рамки
+  // (ряды размеров снаружи), съезжая вдоль трубы; тесно (крестовина: три трубы в 22 мм листа) — за конец трубы над видом,
+  // лесенкой. Занятое — сами трубы и уже поставленные подписи (проверка листа по картинке ловила текст на линиях труб).
   if (!un.general && !un.frame && !un.svgSheet && un.hasProf) {
-    const D = ['x', 'y', 'z'].find(a => a !== R && a !== U), tg = un.tgiven || (un.tgiven = {}), placedT = [];
+    const D = ['x', 'y', 'z'].find(a => a !== R && a !== U), tg = un.tgiven || (un.tgiven = {}), busy = [];
     for (const d in tg) if (tg[d] === vk) delete tg[d];
-    for (const i of un.tubes || []) {
-      const o = M.objs[i]; if (!o || !o.pf || !o.d || tg[o.d]) continue;
-      const bx = partBox(i), s = bx.getSize(V3()), la = ['x', 'y', 'z'].reduce((p, q) => s[q] > s[p] ? q : p, 'x');
+    const PP = pt => [(pt[R] - mid[R]) * rtS / k, -(pt[U] - mid[U]) * upS / k];   // точка модели → мм листа от середины вида (y вниз)
+    const tubesV = (un.tubes || []).filter(i => M.objs[i] && M.objs[i].pf).map(i => ({ i, o: M.objs[i], bx: partBox(i) }));
+    for (const tq of tubesV) { const a = PP(tq.bx.min), b2 = PP(tq.bx.max); busy.push([Math.min(a[0], b2[0]) - 0.4, Math.min(a[1], b2[1]) - 0.4, Math.max(a[0], b2[0]) + 0.4, Math.max(a[1], b2[1]) + 0.4]); }
+    const topY = Math.min(...busy.map(r => r[1])), leftX = Math.min(...busy.map(r => r[0])), rightX = Math.max(...busy.map(r => r[2]));
+    const freeR = pad.r <= 4, freeL = pad.l <= 4;           // с этой стороны вида нет рядов размеров — туда можно вынести подпись
+    for (const n of mnotes) {                               // уже стоящие выноски отверстий и гаек — тоже занятое место
+      if (n.mk !== un.u || n.vk !== vk || n.pos) continue;
+      const Q = noteQ(n), a = PP(n.p), x = a[0] + Q[0], y = a[1] + Q[1], w = Math.max(...n.txt.map(s => s.length)) * 2.5 + 2, right = n.q ? Q[0] >= 0 : n.dx > 0;
+      busy.push(right ? [x, y - 6, x + w, y + n.txt.length * 6.6 - 5] : [x - w, y - 6, x, y + n.txt.length * 6.6 - 5]);
+    }
+    const rectOf = (pt, q, w) => { const a = PP(pt), x = a[0] + q[0], y = a[1] + q[1]; return q[0] >= 0 ? [x, y - 5.6, x + w, y + 0.8] : [x - w, y - 5.6, x, y + 0.8]; };
+    const hits = r => busy.some(z => r[0] < z[2] && z[0] < r[2] && r[1] < z[3] && z[1] < r[3]);
+    for (const { i, o, bx } of tubesV) {
+      if (!o.d || tg[o.d]) continue;
+      const s = bx.getSize(V3()), la = ['x', 'y', 'z'].reduce((p, q) => s[q] > s[p] ? q : p, 'x');
       if (la === D) continue;                               // труба торцом к нам — на этом виде её не подписать
       tg[o.d] = vk;
-      const c = bx.getCenter(V3()), toR = Math.sign((mid[R] - c[R]) * rtS) || 1, toU = Math.sign((mid[U] - c[U]) * upS) || 1, p = c.clone();
-      p[la] += s[la] * 0.2;                                 // не в самой середине трубы: там чаще стоят отверстия и их размеры
-      const q = la === R ? [6, -toU * 9] : [toR * 9, -6], wT = o.d.length * 2.5 + 2;
-      // подписи соседних труб не ложатся друг на друга: занято — точка съезжает вдоль своей трубы на шаг (10 мм листа)
-      const at = pp => [(pp[R] - mid[R]) * rtS / k + q[0], -(pp[U] - mid[U]) * upS / k + q[1]], hit = pp => { const a = at(pp); return placedT.some(z => Math.abs(z[1] - a[1]) < 7 && a[0] < z[0] + z[2] && z[0] < a[0] + wT); };
-      for (let tr = 1; tr <= 8 && hit(p); tr++) { const pp = c.clone(); pp[la] += s[la] * 0.2 - 10 * k * tr; if (Math.abs(pp[la] - c[la]) < s[la] * 0.45) p.copy(pp); else break; }
-      const a = at(p); placedT.push([Math.min(a[0], a[0] + (q[0] < 0 ? -wT : 0)), a[1], wT]);
-      mnotes.push({ mk: un.u, vk, p, pos: true, dx: la === R ? 1 : toR, dy: 1, q, txt: [o.d] });
+      const c = bx.getCenter(V3()), toR = Math.sign((mid[R] - c[R]) * rtS) || 1, toU = Math.sign((mid[U] - c[U]) * upS) || 1, wT = o.d.length * 2.5 + 2;
+      const cand = [];
+      for (let tr = 0; tr <= 8; tr++) {                     // внутрь рамки, точка съезжает вдоль трубы шагом 10 мм листа
+        const pp = c.clone(); pp[la] += s[la] * 0.2 - 10 * k * tr; if (Math.abs(pp[la] - c[la]) > s[la] * 0.45) break;
+        cand.push({ p: pp, q: la === R ? [6, -toU * 9] : [toR * 9, -6] });
+      }
+      const rc = (() => { const a = PP(bx.min), b2 = PP(bx.max); return [Math.min(a[0], b2[0]), Math.min(a[1], b2[1]), Math.max(a[0], b2[0]), Math.max(a[1], b2[1])]; })();
+      if (la === U || rc[1] - topY < 1.5) for (let j = 0; j < 6; j++) {   // вертикальная труба или верхняя поперечина: вверх, над видом, лесенкой
+        const pp = c.clone(); if (la === U) pp[U] += (s[U] / 2 - 3 * k) * upS; else pp[R] += s[R] * 0.25 * rtS; const y0 = PP(pp)[1];
+        cand.push({ p: pp, q: [4, topY - y0 - 5 - 7 * j], out: 5 + 7 * j + 7 });
+      }
+      // труба доходит до края вида, а рядов размеров с этой стороны нет — подпись за край, лесенкой
+      if (freeR && rightX - rc[2] < 1.5) for (let j = 0; j < 5; j++) { const pp = c.clone(); if (la === R) pp[R] += (s[R] / 2 - 3 * k) * rtS; const a = PP(pp); cand.push({ p: pp, q: [rightX - a[0] + 4, -3 - 7 * j], outR: 4 + wT + 2 }); }
+      if (freeL && rc[0] - leftX < 1.5) for (let j = 0; j < 5; j++) { const pp = c.clone(); if (la === R) pp[R] -= (s[R] / 2 - 3 * k) * rtS; const a = PP(pp); cand.push({ p: pp, q: [leftX - a[0] - 4, -3 - 7 * j], outL: 4 + wT + 2 }); }
+      const best = cand.find(z => !hits(rectOf(z.p, z.q, wT))) || cand[0];
+      busy.push(rectOf(best.p, best.q, wT));
+      if (best.out) pad.t = Math.max(pad.t, best.out + 2);   // подпись над видом — раскладка оставляет под неё место
+      if (best.outR) pad.r = Math.max(pad.r, best.outR); if (best.outL) pad.l = Math.max(pad.l, best.outL);
+      mnotes.push({ mk: un.u, vk, p: best.p, pos: true, dx: best.q[0] >= 0 ? 1 : -1, dy: 1, q: best.q, txt: [o.d] });
     }
-  }
-  un.padNow = pad;
+  }  un.padNow = pad;
   drawOverlay();
 }
 // выноска: точка → косая 8 мм наружу → полка с текстом (строки друг под другом)
@@ -8318,7 +8342,7 @@ async function metalPdf(suffix) {
   }
 }
 // для самопроверки в невидимом браузере: данные, лист, размеры и выноски текущего листа
-window.__metal = { data: () => metalData(), parts: () => metalData().units.map(u => [unitTitle(u), unitParts(u)]), lines: () => metalBlockLines(metalData().all.find(x => x.u === metalCur), drawN).map(x => x[0]), geo: () => { const un = metalData().all.find(x => x.u === metalCur), R = v => Math.round(v * 10) / 10, vw = metalViews(un); return { n: drawN, views: vw.map(w => [w.v, R(w.px), R(w.py), metalViewRect(w).map(R).join(' ')]), iso: (g => [R(g.x), R(g.y), R(g.s)])(metalIsoGeo(un)), blk: metalBlockRect(un, drawN).map(R), grp: metalGroup(un, vw).map(w => w.v) }; }, dragGrp: (dx, dy) => { const un = metalData().all.find(x => x.u === metalCur), vw = metalViews(un), P = {}; for (const w of vw) P[w.v] = [w.px, w.py]; metalDragGroup(un, metalGroup(un, vw).map(w => w.v), P, dx, dy); drawOverlay(); }, ov: () => OV, key: u => sheetKey(metalData().all.find(x => x.u === u)), ids: () => dims.filter(d => d.mk === metalCur && d.id).map(d => [d.id, d.hid ? 1 : 0, Math.round(d.off.length() * 10) / 10]), hide: id => { const d = dims.find(q => q.mk === metalCur && q.id === id); if (d) { pushUndo(); dimDelete(d); drawOverlay(); } return !!d; }, unhide: () => ovUnhide(metalData().all.find(x => x.u === metalCur)), state: () => freeState(), auto: () => autoDims(), undo: () => drawUndo(), lost: () => metalData().own.map(u => [u.name, ovLost(u)]).filter(x => x[1].length), show: (u, vi) => metalShow(u, vi), off: () => metalOff(),
+window.__metal = { data: () => metalData(), audit: async u => { const un = metalData().all.find(x => x.u === u); const cur = metalCur, av = cur !== null ? (metalData().all.find(x => x.u === cur) || {}).actV : 0; const r = await metalAudit(un); metalBackTo(cur, av); return r; }, parts: () => metalData().units.map(u => [unitTitle(u), unitParts(u)]), lines: () => metalBlockLines(metalData().all.find(x => x.u === metalCur), drawN).map(x => x[0]), geo: () => { const un = metalData().all.find(x => x.u === metalCur), R = v => Math.round(v * 10) / 10, vw = metalViews(un); return { n: drawN, views: vw.map(w => [w.v, R(w.px), R(w.py), metalViewRect(w).map(R).join(' ')]), iso: (g => [R(g.x), R(g.y), R(g.s)])(metalIsoGeo(un)), blk: metalBlockRect(un, drawN).map(R), grp: metalGroup(un, vw).map(w => w.v) }; }, dragGrp: (dx, dy) => { const un = metalData().all.find(x => x.u === metalCur), vw = metalViews(un), P = {}; for (const w of vw) P[w.v] = [w.px, w.py]; metalDragGroup(un, metalGroup(un, vw).map(w => w.v), P, dx, dy); drawOverlay(); }, ov: () => OV, key: u => sheetKey(metalData().all.find(x => x.u === u)), ids: () => dims.filter(d => d.mk === metalCur && d.id).map(d => [d.id, d.hid ? 1 : 0, Math.round(d.off.length() * 10) / 10]), hide: id => { const d = dims.find(q => q.mk === metalCur && q.id === id); if (d) { pushUndo(); dimDelete(d); drawOverlay(); } return !!d; }, unhide: () => ovUnhide(metalData().all.find(x => x.u === metalCur)), state: () => freeState(), auto: () => autoDims(), undo: () => drawUndo(), lost: () => metalData().own.map(u => [u.name, ovLost(u)]).filter(x => x[1].length), show: (u, vi) => metalShow(u, vi), off: () => metalOff(),
   views: () => { const un = metalData().all.find(x => x.u === metalCur); return un ? { act: un.actV, n: drawN, stat: (un.stat || []).map(s => s.v), v: metalViews(un).map(w => [w.v, Math.round(w.px), Math.round(w.py)]) } : null; },
   move: (v, dx, dy) => { const un = metalData().all.find(x => x.u === metalCur), P = {}; for (const w of metalViews(un)) P[w.v] = [w.px, w.py]; metalDragView(un, v, P, dx, dy); drawOverlay(); },
   sheet: () => { const un = metalData().all.find(x => x.u === metalCur), av = un.actV, s = metalSheetSvg(un); metalBackTo(un.u, av); return s; },
@@ -8364,6 +8388,42 @@ function metalTree() {
   if (h === metalTreeHtml && el.firstChild) return;
   metalTreeHtml = h; el.innerHTML = h;
   el.querySelectorAll('[data-mt]').forEach(q => { q.onclick = () => { const u = +q.dataset.mt; if (metalCur !== u) metalShow(u); }; });
+}
+// ---------- проверка листа по картинке (ТЗ чертежей металла v3, п. 10.6) ----------
+// Лист рисуется в картинку двумя слоями — только надписи и всё остальное; точки, где чернила обоих слоёв совпали, — наложение
+// (текст на размерной линии, выноска через число, надпись на контуре). Плюс: что вышло за лист, сколько поля занято видами,
+// как заполнены четыре четверти рабочего поля (лист без правой колонки надписей и аксонометрии).
+async function metalAudit(un) {
+  const PX = 4, W = SHEET_W * PX, H = Math.round(SHEET_H * PX), svg = metalSheetSvg(un);
+  const layer = async css => {
+    const s = svg.replace(/<svg([^>]*)>/, (m, a) => `<svg${a}><style>${css}</style>`);
+    const img = new Image(), url = URL.createObjectURL(new Blob([s], { type: 'image/svg+xml' }));
+    await new Promise((ok, no) => { img.onload = ok; img.onerror = () => no(new Error('картинка листа не собралась')); img.src = url; });
+    const c = document.createElement('canvas'); c.width = W; c.height = H; const g = c.getContext('2d', { willReadFrequently: true });
+    g.fillStyle = '#fff'; g.fillRect(0, 0, W, H); g.drawImage(img, 0, 0, W, H); URL.revokeObjectURL(url);
+    const d = g.getImageData(0, 0, W, H).data, ink = new Uint8Array(W * H);
+    for (let i = 0; i < W * H; i++) ink[i] = d[4 * i] + d[4 * i + 1] + d[4 * i + 2] < 540 ? 1 : 0;
+    return ink;
+  };
+  const T = await layer('*{visibility:hidden} text{visibility:visible}'), L = await layer('text{visibility:hidden}');
+  // наложения: совпавшие точки собираются в пятна (клетка 3 мм), пятно меньше 6 точек — касание хвостика буквы, не в счёт
+  const cell = 3 * PX, spots = new Map();
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (T[y * W + x] && L[y * W + x]) { const k = Math.floor(x / cell) + ',' + Math.floor(y / cell); spots.set(k, (spots.get(k) || 0) + 1); }
+  const over = [...spots.entries()].filter(e => e[1] >= 6).map(e => { const [cx, cy] = e[0].split(',').map(Number); return { x: Math.round((cx + 0.5) * 3), y: Math.round((cy + 0.5) * 3), px: e[1] }; });
+  // номера позиций на аксонометрии стоят на теле детали с белой обводкой — это не наложение
+  { const ig = un.svgSheet ? null : metalIsoGeo(un); if (ig) for (let i = over.length - 1; i >= 0; i--) if (over[i].x > ig.x - 6 && over[i].x < ig.x + ig.s + 6 && over[i].y > ig.y - 6 && over[i].y < ig.y + ig.s + 6) over.splice(i, 1); }
+  // край листа: чернила в полосе 1 мм у края — что-то вылезло
+  let edge = 0; const m = PX;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if ((x < m || y < m || x >= W - m || y >= H - m) && (T[y * W + x] || L[y * W + x])) edge++;
+  // рабочее поле — левее колонки надписей и аксонометрии; четверти — доля клеток 5 мм с чернилами
+  const tb = metalBlockRect(un, drawN), iso = un.svgSheet ? null : metalIsoGeo(un), fx1 = Math.min(tb[0], iso ? iso.x : SHEET_W) - 4, fx0 = 6, fy0 = 6, fy1 = SHEET_H - 6;
+  const q = [0, 0, 0, 0], qn = [0, 0, 0, 0], C = 5 * PX;
+  for (let y = fy0 * PX; y < fy1 * PX; y += C) for (let x = fx0 * PX; x < fx1 * PX; x += C) {
+    let any = 0; for (let yy = y; yy < y + C && !any; yy++) for (let xx = x; xx < x + C; xx++) if (T[yy * W + xx] || L[yy * W + xx]) { any = 1; break; }
+    const k = (x < (fx0 + fx1) / 2 * PX ? 0 : 1) + (y < (fy0 + fy1) / 2 * PX ? 0 : 2); q[k] += any; qn[k]++;
+  }
+  const vw = metalViews(un).map(metalViewRect), area = vw.reduce((a, r) => a + Math.max(0, Math.min(r[2], fx1) - Math.max(r[0], fx0)) * Math.max(0, Math.min(r[3], fy1) - Math.max(r[1], fy0)), 0);
+  return { sheet: unitTitle(un), n: drawN, fill: Math.round(100 * area / ((fx1 - fx0) * (fy1 - fy0))), quads: q.map((v, i) => Math.round(100 * v / Math.max(1, qn[i]))), edge, over };
 }
 function metalMenu(b) {
   const md = metalData(), el = $('dfly');
