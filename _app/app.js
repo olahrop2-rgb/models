@@ -6515,7 +6515,8 @@ function metalData() {
   // порядок листов — по обозначениям из модели ((6-1), (6-2) …): так идут и листы в комплекте, и файлы в отчёте, и дерево
   const hasDes = units.some(x => unitDes(x));
   if (hasDes) units.sort((p, q) => (unitDes(p) || '~').localeCompare(unitDes(q) || '~', undefined, { numeric: true }));
-  const ordU = !hasDes ? sheetsU : units.flatMap(x => [x].concat(sheetsU.filter(tq => tq.tubeDet && (tq.tubeOf === x.u || tq.tubeOf === x)))).concat(sheetsU.filter(tq => tq.tubeDet && !units.some(x => x.u === tq.tubeOf || x === tq.tubeOf)));
+  { const idx = new Map(units.map((x, i) => [x, i])), ordOf = x => { const sk = sheetKey(x), e = sk && OV.sheets[sk]; return e && typeof e.ord === 'number' ? e.ord : idx.get(x) * 10; }; if (units.some(x => { const sk = sheetKey(x), e = sk && OV.sheets[sk]; return e && typeof e.ord === 'number'; })) units.sort((p, q) => ordOf(p) - ordOf(q)); }   // порядок листов переставлен рукой
+  const ordU = !hasDes && !units.some(x => { const sk = sheetKey(x), e = sk && OV.sheets[sk]; return e && typeof e.ord === 'number'; }) ? sheetsU : units.flatMap(x => [x].concat(sheetsU.filter(tq => tq.tubeDet && (tq.tubeOf === x.u || tq.tubeOf === x)))).concat(sheetsU.filter(tq => tq.tubeDet && !units.some(x => x.u === tq.tubeOf || x === tq.tubeOf)));
   units.forEach((x, k) => { x.no = k + 1; });                 // номера листов — свои в каждом комплекте
   const gi = B.groups.indexOf(g);
   const gen = B.composite.map((t, ti) => {                   // общий вид: изделие целиком, выделены полуфабрикаты комплекта
@@ -6824,7 +6825,9 @@ function chamferSnap(g, od) {
   const ng = new THREE.BufferGeometry(); ng.setAttribute('position', new THREE.Float32BufferAttribute(out, 3)); return ng;
 }
 // имя листа: обозначение из модели + имя («(6-2) рамка»); в модели обозначения нет — имя и номер по порядку («рамка 1»)
-const unitTitle = un => un.general || un.loose || un.free ? un.name : unitDes(un) ? unitDes(un) + ' ' + un.name : un.name + ' ' + un.no;
+const unitTitle0 = un => un.general || un.loose || un.free ? un.name : unitDes(un) ? unitDes(un) + ' ' + un.name : un.name + ' ' + un.no;
+// лист переименован рукой (правая кнопка в дереве) — своё имя в дереве, в заголовке колонки и в имени файла
+const unitTitle = un => { if (!un.free) { const sk = sheetKey(un), e = sk && OV.sheets[sk]; if (e && e.title) return e.title; } return unitTitle0(un); };
 // номер позиции на общем виде = обозначение из модели без скобок; нет обозначения — номер по порядку
 const unitPos = un => unitDes(un) ? unitDes(un).replace(/[()]/g, '') : String(un.no);
 // угол реза концов трубы — из её формы в модели: торцевая грань и ось профиля (90° — прямой рез, 45° — на ус). [начало, конец]
@@ -6903,6 +6906,31 @@ function sheetKey(un) {
 function sheetOff(un) { const sk = sheetKey(un); return !!(sk && OV.sheets[sk] && OV.sheets[sk].off); }
 // листа нет в комплекте: убран рукой или его трубу перенесли на соседний лист
 const sheetGone = un => !!un.mergedInto || sheetOff(un);
+function sheetRename(un) {
+  const sk = sheetKey(un); if (!sk) return;
+  const v = prompt(dLang === 'uk' ? 'Назва аркуша (порожньо — як у моделі)' : 'Название листа (пусто — как в модели)', unitTitle(un)); if (v === null) return;
+  const e = OV.sheets[sk] || (OV.sheets[sk] = {}); if (v.trim() && v.trim() !== unitTitle0(un)) e.title = v.trim(); else delete e.title;
+  frameName = unitTitle(un); metalTreeHtml = ''; syncPanel(); drawOverlay(); freeSaveSoon();
+}
+// лист выше / ниже среди листов своего уровня (сборочные единицы); листы труб идут за своей рамкой
+function sheetMove(un, dir) {
+  const md = metalData(), list = md.units.filter(x => !x.tubeDet), i = list.indexOf(un), j = i + dir; if (i < 0 || j < 0 || j >= list.length) return;
+  [list[i], list[j]] = [list[j], list[i]];
+  list.forEach((x, k) => { const sk = sheetKey(x); if (sk) (OV.sheets[sk] || (OV.sheets[sk] = {})).ord = k * 10; });
+  for (const g in metal.views) delete metal.views[g];
+  metalTreeHtml = ''; syncPanel(); freeSaveSoon();
+}
+// один лист — картинкой в папку «Метал» отчёта Федосова (то же, что «Листы в отчёт», но только этот)
+async function sheetToReport(un) {
+  if (!LOCAL) { toast('в этой странице нет папки заказа — перевыгрузите проект из Базиса'); return; }
+  const dir = LOCAL.order + '\\5. Креслення\\Чертежи для отчета(wmf)\\Метал', got = await catFiles(dir); if (!got) return;
+  const cur = metalCur, av = cur !== null ? (metalData().all.find(x => x.u === cur) || {}).actV : 0, sv = metalSheetSvg(un);
+  const a = await metalAudit(un, sv); metalBackTo(cur, av);
+  if (a.over.length && !metalAskBad([unitTitle(un) + ': ' + (dLang === 'uk' ? 'накладень тексту на лінії' : 'наложений текста на линии') + ' — ' + a.over.length])) return;
+  const name = catName(got, unitTitle(un).replace(/\.+$/, ''), '.png');
+  try { await srv('/draw/save', { dir, name, b64: await svgPng(svgBW(sv), 15) }); toast((dLang === 'uk' ? 'у звіт Федосова: ' : 'в отчёт Федосова: ') + name); }
+  catch (e) { toast('не сохранилось: ' + e.message); }
+}
 // Листы труб одной рамки сводятся на один лист (Алексей 23.11: «две полоски бы объединил»): правая кнопка в дереве →
 // «Объединить с …»; обратно — «Разделить». Хранится у рамки: имя листа → имя листа, на который он переехал.
 function tubeMergeApply() {
@@ -7277,6 +7305,7 @@ function freeSaveSoon() {
 function ovReopen() {
   if (!metal) return;
   tubeMergeApply();
+  for (const g in metal.views) delete metal.views[g];        // имена и порядок листов из файла правок
   const all = metal.units.slice(); for (const g in metal.views) all.push(...(metal.views[g].gen || []));
   let again = false;
   for (const un of all) {
@@ -8650,13 +8679,13 @@ function metalTree() {
   };
   let hm = '';
   const tubesOf = u => md.own.filter(x => x.tubeDet && (x.tubeOf === u || (x.tubeOf && x.tubeOf.u === u)));   // tubeOf — сам каркас или его номер
-  const unitRow = (un, lvl) => { const d = unitDes(un); let s = row(un, lvl, (d ? d + ' ' : '') + un.name + ((un.qty || 1) > 1 ? ' — ' + un.qty + ' ' + ML('nuts') : '')); for (const tq of tubesOf(un.u)) if (!sheetGone(tq)) s += row(tq, lvl + 1, tq.name.replace(un.name + ' — ', '')); return s; };
+  const unitRow = (un, lvl) => { const d = unitDes(un); const ov = (() => { const sk = sheetKey(un), e = sk && OV.sheets[sk]; return e && e.title; })(); let s = row(un, lvl, (ov || (d ? d + ' ' : '') + un.name) + ((un.qty || 1) > 1 ? ' — ' + un.qty + ' ' + ML('nuts') : '')); for (const tq of tubesOf(un.u)) if (!sheetGone(tq)) s += row(tq, lvl + 1, unitTitle(tq).replace(un.name + ' — ', '')); return s; };
   const done = new Set();
   for (const g of md.gen) {
     const top = !g.assembly && g.top >= 0 ? ((M.ndes || [])[g.top] || '') + ' ' + (M.names[g.top] || '') : g.name;
     hm += `<div class="mtg">${esc(top.trim())}</div>` + row(g, 1, g.assembly ? g.name : (uk ? 'загальний вигляд' : 'общий вид'));
     const byDes = (p, q) => unitDes(p).localeCompare(unitDes(q), undefined, { numeric: true });   // порядок — по обозначениям из модели
-    for (const un of (g.gunits || []).slice().sort(byDes)) { if (un.tubeDet || done.has(un.u)) continue; done.add(un.u); hm += unitRow(un, 1); }
+    for (const un of md.units.filter(x => (g.gunits || []).includes(x))) {   // порядок — как в комплекте: по обозначениям, либо переставленный рукой if (un.tubeDet || done.has(un.u)) continue; done.add(un.u); hm += unitRow(un, 1); }
   }
   for (const un of md.own) { if (un.general || un.tubeDet || done.has(un.u)) continue; done.add(un.u); hm += unitRow(un, 0); }
   if (offN.length) hm += `<div class="mtoff" title="${esc(offN.map(unitTitle).join('\n'))}">${uk ? 'приховані аркуші' : 'скрытые листы'} (${offN.length}) — ${uk ? 'повернути' : 'вернуть'}</div>`;
@@ -8683,13 +8712,17 @@ function metalTree() {
       const un = metalData().own.find(x => x.u === +q.dataset.mt); if (!un) return;
       let m = $('mtmenu'); if (!m) { m = document.createElement('div'); m.id = 'mtmenu'; document.body.appendChild(m); addEventListener('pointerdown', ev => { if (!m.contains(ev.target)) m.style.display = 'none'; }); }
       const sib = un.one ? metalData().own.filter(x => x.one && x.tubeOf === un.tubeOf && x !== un && !sheetGone(x)) : [];
-      m.innerHTML = `<button data-a="del">${uk0 ? 'Видалити аркуш' : 'Удалить лист'}</button>` +
+      m.innerHTML = `<button data-a="ren">${uk0 ? 'Перейменувати' : 'Переименовать'}</button>` +
+        (un.tubeDet || un.general ? '' : `<button data-a="up">${uk0 ? 'Вище' : 'Выше'}</button><button data-a="down">${uk0 ? 'Нижче' : 'Ниже'}</button>`) +
+        `<button data-a="rep">${uk0 ? 'У звіт Федосова (цей аркуш)' : 'В отчёт Федосова (этот лист)'}</button>` +
+        `<button data-a="del">${uk0 ? 'Видалити аркуш' : 'Удалить лист'}</button>` +
         sib.map((x, i) => `<button data-a="m${i}">${esc((uk0 ? 'Об’єднати з: ' : 'Объединить с: ') + x.name)}</button>`).join('') +
         (un.one && un.tg.length > 1 ? `<button data-a="split">${uk0 ? 'Розділити на окремі аркуші' : 'Разделить на отдельные листы'}</button>` : '');
-      m.style.cssText = `display:block;left:${Math.min(e.clientX, innerWidth - 250)}px;top:${Math.min(e.clientY, innerHeight - 34 * (2 + sib.length))}px`;
+      m.style.cssText = `display:block;left:${Math.min(e.clientX, innerWidth - 250)}px;top:${Math.min(e.clientY, innerHeight - 34 * (6 + sib.length))}px`;
       m.querySelectorAll('button').forEach(b => { b.onclick = () => {
         m.style.display = 'none'; const a = b.dataset.a;
-        if (a === 'del') sheetSetOff(un, true); else if (a === 'split') tubeMergeSet(un, null); else tubeMergeSet(un, sib[+a.slice(1)]);
+        if (a === 'ren') sheetRename(un); else if (a === 'up') sheetMove(un, -1); else if (a === 'down') sheetMove(un, 1); else if (a === 'rep') sheetToReport(un);
+        else if (a === 'del') sheetSetOff(un, true); else if (a === 'split') tubeMergeSet(un, null); else tubeMergeSet(un, sib[+a.slice(1)]);
       }; });
     };
   });
