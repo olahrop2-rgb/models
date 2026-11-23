@@ -5091,7 +5091,7 @@ function wireOverlay() {
       const tNow = performance.now();
       if (bi === 'blk' && tNow - blkT < 450 && blkAsk) { blkT = 0; dr = null; blkAsk(un); return; }   // два щелчка — количество
       if (bi === 'blk') blkT = tNow;
-      const G = metalBlockGeo(un, drawN), I = metalIsoGeo(un);
+      const G = metalBlockGeo(un, drawN), I = un.svgSheet ? tubeIsoGeo(un) : metalIsoGeo(un);
       if (bi.startsWith('tg:')) { const o0 = (un.tpos && un.tpos[bi.slice(3)]) || [0, 0]; dr = { blk: bi, un, x: e.clientX, y: e.clientY, moved: false, p0: { x: o0[0], y: o0[1] } }; return; }   // полоса трубы
       if (bi.startsWith('tgs:')) { const key = bi.slice(4), r = (un.tgRect || {})[key] || [0, 0, 100, 20]; dr = { blk: bi, un, x: e.clientX, y: e.clientY, moved: false, p0: { n: (un.tscG && un.tscG[key]) || un.tsc || tubeScale(un.tg), w: r[2] - r[0] } }; return; }   // уголок полосы — её масштаб
       dr = { blk: bi, un, x: e.clientX, y: e.clientY, moved: false, p0: bi.startsWith('blk') ? { x: G.x0, y: G.y0, s: G.s, w: G.x1 - G.x0 } : { x: I.x, y: I.y, s: I.s } };
@@ -7972,6 +7972,7 @@ function metalBlockSvg(o, k, ui) {
       `<rect class="grip bg" data-b="${b}s" x="${f(o[0] + x1 * k - 5)}" y="${f(o[1] + y1 * k - 5)}" width="10" height="10"/>`;
     s += R('blk', G.x0, G.y0, G.x1, G.y1);
     if (th) s += R('iso', iso.x, iso.y, iso.x + iso.s, iso.y + iso.s);
+    if (un.svgSheet) { const tI = tubeIsoGeo(un); s += R('iso', tI.x, tI.y, tI.x + tI.s, tI.y + tI.s); }   // картинка рамки на листе труб — тоже блок
     // лист труб: каждая полоса — блок, тянется мышью за любое своё место
     if (un.svgSheet && un.tgRect) for (const key in un.tgRect) { const r = un.tgRect[key]; s += `<rect class="bh" data-b="tg:${esc(key)}" x="${f(o[0] + r[0] * k)}" y="${f(o[1] + r[1] * k)}" width="${f((r[2] - r[0]) * k)}" height="${f((r[3] - r[1]) * k)}"/>` + `<rect class="grip bg" data-b="tgs:${esc(key)}" x="${f(o[0] + r[2] * k - 5)}" y="${f(o[1] + r[3] * k - 5)}" width="10" height="10"/>`; }
   }
@@ -8168,9 +8169,11 @@ function tubeSheetSvg(un, o, k) {
   return s + tubeIsoSvg(un, o, k);
 }
 // справа на листе труб: каркас в аксонометрии, трубы этого листа выделены; номер трубы — одна цифра, от неё линии ко всем таким
+// картинка рамки на листе труб: по умолчанию справа вверху, 104 мм; перетянута / растянута рукой — un.isoOv
+function tubeIsoGeo(un) { return un.isoOv || { x: SHEET_W - 8 - 104, y: 14, s: 104 }; }
 function tubeIsoSvg(un, o, k) {
   const th = metalThumb(un); if (!th) return '';
-  const f = v => String(Math.round(v * 100) / 100), S = 104, X = SHEET_W - 8 - S, Y = 14;
+  const f = v => String(Math.round(v * 100) / 100), tg0 = tubeIsoGeo(un), S = tg0.s, X = tg0.x, Y = tg0.y;   // место и размер — блок (тянуть, растягивать)
   let s = `<image href="${th}" x="${f(o[0] + X * k)}" y="${f(o[1] + Y * k)}" width="${f(S * k)}" height="${f(S * k)}" preserveAspectRatio="xMidYMid meet"/>`;
   const img = p => [o[0] + (X + p[0] * S) * k, o[1] + (Y + p[1] * S) * k], taken = [];
   for (const t of un.schemePts || []) {
