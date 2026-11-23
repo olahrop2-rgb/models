@@ -3220,7 +3220,7 @@ addEventListener('keydown', e => {
     if (e.key === 'Delete' && selDim) { pushUndo(); dimDelete(selDim); drawOverlay(); return; }
     if (e.key === 'Delete' && selSec) { secAct('del', selSec); return; }
   if (e.key === 'Delete' && selNote) { pushUndo(); noteDel(selNote); return; }
-    if (e.key === 'Delete' && metalSelV && metalCur !== null) { const un = metalData().all.find(x => x.u === metalCur); if (un) metalDelView(un, metalSelV); return; }
+    if (e.key === 'Delete' && metalSelV && metalSelV !== '#grp' && metalCur !== null) { const un = metalData().all.find(x => x.u === metalCur); if (un) metalDelView(un, metalSelV); return; }
     if (e.key === 'Enter') { if (drawTool === 'gab') gabCommit(); else if (drawTool) endTool(); return; }
     if (e.key === 'Escape') {
       if (tpts.length || tAxis !== null || (sd && sd.a) || (sd && sd.sec) || (cd && cd.a)) { endTool(); if (drawTool === 'sect' || drawTool === 'clip') $('st').textContent = L('h_' + drawTool); return; }
@@ -5064,6 +5064,15 @@ function wireOverlay() {
       const un = metalData().all.find(x => x.u === metalCur); if (un && e.button === 0) metalDelView(un, vx.dataset.vx);
       return;
     }
+    if ((e.target.dataset.vg || e.target.dataset.vgs) && metalCur !== null) {   // блок связанных видов целиком: тянуть за рамку / ярлык, за угол — масштаб (ТЗ v3, п. 13)
+      e.preventDefault(); e.stopPropagation();
+      const un = metalData().all.find(x => x.u === metalCur); if (!un || e.button !== 0) return;
+      const vw = metalViews(un), P = {}; for (const w of vw) P[w.v] = [w.px, w.py];
+      const G = metalGroup(un, vw); if (G.length < 2) return;
+      metalSelV = '#grp'; selDim = null; selSec = null;
+      dr = { vw: '#grp', grp: G.map(w => w.v), scale: !!e.target.dataset.vgs, un, x: e.clientX, y: e.clientY, moved: false, P, r0: metalGroupRect(G), n0: drawN };
+      drawOverlay(); return;
+    }
     const vwv = e.target.dataset.vw || e.target.dataset.vws;
     if (vwv && metalCur !== null) {                           // лист металла: вид-блок — тянуть, за угол — масштаб листа, правая — удалить
       e.preventDefault(); e.stopPropagation();
@@ -5124,13 +5133,14 @@ function wireOverlay() {
     if (!dr) return;
     if (!dr.moved && Math.hypot(e.clientX - dr.x, e.clientY - dr.y) < 3) return;
     if (dr.vw) {
+      if (!dr.moved) pushUndo();                              // сдвиг вида / блока видов / масштаб — отменяется (Ctrl+Z)
       dr.moved = true;
       const k = pxPerPaper(), dx = (e.clientX - dr.x) / k, dy = (e.clientY - dr.y) / k;
       if (dr.scale) {                                         // масштаб — ближайший из ряда, рамки показывают, как ляжет
         const r = dr.r0, f0 = Math.max(0.1, Math.max((r[2] - r[0] + dx) / (r[2] - r[0]), (r[3] - r[1] + dy) / (r[3] - r[1])));
         const n = SCALES.reduce((p, q) => Math.abs(Math.log(q / (dr.n0 / f0))) < Math.abs(Math.log(p / (dr.n0 / f0))) ? q : p, SCALES[0]);
         metalScaleDr = { n, f: dr.n0 / n, x: e.clientX, y: e.clientY };
-      } else metalDragView(dr.un, dr.vw, dr.P, dx, dy);
+      } else if (dr.grp) metalDragGroup(dr.un, dr.grp, dr.P, dx, dy); else metalDragView(dr.un, dr.vw, dr.P, dx, dy);
       drawOverlay(); return;
     }
     if (!dr.moved) { dr.moved = true; pushUndo(); }
@@ -5151,7 +5161,7 @@ function wireOverlay() {
     if (dr && dr.vw) {
       const d = dr; dr = null; const sc = metalScaleDr; metalScaleDr = null;
       if (d.scale) { if (sc && sc.n !== d.n0) metalApplyScale(d.un, sc.n); else drawOverlay(); return; }
-      if (!d.moved && d.vw !== d.un.actV) { metalShow(d.un.u, d.vw, true); return; }   // щелчок по картинке вида — он живой
+      if (!d.grp && !d.moved && d.vw !== d.un.actV) { metalShow(d.un.u, d.vw, true); return; }   // щелчок по картинке вида — он живой
       drawOverlay(); return;
     }
     if (dr) { dr = null; hideHover(); drawOverlay(); }
@@ -5760,7 +5770,25 @@ function stateNow() {
                                   x: { id: d.id, hid: d.hid, col: d.col, fsz: d.fsz, stag: d.stag, off0: d.off0 ? d.off0.toArray() : null, text0: d.text0 } })),
            ph: parts.map(p => p.hidden ? '1' : '0').join(''), nh: Object.keys(nodes).filter(k => nodes[k].hidden), fac: hideFac, af: JSON.stringify(autoFlags),
            secs: secs.map(q => ({ a: q.a.toArray(), b: q.b.toArray(), s: q.s, vdir: q.vdir.toArray(), fs: q.fs, letter: q.letter, sN: q.sN, rot: q.rot, pos: q.pos.slice(), pi: q.pi, mk: q.mk ?? null })),
-           notes: mnotes.filter(n => n.hand).map(n => Object.assign({}, n, { p: n.p.toArray(), q: n.q.slice(), txt: n.txt.slice() })) };   // выноски рукой (тема 60)
+           notes: mnotes.filter(n => n.hand).map(n => Object.assign({}, n, { p: n.p.toArray(), q: n.q.slice(), txt: n.txt.slice() })),   // выноски рукой (тема 60)
+           mu: muNow() };                                    // открытый лист металла: виды, блоки, масштаб
+}
+const MU_KEYS = ['vpos', 'vdel', 'vhide', 'extra', 'forceN', 'blk', 'isoOv'];
+function muNow() {
+  if (metalCur === null || !metal) return null;
+  const un = metalData().all.find(x => x.u === metalCur); if (!un || un.free) return null;
+  const o = { u: un.u, actV: un.actV }; for (const k of MU_KEYS) o[k] = un[k] == null ? null : JSON.parse(JSON.stringify(un[k]));
+  return o;
+}
+function muRestore(m) {
+  if (!m || !metal) return;
+  const un = metalData().all.find(x => x.u === m.u); if (!un) return;
+  const S = x => JSON.stringify(x == null || (Array.isArray(x) && !x.length) ? null : x);
+  if (MU_KEYS.every(k => S(un[k]) === S(m[k]))) return;
+  const relay = ['vdel', 'extra', 'forceN'].some(k => S(un[k]) !== S(m[k]));   // состав видов или масштаб — лист раскладывается заново
+  for (const k of MU_KEYS) un[k] = m[k] == null ? (k === 'forceN' ? 0 : null) : JSON.parse(JSON.stringify(m[k]));
+  if (relay) un.lay = null;
+  if (un.u === metalCur) { const vs = metalViews(un).map(w => w.v); metalShow(un.u, vs.includes(m.actV) ? m.actV : vs[0], true); }
 }
 function pushUndo() { if (!drawOn) return; undoS.push(stateNow()); if (undoS.length > 80) undoS.shift(); redoS.length = 0; }
 function restoreState(s) {
@@ -5798,7 +5826,7 @@ function restoreState(s) {
     }
     selNote = null;
   }
-  applyVis(); renderTree(); syncPanel(); drawOverlay();
+  applyVis(); renderTree(); muRestore(s.mu); syncPanel(); drawOverlay();
 }
 function drawUndo() { if (!undoS.length) { toast('отменять нечего'); return; } redoS.push(stateNow()); restoreState(undoS.pop()); }
 function drawRedo() { if (!redoS.length) { toast('возвращать нечего'); return; } undoS.push(stateNow()); restoreState(redoS.pop()); }
@@ -6116,7 +6144,7 @@ function closeFly() { flyFor = null; const el = $('dfly'); if (el) el.classList.
 function renderSide() {
   const d = $('dpanel');
   d.innerHTML = `<div class="ph"><span>${L('p_sheets')}</span><button class="pcol" data-tip="pcol">${DS(DIC[d.classList.contains('col') ? 'chevL' : 'chevR'], 14)}</button></div>
-    <div class="pz"></div><div id="dList"></div>
+    <div class="pz"></div><div id="dTree"></div><div id="dList"></div>
     <div class="ph2">${L('p_prev')}</div><div class="pthumb"><canvas id="dthumb" width="400" height="283"></canvas></div>`;
   d.querySelector('.pz').textContent = LOCAL ? LOCAL.zone : L('p_noZone');
   d.querySelector('.pcol').onclick = () => { d.classList.toggle('col'); renderSide(); refreshList(); layout(); fitView(); };
@@ -6142,6 +6170,7 @@ function syncPanel() {
     b.classList.toggle('on', !!cur && f !== 'endfly');
   }
   const sel = $('dScale'); if (sel) sel.value = String(drawFix);
+  metalTree();
   drawInfo();
 }
 // плашка у выделенного размера: текст, исходное число, удалить размер / всю его цепочку
@@ -6692,7 +6721,7 @@ function ovInit(un) {
   un.ovInit = true;
   const e = OV.sheets[sk]; if (!e) return;
   const J = x => JSON.parse(JSON.stringify(x)), V = a => new THREE.Vector3().fromArray(a);
-  if (e.vpos) un.vpos = J(e.vpos); if (e.vdel) un.vdel = e.vdel.slice(); if (e.extra) un.extra = e.extra.slice(); if (e.forceN) un.forceN = e.forceN;
+  if (e.vpos) un.vpos = J(e.vpos); if (e.vdel) un.vdel = e.vdel.slice(); if (e.vhide) un.vhide = e.vhide.slice(); if (e.extra) un.extra = e.extra.slice(); if (e.forceN) un.forceN = e.forceN;
   if (e.blk) un.blk = J(e.blk); if (e.isoOv) un.isoOv = J(e.isoOv);
   const H = e.hand || {};
   for (const q of H.dims || []) {
@@ -6717,7 +6746,7 @@ function ovCapture(un) {
     if ((dm.text ?? null) !== (dm.text0 ?? null)) d.t = dm.text ?? null;
     if (Object.keys(d).length) dd[dm.id] = d; else delete dd[dm.id];
   }
-  for (const k of ['vpos', 'vdel', 'extra', 'forceN', 'blk', 'isoOv']) { const v = un[k]; if (v && (!Array.isArray(v) || v.length)) e[k] = JSON.parse(JSON.stringify(v)); else delete e[k]; }
+  for (const k of ['vpos', 'vdel', 'vhide', 'extra', 'forceN', 'blk', 'isoOv']) { const v = un[k]; if (v && (!Array.isArray(v) || v.length)) e[k] = JSON.parse(JSON.stringify(v)); else delete e[k]; }
   e.hand = {
     dims: dims.filter(d => d.mk === un.u && !d.auto).map(d => ({ a: A(d.a), b: A(d.b), axis: d.axis, off: A(d.off), label: d.label, text: d.text, vdir: d.vdir ? A(d.vdir) : null, chain: d.chain, fs: d.fs, ang: d.ang ? { c: A(d.ang.c), p: A(d.ang.p) } : null })),
     secs: secs.filter(q => q.mk === un.u).map(q => ({ a: A(q.a), b: A(q.b), s: q.s, vdir: A(q.vdir), fs: q.fs, letter: q.letter, sN: q.sN, rot: q.rot, pos: q.pos.slice(), pi: q.pi })),
@@ -7144,7 +7173,8 @@ function metalShow(u, vi, keep, noStat) {
 // виды листа с поправками рукой: перетянутые (un.vpos — середина вида, мм листа); удалённые в раскладку не попадают
 function metalViews(un) {
   const lay = un.lay || (un.lay = metalLayout(un));
-  return lay.views.map(w => { const p = un.vpos && un.vpos[w.v]; return p ? Object.assign({}, w, { px: p[0], py: p[1] }) : w; });
+  const hid = un.vhide || [];                                // удалённые рукой виды: раскладка их помнит (место и размеры остальных не меняются), на листе и в выдаче их нет
+  return lay.views.filter(w => !hid.includes(w.v)).map(w => { const p = un.vpos && un.vpos[w.v]; return p ? Object.assign({}, w, { px: p[0], py: p[1] }) : w; });
 }
 // рамка вида-блока на листе: сам вид и ряды его размеров (мм листа)
 function metalViewRect(w) {
@@ -7187,6 +7217,27 @@ function viewLink(m, v) {
   if (V_SIDE.includes(m)) return V_SIDE.includes(v) ? 'row' : V_TB.includes(v) && (m === 'front' || m === 'back') ? 'col' : null;
   return v === 'front' || v === 'back' ? 'col' : null;
 }
+// блок связанных видов (проекционная группа): главный вид и те, что стоят с ним в ряд / в столбец. Двигается и масштабируется
+// целиком; отдельный вид блока — только вдоль своей оси (metalDragView). Вид, утащенный со своей линии, из блока выпадает.
+function metalGroup(un, vw) {
+  const m = mainView(un), F = vw.find(w => w.v === m); if (!F) return [];
+  return vw.filter(w => { const l = viewLink(m, w.v); return w === F || (l === 'row' && Math.abs(w.py - F.py) < 0.5) || (l === 'col' && Math.abs(w.px - F.px) < 0.5); });
+}
+function metalGroupRect(G) {
+  const r = [1e9, 1e9, -1e9, -1e9];
+  for (const w of G) { const b = metalViewRect(w); r[0] = Math.min(r[0], b[0]); r[1] = Math.min(r[1], b[1]); r[2] = Math.max(r[2], b[2]); r[3] = Math.max(r[3], b[3]); }
+  return [r[0] - 3, r[1] - 3, r[2] + 3, r[3] + 3];
+}
+function metalDragGroup(un, vs, P, dx, dy) {
+  const vw = metalViews(un), lo = [-1e9, -1e9], hi = [1e9, 1e9], M2 = 2;   // блок не уходит за лист: сдвиг — по самому стеснённому виду
+  for (const v of vs) {
+    const w = vw.find(q => q.v === v); if (!w) continue; const hw = (w.gw || 0) / 2, hh = (w.gh || 0) / 2;
+    lo[0] = Math.max(lo[0], M2 + hw - P[v][0]); hi[0] = Math.min(hi[0], SHEET_W - M2 - hw - P[v][0]);
+    lo[1] = Math.max(lo[1], M2 + hh - P[v][1]); hi[1] = Math.min(hi[1], SHEET_H - M2 - hh - P[v][1]);
+  }
+  if (lo[0] <= hi[0]) dx = Math.max(lo[0], Math.min(hi[0], dx)); if (lo[1] <= hi[1]) dy = Math.max(lo[1], Math.min(hi[1], dy));
+  for (const v of vs) metalMoveView(un, v, P[v][0] + dx, P[v][1] + dy);
+}
 function metalDragView(un, v, P, dx, dy) {
   const m = mainView(un), F = P[m], lk = F ? viewLink(m, v) : null;
   let x = P[v][0] + dx, y = P[v][1] + dy;
@@ -7207,6 +7258,7 @@ function metalApplyScale(un, n) {
   const old = metalViews(un), F0 = old.find(w => w.v === mainView(un)) || old[0], a0 = metalViewRect(F0), kk = drawN / n, gap = {};
   for (const w of old) { const b = metalViewRect(w); gap[w.v] = { r: b[0] - a0[2], l: a0[0] - b[2], d: b[1] - a0[3], u: a0[1] - b[3], dx: w.px - F0.px, dy: w.py - F0.py }; }
   const moved = !!un.vpos;
+  if (!un.free && !un.isoOv) { const g = metalIsoGeo(un); un.isoOv = { x: g.x, y: g.y, s: g.s }; }   // масштаб блока видов аксонометрию не двигает (Алексей 23.11: чужое место не трогать)
   un.forceN = n; un.lay = null; un.vpos = null;
   if (moved) {                                              // виды двигали рукой — их места сохраняются в новом масштабе
     const nw = metalViews(un), F = nw.find(w => w.v === F0.v) || nw[0], pos = { [F.v]: [F0.px, F0.py] };
@@ -7225,6 +7277,14 @@ function metalApplyScale(un, n) {
 // удалить вид с листа (правая кнопка по рамке или Delete): остальные стоят где стояли, масштаб тот же
 function metalDelView(un, v) {
   const vw = metalViews(un); if (vw.length < 2) { toast(ML('m_last')); return; }
+  pushUndo();
+  if (!un.free) {
+    // удалить = скрыть (Алексей 23.11: «остальные не должны прыгать, место под блоком просто остаётся пустым»): лист не
+    // перекладывается, размеры и места остальных видов, колонки и аксонометрии — как были; вернуть — меню «Металл» → «+ вид»
+    (un.vhide || (un.vhide = [])).push(v); metalSelV = null;
+    if (v === un.actV) metalShow(un.u, metalViews(un)[0].v, true); else drawOverlay();
+    return;
+  }
   const pos = {}; for (const w of vw) if (w.v !== v) pos[w.v] = [w.px, w.py];
   const ex = un.extra || [];
   if (un.free) un.vs = un.vs.filter(x => x !== v);
@@ -7259,12 +7319,19 @@ function metalViewsSvg(un, S) {
     if ((l === 'row' && Math.abs(w.py - F.py) < 0.5) || (l === 'col' && Math.abs(w.px - F.px) < 0.5))
       s += `<path class="vlink" d="M${f(S.x0 + F.px * k)} ${f(S.y0 + F.py * k)}L${f(S.x0 + w.px * k)} ${f(S.y0 + w.py * k)}"/>`;
   }
+  const GV = metalGroup(un, vw).length > 1 ? metalGroup(un, vw) : [];
+  if (GV.length) {                                          // рамка блока видов: тянуть за неё или за ярлык, уголок — масштаб блока
+    const gr = metalGroupRect(GV), on = metalSelV === '#grp', x0 = S.x0 + gr[0] * k, y0 = S.y0 + gr[1] * k;
+    s += box(gr, 'vgf' + (on ? ' on' : '')) + box(gr, 'vgb', 'data-vg="1"') +
+      `<g class="vgt${on ? ' on' : ''}" transform="translate(${f(x0)} ${f(y0)})"><rect data-vg="1" x="0" y="-17" width="128" height="17" rx="3"/><text data-vg="1" x="7" y="-5">${esc((dLang === 'uk' ? 'блок видів' : 'блок видов') + ' · М 1:' + fmtN(drawN))}</text></g>` +
+      `<rect class="grip bg" data-vgs="1" x="${f(S.x0 + gr[2] * k - 6)}" y="${f(S.y0 + gr[3] * k - 6)}" width="12" height="12"/>`;
+  }
   for (const w of vw) {
     // живой вид при выбранном инструменте ловится только краем (внутри ставятся размеры); без инструмента — всей площадью,
     // как остальные: потянул — вид поехал (Алексей 11.11)
     const r = metalViewRect(w), act = w.v === un.actV, on = metalSelV === w.v;
     s += box(r, 'vfr' + (on ? ' on' : '')) + box(r, act && drawTool ? 'vb' : 'vh', `data-vw="${w.v}"`) +
-      `<rect class="grip bg" data-vws="${w.v}" x="${f(S.x0 + r[2] * k - 5)}" y="${f(S.y0 + r[3] * k - 5)}" width="10" height="10"/>`;
+      (GV.includes(w) ? '' : `<rect class="grip bg" data-vws="${w.v}" x="${f(S.x0 + r[2] * k - 5)}" y="${f(S.y0 + r[3] * k - 5)}" width="10" height="10"/>`);
     if (vw.length > 1) s += `<g class="vx" data-vx="${w.v}" transform="translate(${f(S.x0 + r[2] * k - 2)} ${f(S.y0 + r[1] * k + 2)})"><title>${esc(L('v_x'))}</title>` +
       '<rect x="-16" y="0" width="16" height="16" rx="3"/><path d="M-12 4L-4 12M-4 4L-12 12"/></g>';   // крестик — убрать вид
   }
@@ -8147,7 +8214,7 @@ async function metalPdf(suffix) {
   }
 }
 // для самопроверки в невидимом браузере: данные, лист, размеры и выноски текущего листа
-window.__metal = { data: () => metalData(), ov: () => OV, key: u => sheetKey(metalData().all.find(x => x.u === u)), ids: () => dims.filter(d => d.mk === metalCur && d.id).map(d => [d.id, d.hid ? 1 : 0, Math.round(d.off.length() * 10) / 10]), hide: id => { const d = dims.find(q => q.mk === metalCur && q.id === id); if (d) { pushUndo(); dimDelete(d); drawOverlay(); } return !!d; }, unhide: () => ovUnhide(metalData().all.find(x => x.u === metalCur)), state: () => freeState(), auto: () => autoDims(), undo: () => drawUndo(), lost: () => metalData().own.map(u => [u.name, ovLost(u)]).filter(x => x[1].length), show: (u, vi) => metalShow(u, vi), off: () => metalOff(),
+window.__metal = { data: () => metalData(), geo: () => { const un = metalData().all.find(x => x.u === metalCur), R = v => Math.round(v * 10) / 10, vw = metalViews(un); return { n: drawN, views: vw.map(w => [w.v, R(w.px), R(w.py), metalViewRect(w).map(R).join(' ')]), iso: (g => [R(g.x), R(g.y), R(g.s)])(metalIsoGeo(un)), blk: metalBlockRect(un, drawN).map(R), grp: metalGroup(un, vw).map(w => w.v) }; }, dragGrp: (dx, dy) => { const un = metalData().all.find(x => x.u === metalCur), vw = metalViews(un), P = {}; for (const w of vw) P[w.v] = [w.px, w.py]; metalDragGroup(un, metalGroup(un, vw).map(w => w.v), P, dx, dy); drawOverlay(); }, ov: () => OV, key: u => sheetKey(metalData().all.find(x => x.u === u)), ids: () => dims.filter(d => d.mk === metalCur && d.id).map(d => [d.id, d.hid ? 1 : 0, Math.round(d.off.length() * 10) / 10]), hide: id => { const d = dims.find(q => q.mk === metalCur && q.id === id); if (d) { pushUndo(); dimDelete(d); drawOverlay(); } return !!d; }, unhide: () => ovUnhide(metalData().all.find(x => x.u === metalCur)), state: () => freeState(), auto: () => autoDims(), undo: () => drawUndo(), lost: () => metalData().own.map(u => [u.name, ovLost(u)]).filter(x => x[1].length), show: (u, vi) => metalShow(u, vi), off: () => metalOff(),
   views: () => { const un = metalData().all.find(x => x.u === metalCur); return un ? { act: un.actV, n: drawN, stat: (un.stat || []).map(s => s.v), v: metalViews(un).map(w => [w.v, Math.round(w.px), Math.round(w.py)]) } : null; },
   move: (v, dx, dy) => { const un = metalData().all.find(x => x.u === metalCur), P = {}; for (const w of metalViews(un)) P[w.v] = [w.px, w.py]; metalDragView(un, v, P, dx, dy); drawOverlay(); },
   sheet: () => { const un = metalData().all.find(x => x.u === metalCur), av = un.actV, s = metalSheetSvg(un); metalBackTo(un.u, av); return s; },
@@ -8155,6 +8222,42 @@ window.__metal = { data: () => metalData(), ov: () => OV, key: u => sheetKey(met
   dims: () => dims.filter(dimHere).filter(d => d.axis).map(d => [d.axis, Math.round(Math.abs(d.b.clone().sub(d.a).dot(AX[d.axis])))]), notes: () => mnotes.filter(n => n.mk === metalCur).map(n => n.txt.join(' / ')), svg: () => buildSVG(), pdf: () => metalPdf(), rep: () => metalReport(), chk: () => metalChecks(), grp: g => { metalOff(); metalGroupSel = g; return metalData().group; },
   // самопроверка инструментов листа: сечение по двум точкам сцены (сторона s, место на листе мм от середины, масштаб sN)
   sec: (a, b, s, pos, sN) => { const sc = { a: new THREE.Vector3(...a), b: new THREE.Vector3(...b), s, vdir: viewDir().clone(), fs: hideFac, letter: 'А', sN: sN || 0, rot: 0, pos, mk: metalCur }; Object.assign(sc, secCut(sc)); secs.push(sc); drawOverlay(); return sc.G.length; } };
+// ---------- дерево листов металла в правой панели (ТЗ v3, п. 14): изделие → общий вид → сборочные единицы → их листы ----------
+// Щелчок открывает лист. Значки: карандаш — на листе есть правки рукой, «!» — замечания по модели, глаз — есть скрытое.
+const hasMetal = () => Object.values(M.nsemi || {}).some(a => (a || []).includes('Метал'));
+const unitDes = un => [...new Set((un.same || [un.u]).map(u => (M.ndes || [])[u]).filter(Boolean))].join(', ');
+let metalTreeHtml = '', metalTreeTm = null;
+function metalTree() {
+  const el = $('dTree'); if (!el) return;
+  if (!hasMetal()) { if (el.firstChild) el.replaceChildren(); return; }
+  if (!metal) {                                             // листы ещё не считались — посчитать после отрисовки панели, один раз
+    if (!metalTreeTm) metalTreeTm = setTimeout(() => { metalTreeTm = null; if (!drawOn) return; const keep = metalCur; metalData(); if (keep === null) metalRot(null); syncPanel(); }, 200);
+    return;
+  }
+  if (!metalTree.chk || Date.now() - metalTree.at > 3000) { metalTree.chk = metalChecks(); metalTree.at = Date.now(); }   // замечания — не чаще раза в 3 с (панель перерисовывается часто)
+  const md = metalData(), chk = metalTree.chk, uk = dLang === 'uk';
+  const row = (un, lvl, title) => {
+    const sk = sheetKey(un), e = sk && OV.sheets[sk], t = unitTitle(un);
+    const edit = e && (e.dims || e.hand || e.vpos || e.vhide || e.vdel || e.extra || e.blk || e.isoOv || e.forceN), hid = (un.vhide || []).length || dims.some(d => d.mk === un.u && d.hid);
+    const warn = chk.some(c => c.startsWith(t + ' ') || c.startsWith(t + ':'));
+    return `<div class="mtr${metalCur === un.u ? ' on' : ''}" data-mt="${un.u}" style="padding-left:${8 + lvl * 14}px" title="${esc(title)}"><span>${esc(title)}</span>` +
+      (hid ? `<i class="mh" title="${uk ? 'є приховане' : 'есть скрытое'}">◌</i>` : '') + (edit ? `<i class="me" title="${uk ? 'є правки' : 'есть правки'}">✎</i>` : '') + (warn ? `<i class="mw" title="${uk ? 'є зауваження' : 'есть замечания'}">!</i>` : '') + '</div>';
+  };
+  let h = `<div class="dlh"><span>${esc(ML('metal'))}</span><em>${md.own.length}</em></div>`;
+  const tubesOf = u => md.own.filter(x => x.tubeDet && x.tubeOf === u);
+  const unitRow = (un, lvl) => { const d = unitDes(un); let s = row(un, lvl, (d ? d + ' ' : '') + un.name + ((un.qty || 1) > 1 ? ' — ' + un.qty + ' ' + ML('nuts') : '')); for (const tq of tubesOf(un.u)) s += row(tq, lvl + 1, tq.name.replace(un.name + ' — ', '')); return s; };
+  const done = new Set();
+  for (const g of md.gen) {
+    const top = !g.assembly && g.top >= 0 ? ((M.ndes || [])[g.top] || '') + ' ' + (M.names[g.top] || '') : g.name;
+    h += `<div class="mtg">${esc(top.trim())}</div>` + row(g, 1, g.assembly ? g.name : (uk ? 'загальний вигляд' : 'общий вид'));
+    const byDes = (p, q) => unitDes(p).localeCompare(unitDes(q), undefined, { numeric: true });   // порядок — по обозначениям из модели
+    for (const un of (g.gunits || []).slice().sort(byDes)) { if (un.tubeDet || done.has(un.u)) continue; done.add(un.u); h += unitRow(un, 1); }
+  }
+  for (const un of md.own) { if (un.general || un.tubeDet || done.has(un.u)) continue; done.add(un.u); h += unitRow(un, 0); }
+  if (h === metalTreeHtml && el.firstChild) return;
+  metalTreeHtml = h; el.innerHTML = h;
+  el.querySelectorAll('[data-mt]').forEach(q => { q.onclick = () => { const u = +q.dataset.mt; if (metalCur !== u) metalShow(u); }; });
+}
 function metalMenu(b) {
   const md = metalData(), el = $('dfly');
   if (!md.units.length) { toast(ML('m_none')); return; }
@@ -8164,20 +8267,23 @@ function metalMenu(b) {
   // дополнительные виды текущего листа (снизу / сзади / справа) — кладутся в свободное место в том же масштабе
   const cur = metalCur !== null && !texCur ? md.own.find(x => x.u === metalCur) : null;
   // удалённые с листа основные виды — вернуть (Алексей 29.10)
-  const back = cur ? (cur.vdel || []).map(v => `<button data-mr="${v}"><span>${esc('+ ' + ML('m_view') + ' ' + ML('v_' + v))}</span></button>`).join('') : '';
-  const exBtns = back + (cur ? ['bottom', 'back', 'right'].filter(v => !(cur.vdel || []).includes(v)).map(v => `<button data-mv="${v}" class="${(cur.extra || []).includes(v) ? 'on' : ''}"><span>${esc('+ ' + ML('m_view') + ' ' + ML('v_' + v))}</span></button>`).join('') : '');
+  const back = cur ? (cur.vdel || []).concat(cur.vhide || []).map(v => `<button data-mr="${v}"><span>${esc('+ ' + ML('m_view') + ' ' + ML('v_' + v))}</span></button>`).join('') : '';
+  const exBtns = back + (cur ? ['bottom', 'back', 'right'].filter(v => !(cur.vdel || []).includes(v) && !(cur.vhide || []).includes(v)).map(v => `<button data-mv="${v}" class="${(cur.extra || []).includes(v) ? 'on' : ''}"><span>${esc('+ ' + ML('m_view') + ' ' + ML('v_' + v))}</span></button>`).join('') : '');
   el.innerHTML = grpBtns + `<button data-mu="pdf"><span>${esc(ML('m_pdf'))}</span></button><button data-mu="rep"><span>${esc(ML('m_rep'))}</span></button><button data-mu="chk"><span>${esc(ML('m_chk'))}</span></button>` +
     md.own.map(x => `<button data-mu="${x.u}" class="${metalCur === x.u ? 'on' : ''}"><span>${esc(unitTitle(x))}</span></button>`).join('') + exBtns +
     (cur && ovHidden(cur).length ? `<button data-mu="unhide"><span>${esc((dLang === 'uk' ? 'Показати приховані розміри' : 'Показать скрытые размеры') + ' (' + ovHidden(cur).length + ')')}</span></button>` : '') +
     `<button data-mu="off"><span>${esc(ML('m_off'))}</span></button>`;
   el.querySelectorAll('[data-mv]').forEach(q => { q.onclick = e => {
     e.stopPropagation(); closeFly();
+    pushUndo();
     const v = q.dataset.mv, ex = cur.extra || (cur.extra = []), i = ex.indexOf(v); if (i >= 0) ex.splice(i, 1); else ex.push(v);
     cur.lay = null; metalShow(cur.u, i >= 0 ? 0 : v);      // новый вид сразу живой
   }; });
   el.querySelectorAll('[data-mr]').forEach(q => { q.onclick = e => {
     e.stopPropagation(); closeFly();
-    const v = q.dataset.mr; cur.vdel = (cur.vdel || []).filter(x => x !== v);
+    const v = q.dataset.mr; pushUndo();
+    if ((cur.vhide || []).includes(v)) { cur.vhide = cur.vhide.filter(x => x !== v); metalShow(cur.u, v, true); return; }   // скрытый вид возвращается на своё место
+    cur.vdel = (cur.vdel || []).filter(x => x !== v);
     cur.vpos = null; cur.lay = null; metalShow(cur.u, v);   // вернули вид — лист раскладывается заново в том же масштабе
   }; });
   el.querySelectorAll('[data-mg]').forEach(q => { q.onclick = e => {

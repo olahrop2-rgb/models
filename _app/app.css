@@ -215,6 +215,18 @@ html.draw body, html.draw.dlines body { background: transparent; color: var(--rb
 #dpanel .pcol { border: 0; background: transparent; color: var(--rb-muted); padding: 3px; border-radius: 4px; line-height: 0; cursor: pointer; }
 #dpanel .pcol:hover { background: var(--rb-hover); }
 #dpanel .pz { padding: 6px 12px; color: var(--rb-muted); font-size: 12px; }
+/* дерево листов металла в правой панели */
+#dTree { padding: 0 6px 4px; max-height: 55%; overflow: auto; }
+#dpanel .mtg { padding: 4px 6px 2px 8px; font-size: 12px; font-weight: 600; color: var(--rb-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#dpanel .mtr { display: flex; align-items: center; gap: 5px; padding: 4px 6px; font-size: 12px; border-radius: 4px; color: var(--rb-text); cursor: pointer; }
+#dpanel .mtr:hover { background: var(--rb-hover); }
+#dpanel .mtr.on { background: var(--rb-on); color: #fff; }
+#dpanel .mtr span { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#dpanel .mtr i { flex: none; font-style: normal; font-size: 11px; line-height: 1; }
+#dpanel .mtr .me { color: #1f6fe0; }
+#dpanel .mtr .mw { color: #fff; background: #d23b2a; border-radius: 8px; width: 14px; height: 14px; text-align: center; line-height: 14px; font-weight: 700; }
+#dpanel .mtr .mh { color: var(--rb-muted); }
+#dpanel .mtr.on .me, #dpanel .mtr.on .mh { color: #fff; }
 #dList { flex: 1; overflow: auto; padding: 0 6px 6px; }
 #dpanel .dlh { display: flex; align-items: center; gap: 7px; padding: 6px 6px 3px; font-weight: 600; font-size: 12px; }
 #dpanel .dlh em { margin-left: auto; font-style: normal; font-weight: 400; color: var(--rb-muted); }
@@ -267,6 +279,15 @@ html.draw body, html.draw.dlines body { background: transparent; color: var(--rb
 #dsvg .nh { fill: transparent; stroke: none; pointer-events: all; cursor: move; }
 #dsvg .nh:hover { fill: rgba(122,167,224,.10); }
 #dsvg .nh.on { fill: rgba(31,111,224,.10); stroke: #1f6fe0; stroke-width: 1px; stroke-dasharray: 3 2; }
+/* блок связанных видов: рамка всего блока, ярлык — тянуть целиком, уголок — масштаб (ТЗ чертежей металла v3, п. 13) */
+#dsvg .vgf { fill: none; stroke: #9db7d9; stroke-width: 1px; stroke-dasharray: 8 4; pointer-events: none; }
+#dsvg .vgf.on { stroke: #1f6fe0; stroke-width: 2px; stroke-dasharray: none; }
+#dsvg .vgb { fill: none; stroke: transparent; stroke-width: 9px; pointer-events: stroke; cursor: move; }
+#dsvg .vgb:hover { stroke: rgba(31,111,224,.25); }
+#dsvg .vgt rect { fill: #e8f0fb; stroke: #9db7d9; stroke-width: 1px; cursor: move; pointer-events: all; }
+#dsvg .vgt text { font: 600 11px system-ui, sans-serif; fill: #2a5ca8; cursor: move; pointer-events: all; }
+#dsvg .vgt.on rect { fill: #1f6fe0; stroke: #1f6fe0; }
+#dsvg .vgt.on text { fill: #fff; }
 #dsvg .vlink { fill: none; stroke: #7aa7e0; stroke-width: 1px; stroke-dasharray: 2 4; stroke-opacity: .7; pointer-events: none; }
 #dctx button.on { background: var(--rb-on); color: #fff; }
 #dsvg .grip { fill: #fff; stroke: #e0301e; stroke-width: 1.5px; pointer-events: all; cursor: move; }
