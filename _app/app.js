@@ -5087,7 +5087,17 @@ function wireOverlay() {
     const bi = e.target.dataset.b;
     if (bi !== undefined && metalCur !== null) {              // лист металла: колонка надписей / аксонометрия — тянуть, за угол — растягивать
       e.preventDefault(); e.stopPropagation();
-      const un = metalData().all.find(x => x.u === metalCur); if (!un || e.button !== 0) return;
+      const un = metalData().all.find(x => x.u === metalCur); if (!un) return;
+      if (bi.startsWith('td:') || bi.startsWith('tn:')) {      // размер / выноска рукой на трубе
+        const arr = bi.startsWith('td:') ? un.tdim : un.tnote, it = arr && arr[+bi.slice(3)]; if (!it) return;
+        if (e.button === 2) { pushUndo(); arr.splice(+bi.slice(3), 1); drawOverlay(); return; }
+        if (e.button !== 0) return;
+        const tN = performance.now();
+        if (bi.startsWith('tn:') && tN - blkT < 450) { blkT = 0; const v = prompt(dLang === 'uk' ? 'Текст виноски (рядки через /)' : 'Текст выноски (строки через /)', it.txt.join(' / ')); if (v !== null && v.trim()) { pushUndo(); it.txt = v.split('/').map(z => z.trim()).filter(Boolean); drawOverlay(); } return; }
+        blkT = tN;
+        dr = { blk: bi, un, x: e.clientX, y: e.clientY, moved: false, p0: bi.startsWith('td:') ? { off: it.off || 0 } : { x: it.q[0], y: it.q[1] } }; return;
+      }
+      if (e.button !== 0) return;
       const tNow = performance.now();
       if (bi === 'blk' && tNow - blkT < 450 && blkAsk) { blkT = 0; dr = null; blkAsk(un); return; }   // два щелчка — количество
       if (bi === 'blk') blkT = tNow;
@@ -5153,6 +5163,8 @@ function wireOverlay() {
     if (dr.blk) {
       const k = pxPerPaper(), dx = (e.clientX - dr.x) / k, dy = (e.clientY - dr.y) / k, p = dr.p0, un = dr.un;
       const cr = dr.cr || 'br', L = cr[1] === 'l', T = cr[0] === 't', ex = L ? -dx : dx, ey = T ? -dy : dy;   // угол, за который тянут
+      if (dr.blk.startsWith('td:')) { const it = (un.tdim || [])[+dr.blk.slice(3)]; if (it) it.off = p.off - dy; drawOverlay(); return; }
+      if (dr.blk.startsWith('tn:')) { const it = (un.tnote || [])[+dr.blk.slice(3)]; if (it) it.q = [p.x + dx, p.y + dy]; drawOverlay(); return; }
       if (dr.blk.startsWith('ip:')) { (un.ipos || (un.ipos = {}))[dr.blk.slice(3)] = [p.x + dx / p.s, p.y + dy / p.s]; drawOverlay(); return; }
       if (dr.blk.startsWith('tgs:')) {                        // масштаб полосы — ближайший из ряда (в заголовке полосы — «М 1:N»)
         const want = p.n / Math.max(0.15, (p.w + ex) / p.w), n = TUBE_SC.reduce((a, q) => Math.abs(Math.log(q / want)) < Math.abs(Math.log(a / want)) ? q : a, TUBE_SC[0]);
@@ -5268,7 +5280,30 @@ function angClick(x, y) {
   const dm = addDim(tpts[1].clone(), tpts[2].clone()); dm.axis = null; dm.ang = { c: tpts[0].clone(), p: P.clone() }; buildDim(dm);
   endTool();
 }
+// Лист труб: размер и выноска рукой. Размер — два щелчка по точкам одной грани (торец, центр отверстия / гайки / платика),
+// встаёт рядом над полосой, число — расстояние по модели. Выноска — щелчок по точке, второй щелчок — где поставить полку;
+// текст — что это за точка («⌀6,5», «Гайка М6»), двойной щелчок по полке — переписать. Правая кнопка — удалить.
+let tubeT = null;
+function tubeToolClick(un, x, y) {
+  const S = sheetRect(), k = S.w / SHEET_W, mx = (x - S.x0) / k, my = (y - S.y0) / k, uk = dLang === 'uk';
+  let best = null, bd = 4;                                  // липнет в пределах 4 мм листа
+  for (const p of un.tgSnap || []) { const d = Math.hypot(p.x - mx, p.y - my); if (d < bd) { bd = d; best = p; } }
+  if (drawTool === 'lead') {
+    if (!tubeT) { if (!best) { toast(uk ? 'клацни по торцю труби або центру отвору' : 'щёлкни по торцу трубы или центру отверстия'); return; } tubeT = best; toast(uk ? 'тепер — де поставити полицю' : 'теперь — где поставить полку'); return; }
+    pushUndo(); (un.tnote || (un.tnote = [])).push({ key: tubeT.key, fi: tubeT.fi, mm: tubeT.mm, cr: tubeT.cr, q: [mx - tubeT.x, my - tubeT.y], txt: [tubeT.lab] });
+    tubeT = null; drawOverlay(); return;
+  }
+  if (!best) { toast(uk ? 'клацни по торцю труби або центру отвору' : 'щёлкни по торцу трубы или центру отверстия'); return; }
+  if (!tubeT) { tubeT = best; toast(uk ? 'друга точка тієї ж грані' : 'вторая точка той же грани'); return; }
+  if (best.key !== tubeT.key || best.fi !== tubeT.fi) { tubeT = best; toast(uk ? 'інша труба або грань — почав розмір звідси' : 'другая труба или грань — начал размер отсюда'); return; }
+  if (Math.abs(best.mm - tubeT.mm) < 0.5) return;
+  pushUndo(); (un.tdim || (un.tdim = [])).push({ key: best.key, fi: best.fi, a: tubeT.mm, b: best.mm });
+  tubeT = drawTool === 'chain' ? best : drawTool === 'base' ? tubeT : null;   // цепочка — от последней точки, от базы — от первой
+  drawOverlay();
+}
 function toolClick(x, y) {
+  { const tun = metalCur !== null && metal ? metalData().all.find(q => q.u === metalCur) : null;
+    if (tun && tun.svgSheet && ['lin', 'chain', 'base', 'lead'].includes(drawTool)) { tubeToolClick(tun, x, y); return; } }
   if (drawTool === 'lead') { leadClick(x, y); return; }
   if (drawTool === 'ang') { angClick(x, y); return; }
   if (drawTool === 'easy') { pushUndo(); easyPick(x, y); drawOverlay(); return; }
@@ -5783,7 +5818,7 @@ function stateNow() {
            notes: mnotes.filter(n => n.hand).map(n => Object.assign({}, n, { p: n.p.toArray(), q: n.q.slice(), txt: n.txt.slice() })),   // выноски рукой (тема 60)
            mu: muNow() };                                    // открытый лист металла: виды, блоки, масштаб
 }
-const MU_KEYS = ['vpos', 'vdel', 'vhide', 'extra', 'forceN', 'blk', 'isoOv', 'tpos', 'tscG', 'ipos'];
+const MU_KEYS = ['vpos', 'vdel', 'vhide', 'extra', 'forceN', 'blk', 'isoOv', 'tpos', 'tscG', 'ipos', 'tdim', 'tnote'];
 function muNow() {
   if (metalCur === null || !metal) return null;
   const un = metalData().all.find(x => x.u === metalCur); if (!un || un.free) return null;
@@ -6861,7 +6896,7 @@ function ovInit(un) {
   const e = OV.sheets[sk]; if (!e) return;
   const J = x => JSON.parse(JSON.stringify(x)), V = a => new THREE.Vector3().fromArray(a);
   if (e.vpos) un.vpos = J(e.vpos); if (e.vdel) un.vdel = e.vdel.slice(); if (e.vhide) un.vhide = e.vhide.slice(); if (e.extra) un.extra = e.extra.slice(); if (e.forceN) un.forceN = e.forceN;
-  if (e.blk) un.blk = J(e.blk); if (e.isoOv) un.isoOv = J(e.isoOv); if (e.tpos) un.tpos = J(e.tpos); if (e.tscG) un.tscG = J(e.tscG); if (e.ipos) un.ipos = J(e.ipos);
+  if (e.blk) un.blk = J(e.blk); if (e.isoOv) un.isoOv = J(e.isoOv); if (e.tpos) un.tpos = J(e.tpos); if (e.tscG) un.tscG = J(e.tscG); if (e.ipos) un.ipos = J(e.ipos); if (e.tdim) un.tdim = J(e.tdim); if (e.tnote) un.tnote = J(e.tnote);
   const H = e.hand || {};
   for (const q of H.dims || []) {
     if (q.chain) chainSeq = Math.max(chainSeq, q.chain);
@@ -6885,7 +6920,7 @@ function ovCapture(un) {
     if ((dm.text ?? null) !== (dm.text0 ?? null)) d.t = dm.text ?? null;
     if (Object.keys(d).length) dd[dm.id] = d; else delete dd[dm.id];
   }
-  for (const k of ['vpos', 'vdel', 'vhide', 'extra', 'forceN', 'blk', 'isoOv', 'tpos', 'tscG', 'ipos']) { const v = un[k]; if (v && (!Array.isArray(v) || v.length)) e[k] = JSON.parse(JSON.stringify(v)); else delete e[k]; }
+  for (const k of ['vpos', 'vdel', 'vhide', 'extra', 'forceN', 'blk', 'isoOv', 'tpos', 'tscG', 'ipos', 'tdim', 'tnote']) { const v = un[k]; if (v && (!Array.isArray(v) || v.length)) e[k] = JSON.parse(JSON.stringify(v)); else delete e[k]; }
   e.hand = {
     dims: dims.filter(d => d.mk === un.u && !d.auto).map(d => ({ a: A(d.a), b: A(d.b), axis: d.axis, off: A(d.off), label: d.label, text: d.text, vdir: d.vdir ? A(d.vdir) : null, chain: d.chain, fs: d.fs, ang: d.ang ? { c: A(d.ang.c), p: A(d.ang.p) } : null })),
     secs: secs.filter(q => q.mk === un.u).map(q => ({ a: A(q.a), b: A(q.b), s: q.s, vdir: A(q.vdir), fs: q.fs, letter: q.letter, sN: q.sN, rot: q.rot, pos: q.pos.slice(), pi: q.pi })),
@@ -7989,7 +8024,7 @@ function metalBlockSvg(o, k, ui) {
   // увеличенный вид платика «А» в свободном месте листа (Алексей 27.10: на основном виде платик — точка, нечитаемо)
   if (!un.general && un.lay && un.lay.det) s += metalDetailSvg(un, o, k, un.lay.det);
   // аксонометрия: всё изделие серой дымкой, этот полуфабрикат выделен — в место, которое нашла раскладка
-  if (un.svgSheet) s += tubeSheetSvg(un, o, k);              // лист труб каркаса (полосы + картинка каркаса справа)
+  if (un.svgSheet) s += tubeSheetSvg(un, o, k, ui);              // лист труб каркаса (полосы + картинка каркаса справа)
   const th = un.svgSheet ? null : metalThumb(un);
   const iso = metalIsoGeo(un);
   if (th) s += `<image href="${th}" x="${f(o[0] + iso.x * k)}" y="${f(o[1] + iso.y * k)}" width="${f(iso.s * k)}" height="${f(iso.s * k)}" preserveAspectRatio="xMidYMid meet"/>`;
@@ -8000,7 +8035,8 @@ function metalBlockSvg(o, k, ui) {
     if (th) s += R('iso', iso.x, iso.y, iso.x + iso.s, iso.y + iso.s);
     if (un.svgSheet) { const tI = tubeIsoGeo(un); s += R('iso', tI.x, tI.y, tI.x + tI.s, tI.y + tI.s); }   // картинка рамки на листе труб — тоже блок
     // лист труб: каждая полоса — блок, тянется мышью за любое своё место
-    if (un.svgSheet && un.tgRect) for (const key in un.tgRect) { const r = un.tgRect[key]; s += `<rect class="bh" data-b="tg:${esc(key)}" x="${f(o[0] + r[0] * k)}" y="${f(o[1] + r[1] * k)}" width="${f((r[2] - r[0]) * k)}" height="${f((r[3] - r[1]) * k)}"/>` + grips4(`data-b="tgs:${esc(key)}"`, o[0] + r[0] * k, o[1] + r[1] * k, o[0] + r[2] * k, o[1] + r[3] * k); }
+    // выбран инструмент — блок трубы не перехватывает щелчки: они идут размеру / выноске
+    if (un.svgSheet && un.tgRect && !drawTool) for (const key in un.tgRect) { const r = un.tgRect[key]; s += `<rect class="bh" data-b="tg:${esc(key)}" x="${f(o[0] + r[0] * k)}" y="${f(o[1] + r[1] * k)}" width="${f((r[2] - r[0]) * k)}" height="${f((r[3] - r[1]) * k)}"/>` + grips4(`data-b="tgs:${esc(key)}"`, o[0] + r[0] * k, o[1] + r[1] * k, o[0] + r[2] * k, o[1] + r[3] * k); }
   }
   // общий вид: выноски с номерами позиций на аксонометрии — те же номера, что в списке (Алексей 27.10)
   // общий вид: номер позиции — одной цифрой без кружка, от неё тонкие линии ко всем таким деталям (Алексей 19.11: «ёжик из
@@ -8135,7 +8171,7 @@ function tubeFaceH(g, F, sc, first) {
   return (F.sh.length ? 9 : 3) + ov[0] + R.s[F.B] / sc + ov[1] + (F.hs.length ? 9 : 3) + (first ? 6 : 0) + 5.6 * tubeNotes(g, F).length + 5;
 }
 function tubeBlockH(g, sc) { const R = tubeFaces(g); return 9 + R.faces.reduce((a, F, i) => a + tubeFaceH(g, F, sc, i === 0), 0) + 3; }
-function tubeSheetSvg(un, o, k) {
+function tubeSheetSvg(un, o, k, ui) {
   const f = v => String(Math.round(v * 100) / 100), scSheet = un.tsc || tubeScale(un.tg), X0 = 14;
   let sc = scSheet;                                          // масштаб текущей полосы: общий листа или свой (блок растянули за уголок)
   const T = (x, y, t, sz, bold, anchor) => `<text x="${f(o[0] + x * k)}" y="${f(o[1] + y * k)}" font-family="${DFONT}" font-size="${f((sz || 5) * k)}" fill="#000000"${bold ? ' font-weight="bold"' : ''}${anchor ? ` text-anchor="${anchor}"` : ''}>${esc(t)}</text>`;
@@ -8155,17 +8191,23 @@ function tubeSheetSvg(un, o, k) {
   // лист одной трубы рамки — без строки-подсказки про номера каркаса; масштаб — мелко в углу
   let s = un.one ? '' : T(X0, 12, ML('tubesHint') + ' 1:' + fmtN(sc), 4.2), y = 18;   // лист труб рамки — без подсказки про каркас; масштаб — в заголовке каждой полосы
   const VB2 = { x: 'left', y: 'top', z: 'front' };
-  un.tgRect = {};
+  un.tgRect = {}; un.tgSnap = [];                            // tgSnap — точки, к которым липнут размер и выноска рукой (торцы, центры отверстий)
   // один лист — одна-две трубы: полосы не у самого верха, а от трети листа (Алексей 23.11: «поставлены на верх чертежа»)
   if (un.one) y = Math.max(18, (SHEET_H - un.tg.reduce((a, g) => a + tubeBlockH(g, sc), 0)) / 3);
   for (const g of un.tg) {
     const gS0 = s.length, gY0 = y, gOf = (un.tpos && un.tpos['k' + g.k]) || [0, 0];
     sc = (un.tscG && un.tscG['k' + g.k]) || scSheet;
+    const gKey = 'k' + g.k, fY = [];
     const R = tubeFaces(g), mat = M.mnames[M.objs[g.fu.tubes[g.k]].mn] || '', len = R.L / sc;
     s += T(X0, y + 5, ML('tubeN').replace(/^./, c => c.toUpperCase()) + ' ' + g.N + ' — ' + mat + ', L=' + fmtN(r1(R.L)) + ' — ' + fqK(g.qty) + (un.one || sc !== scSheet ? '   М 1:' + fmtN(sc) : ''), 5, true);
     y += 9;
     R.faces.forEach((F, fi) => {
-      const h = R.s[F.B] / sc, ov = tubeOv(g, F, sc), yS = y + (F.sh.length ? 9 : 3) + ov[0];   // верх полосы — ниже выступа платиков и их ряда размеров
+      const nHand = (un.tdim || []).filter(d => d.key === gKey && d.fi === fi).length;   // размеры рукой — рядами над полосой: под них место
+      const h = R.s[F.B] / sc, ov = tubeOv(g, F, sc), yS = y + (F.sh.length ? 9 : 3) + ov[0] + (nHand ? 6 * nHand + 2 : 0);   // верх полосы — ниже выступа платиков и их ряда размеров
+      fY[fi] = { yS, h };
+      for (const [pos, lab] of [[0, 'торец'], [R.L, 'торец']]) un.tgSnap.push({ key: gKey, fi, mm: r1(pos), cr: r1(R.s[F.B] / 2), x: X0 + pos / sc + gOf[0], y: yS + h / 2 + gOf[1], lab });
+      for (const hh of F.hs) { const pos = hh.a[R.la] - R.b.min[R.la], cr = hh.a[F.B] - R.b.min[F.B]; un.tgSnap.push({ key: gKey, fi, mm: r1(pos), cr: r1(cr), x: X0 + pos / sc + gOf[0], y: yS + h - cr / sc + gOf[1], lab: /гайк/i.test(hh.name) ? cleanFast(hh.name) : '⌀' + fmtN(hh.d) }); }
+      for (const p of F.sh) { const pos = p.c[R.la] - R.b.min[R.la], cr = p.c[F.B] - R.b.min[F.B]; un.tgSnap.push({ key: gKey, fi, mm: r1(pos), cr: r1(cr), x: X0 + pos / sc + gOf[0], y: yS + h - cr / sc + gOf[1], lab: p.name || 'платик' }); }
       // полоса, осевая, подпись грани
       s += `<rect x="${f(o[0] + X0 * k)}" y="${f(o[1] + yS * k)}" width="${f(len * k)}" height="${f(h * k)}" fill="none" stroke="#000000" stroke-width="${f(0.35 * k)}"/>`;
       const nOff = new Set(F.hs.filter(hh => Math.abs(hh.a[F.B] - (R.b.min[F.B] + R.b.max[F.B]) / 2) > 1).map(hh => r1(hh.a[F.B] - R.b.min[F.B]))).size;
@@ -8205,6 +8247,22 @@ function tubeSheetSvg(un, o, k) {
       y = yy + 1;
     });
     y += 3;
+    // размеры и выноски, поставленные рукой на этой трубе (Алексей 23.11: «в каждом блоке я могу менять размеры, добавлять
+    // выноски»): размер — между двумя точками грани (торец / центр отверстия), число — из модели; ряды — над полосой
+    const rowN = {};
+    (un.tdim || []).forEach((d, di) => {
+      if (d.key !== gKey || !fY[d.fi]) return;
+      const Fy = fY[d.fi], n = (rowN[d.fi] = (rowN[d.fi] || 0) + 1), yy = Fy.yS - 4 - 6 * n - (d.off || 0), xa = X0 + Math.min(d.a, d.b) / sc, xb = X0 + Math.max(d.a, d.b) / sc;
+      s += line(xa, Fy.yS, xa, yy - 1.5, 0.12) + line(xb, Fy.yS, xb, yy - 1.5, 0.12) + dimLine(P(xa, yy), P(xb, yy), esc(d.text || fmtN(r1(Math.abs(d.b - d.a)))), k, f);
+      if (ui) s += `<rect class="nh" data-b="td:${di}" x="${f(o[0] + xa * k)}" y="${f(o[1] + (yy - 5.5) * k)}" width="${f((xb - xa) * k)}" height="${f(7 * k)}"/>`;
+    });
+    (un.tnote || []).forEach((nn, ni) => {
+      if (nn.key !== gKey || !fY[nn.fi]) return;
+      const Fy = fY[nn.fi], px = X0 + nn.mm / sc, py = Fy.yS + Fy.h - nn.cr / sc, qx = px + nn.q[0], qy = py + nn.q[1], w = Math.max(...nn.txt.map(z => String(z).length)) * 2.3 + 2, right = nn.q[0] >= 0;
+      s += line(px, py, qx, qy, 0.15) + line(qx, qy, qx + (right ? w : -w), qy, 0.15) + `<circle cx="${f(o[0] + px * k)}" cy="${f(o[1] + py * k)}" r="${f(0.5 * k)}" fill="#000000"/>`;
+      nn.txt.forEach((tx, ti) => { s += T(right ? qx + 1 : qx - w + 1, qy - 1.3 + ti * 5.4, tx, 4.4); });
+      if (ui) s += `<rect class="nh" data-b="tn:${ni}" x="${f(o[0] + (right ? qx : qx - w) * k)}" y="${f(o[1] + (qy - 5.5) * k)}" width="${f(w * k)}" height="${f((nn.txt.length * 5.4 + 2) * k)}"/>`;
+    });
     // полоса трубы со всеми её размерами и подписями — блок: стоит со своим смещением (тянется мышью), рамка — для захвата
     const part = s.slice(gS0); s = s.slice(0, gS0) + `<g transform="translate(${f(gOf[0] * k)} ${f(gOf[1] * k)})">` + part + '</g>';
     un.tgRect['k' + g.k] = [X0 - 4 + gOf[0], gY0 - 1 + gOf[1], Math.min(SHEET_W - 100, X0 + len + 46) + gOf[0], y - 2 + gOf[1]];
