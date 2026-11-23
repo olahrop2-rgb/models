@@ -6402,6 +6402,10 @@ function metalData() {
   if (B.views[g]) { B.views[g].all = B.views[g].own.concat(freeUnits); return B.views[g]; }
   // листы труб каркаса (tubeDet) — листы, но не позиции: в общем виде, спецификации и проверках их нет
   const sheetsU = B.units.filter(x => x.ctr === g), units = sheetsU.filter(x => !x.tubeDet);
+  // порядок листов — по обозначениям из модели ((6-1), (6-2) …): так идут и листы в комплекте, и файлы в отчёте, и дерево
+  const hasDes = units.some(x => unitDes(x));
+  if (hasDes) units.sort((p, q) => (unitDes(p) || '~').localeCompare(unitDes(q) || '~', undefined, { numeric: true }));
+  const ordU = !hasDes ? sheetsU : units.flatMap(x => [x].concat(sheetsU.filter(tq => tq.tubeDet && tq.tubeOf === x.u))).concat(sheetsU.filter(tq => tq.tubeDet && !units.some(x => x.u === tq.tubeOf)));
   units.forEach((x, k) => { x.no = k + 1; });                 // номера листов — свои в каждом комплекте
   const gi = B.groups.indexOf(g);
   const gen = B.composite.map((t, ti) => {                   // общий вид: изделие целиком, выделены полуфабрикаты комплекта
@@ -6448,7 +6452,7 @@ function metalData() {
                  pi, boxes: [], box, holes: [], mats: [...new Set(units.flatMap(x => x.mats))], paint: units.map(x => x.paint).find(Boolean) || '' });
     }
   }
-  return (B.views[g] = { tops: B.tops, groups: B.groups, group: g, units, gen, own: gen.concat(sheetsU), all: gen.concat(sheetsU, freeUnits) });
+  return (B.views[g] = { tops: B.tops, groups: B.groups, group: g, units, gen, own: gen.concat(ordU), all: gen.concat(ordU, freeUnits) });
 }
 function metalBuild() {
   const par = {};
@@ -8309,20 +8313,21 @@ async function metalReport() {
   const dir = LOCAL.order + '\\5. Креслення\\Чертежи для отчета(wmf)\\Метал', got = await catFiles(dir);
   if (!got) return;
   const md = metalData(), cur = metalCur, av = cur !== null ? (md.all.find(x => x.u === cur) || {}).actV : 0; let n = 0;
+  const A = await metalAuditAll(); if (!metalAskBad(A.bad)) return 0;
   for (const un of md.own) {
     // картинкой PNG 15 точек на мм (6000 точек в ширину): отчёт переводил SVG в картинку 2000 точек — было размыто (27.10)
-    const b64 = await svgPng(metalSheetSvg(un), 15), name = catName(got, unitTitle(un).replace(/\.+$/, ''), '.png');
+    const b64 = await svgPng(A.svgs.get(un.u) || metalSheetSvg(un), 15), name = catName(got, unitTitle(un).replace(/\.+$/, ''), '.png');
     try { await srv('/draw/save', { dir, name, b64 }); if (!got.some(f => f.name === name)) got.push({ name }); n++; }
     catch (e) { toast('не сохранилось: ' + e.message); break; }
   }
   metalBackTo(cur, av);
   toast('в отчёт Федосова — листов ' + n + ' (папка «Метал»' + (md.group ? ', подрядчик ' + md.group : '') + ')');
-  const cl = metalChecks(); if (cl.length) metalCheckBox(cl);
+  const cl = metalChecks().concat(A.bad); if (cl.length) metalCheckBox(cl);
   return n;
 }
-function metalPdfHtml() {
+function metalPdfHtml(svgs) {
   const md = metalData(), pages = [], cur = metalCur, av = cur !== null ? (md.all.find(x => x.u === cur) || {}).actV : 0;
-  for (const un of md.own) pages.push(metalSheetSvg(un));
+  for (const un of md.own) pages.push((svgs && svgs.get(un.u)) || metalSheetSvg(un));
   metalBackTo(cur, av);
   return '<!doctype html><html><head><meta charset="utf-8">' +
     `<link href="https://fonts.googleapis.com/css2?family=${DFONT.replace(/ /g, '+')}&display=block" rel="stylesheet">` +
@@ -8331,7 +8336,8 @@ function metalPdfHtml() {
 }
 async function metalPdf(suffix) {
   if (!LOCAL) { toast('в этой странице нет папки заказа — перевыгрузите проект из Базиса'); return; }
-  const md = metalData(), html = metalPdfHtml();
+  const md = metalData(), A = suffix ? { svgs: null, bad: [] } : await metalAuditAll(); if (!metalAskBad(A.bad)) return null;
+  const html = metalPdfHtml(A.svgs);
   const name = (M.title || 'изделие') + '_Чертежи металлоизделий' + (md.group ? ' — ' + md.group.replace(/[\\/:*?"<>|]/g, '_') : '') + (suffix || '') + '.pdf', dir = LOCAL.order + '\\5. Креслення\\Дод. креслення\\Метал';
   toast('собираю PDF: листов ' + md.own.length + '…');
   try { const r = await srv('/draw/pdf', { dir, name, html }); toast('PDF готов: ' + r.file); const cl = metalChecks(); if (cl.length) metalCheckBox(cl); return r.file; }
@@ -8342,7 +8348,7 @@ async function metalPdf(suffix) {
   }
 }
 // для самопроверки в невидимом браузере: данные, лист, размеры и выноски текущего листа
-window.__metal = { data: () => metalData(), audit: async u => { const un = metalData().all.find(x => x.u === u); const cur = metalCur, av = cur !== null ? (metalData().all.find(x => x.u === cur) || {}).actV : 0; const r = await metalAudit(un); metalBackTo(cur, av); return r; }, parts: () => metalData().units.map(u => [unitTitle(u), unitParts(u)]), lines: () => metalBlockLines(metalData().all.find(x => x.u === metalCur), drawN).map(x => x[0]), geo: () => { const un = metalData().all.find(x => x.u === metalCur), R = v => Math.round(v * 10) / 10, vw = metalViews(un); return { n: drawN, views: vw.map(w => [w.v, R(w.px), R(w.py), metalViewRect(w).map(R).join(' ')]), iso: (g => [R(g.x), R(g.y), R(g.s)])(metalIsoGeo(un)), blk: metalBlockRect(un, drawN).map(R), grp: metalGroup(un, vw).map(w => w.v) }; }, dragGrp: (dx, dy) => { const un = metalData().all.find(x => x.u === metalCur), vw = metalViews(un), P = {}; for (const w of vw) P[w.v] = [w.px, w.py]; metalDragGroup(un, metalGroup(un, vw).map(w => w.v), P, dx, dy); drawOverlay(); }, ov: () => OV, key: u => sheetKey(metalData().all.find(x => x.u === u)), ids: () => dims.filter(d => d.mk === metalCur && d.id).map(d => [d.id, d.hid ? 1 : 0, Math.round(d.off.length() * 10) / 10]), hide: id => { const d = dims.find(q => q.mk === metalCur && q.id === id); if (d) { pushUndo(); dimDelete(d); drawOverlay(); } return !!d; }, unhide: () => ovUnhide(metalData().all.find(x => x.u === metalCur)), state: () => freeState(), auto: () => autoDims(), undo: () => drawUndo(), lost: () => metalData().own.map(u => [u.name, ovLost(u)]).filter(x => x[1].length), show: (u, vi) => metalShow(u, vi), off: () => metalOff(),
+window.__metal = { data: () => metalData(), auditAll: async () => (await metalAuditAll()).bad, audit: async u => { const un = metalData().all.find(x => x.u === u); const cur = metalCur, av = cur !== null ? (metalData().all.find(x => x.u === cur) || {}).actV : 0; const r = await metalAudit(un); metalBackTo(cur, av); return r; }, parts: () => metalData().units.map(u => [unitTitle(u), unitParts(u)]), lines: () => metalBlockLines(metalData().all.find(x => x.u === metalCur), drawN).map(x => x[0]), geo: () => { const un = metalData().all.find(x => x.u === metalCur), R = v => Math.round(v * 10) / 10, vw = metalViews(un); return { n: drawN, views: vw.map(w => [w.v, R(w.px), R(w.py), metalViewRect(w).map(R).join(' ')]), iso: (g => [R(g.x), R(g.y), R(g.s)])(metalIsoGeo(un)), blk: metalBlockRect(un, drawN).map(R), grp: metalGroup(un, vw).map(w => w.v) }; }, dragGrp: (dx, dy) => { const un = metalData().all.find(x => x.u === metalCur), vw = metalViews(un), P = {}; for (const w of vw) P[w.v] = [w.px, w.py]; metalDragGroup(un, metalGroup(un, vw).map(w => w.v), P, dx, dy); drawOverlay(); }, ov: () => OV, key: u => sheetKey(metalData().all.find(x => x.u === u)), ids: () => dims.filter(d => d.mk === metalCur && d.id).map(d => [d.id, d.hid ? 1 : 0, Math.round(d.off.length() * 10) / 10]), hide: id => { const d = dims.find(q => q.mk === metalCur && q.id === id); if (d) { pushUndo(); dimDelete(d); drawOverlay(); } return !!d; }, unhide: () => ovUnhide(metalData().all.find(x => x.u === metalCur)), state: () => freeState(), auto: () => autoDims(), undo: () => drawUndo(), lost: () => metalData().own.map(u => [u.name, ovLost(u)]).filter(x => x[1].length), show: (u, vi) => metalShow(u, vi), off: () => metalOff(),
   views: () => { const un = metalData().all.find(x => x.u === metalCur); return un ? { act: un.actV, n: drawN, stat: (un.stat || []).map(s => s.v), v: metalViews(un).map(w => [w.v, Math.round(w.px), Math.round(w.py)]) } : null; },
   move: (v, dx, dy) => { const un = metalData().all.find(x => x.u === metalCur), P = {}; for (const w of metalViews(un)) P[w.v] = [w.px, w.py]; metalDragView(un, v, P, dx, dy); drawOverlay(); },
   sheet: () => { const un = metalData().all.find(x => x.u === metalCur), av = un.actV, s = metalSheetSvg(un); metalBackTo(un.u, av); return s; },
@@ -8370,9 +8376,9 @@ function metalTree() {
   const row = (un, lvl, title) => {
     const sk = sheetKey(un), e = sk && OV.sheets[sk], t = unitTitle(un);
     const edit = e && (e.dims || e.hand || e.vpos || e.vhide || e.vdel || e.extra || e.blk || e.isoOv || e.forceN), hid = (un.vhide || []).length || dims.some(d => d.mk === un.u && d.hid);
-    const warn = chk.some(c => c.startsWith(t + ' ') || c.startsWith(t + ':'));
+    const warn = chk.some(c => c.startsWith(t + ' ') || c.startsWith(t + ':')), ovl = un.aud && (un.aud.over || un.aud.edge);
     return `<div class="mtr${metalCur === un.u ? ' on' : ''}" data-mt="${un.u}" style="padding-left:${8 + lvl * 14}px" title="${esc(title)}"><span>${esc(title)}</span>` +
-      (hid ? `<i class="mh" title="${uk ? 'є приховане' : 'есть скрытое'}">◌</i>` : '') + (edit ? `<i class="me" title="${uk ? 'є правки' : 'есть правки'}">✎</i>` : '') + (warn ? `<i class="mw" title="${uk ? 'є зауваження' : 'есть замечания'}">!</i>` : '') + '</div>';
+      (hid ? `<i class="mh" title="${uk ? 'є приховане' : 'есть скрытое'}">◌</i>` : '') + (edit ? `<i class="me" title="${uk ? 'є правки' : 'есть правки'}">✎</i>` : '') + (warn ? `<i class="mw" title="${uk ? 'є зауваження' : 'есть замечания'}">!</i>` : '') + (ovl ? `<i class="mo" title="${uk ? 'на аркуші накладення' : 'на листе наложения'}">▦</i>` : '') + '</div>';
   };
   let h = `<div class="dlh"><span>${esc(ML('metal'))}</span><em>${md.own.length}</em></div>`;
   const tubesOf = u => md.own.filter(x => x.tubeDet && x.tubeOf === u);
@@ -8393,8 +8399,8 @@ function metalTree() {
 // Лист рисуется в картинку двумя слоями — только надписи и всё остальное; точки, где чернила обоих слоёв совпали, — наложение
 // (текст на размерной линии, выноска через число, надпись на контуре). Плюс: что вышло за лист, сколько поля занято видами,
 // как заполнены четыре четверти рабочего поля (лист без правой колонки надписей и аксонометрии).
-async function metalAudit(un) {
-  const PX = 4, W = SHEET_W * PX, H = Math.round(SHEET_H * PX), svg = metalSheetSvg(un);
+async function metalAudit(un, ready) {
+  const PX = 4, W = SHEET_W * PX, H = Math.round(SHEET_H * PX), svg = ready || metalSheetSvg(un);
   const layer = async css => {
     const s = svg.replace(/<svg([^>]*)>/, (m, a) => `<svg${a}><style>${css}</style>`);
     const img = new Image(), url = URL.createObjectURL(new Blob([s], { type: 'image/svg+xml' }));
@@ -8424,6 +8430,27 @@ async function metalAudit(un) {
   }
   const vw = metalViews(un).map(metalViewRect), area = vw.reduce((a, r) => a + Math.max(0, Math.min(r[2], fx1) - Math.max(r[0], fx0)) * Math.max(0, Math.min(r[3], fy1) - Math.max(r[1], fy0)), 0);
   return { sheet: unitTitle(un), n: drawN, fill: Math.round(100 * area / ((fx1 - fx0) * (fy1 - fy0))), quads: q.map((v, i) => Math.round(100 * v / Math.max(1, qn[i]))), edge, over };
+}
+// все листы комплекта — в картинки с проверкой; строки замечаний по листам, у которых текст лёг на линии или что-то вышло за край.
+// Заодно отдаёт сами картинки листов — выдача (отчёт / PDF) берёт их отсюда и не рисует второй раз.
+async function metalAuditAll() {
+  const md = metalData(), cur = metalCur, av = cur !== null ? (md.all.find(x => x.u === cur) || {}).actV : 0, uk = dLang === 'uk', svgs = new Map(), bad = [];
+  for (const un of md.own) {
+    const sv = metalSheetSvg(un); svgs.set(un.u, sv);
+    try {
+      const r = await metalAudit(un, sv); un.aud = { over: r.over.length, edge: r.edge, fill: r.fill };
+      if (r.over.length) bad.push(unitTitle(un) + ': ' + (uk ? 'накладень тексту на лінії' : 'наложений текста на линии') + ' — ' + r.over.length + ' (' + (uk ? 'біля' : 'около') + ' ' + r.over.slice(0, 3).map(o => o.x + '×' + o.y).join(', ') + ' ' + (uk ? 'мм від лівого верхнього кута' : 'мм от левого верхнего угла') + ')');
+      if (r.edge) bad.push(unitTitle(un) + ': ' + (uk ? 'щось вийшло за край аркуша' : 'что-то вышло за край листа'));
+    } catch (e) { console.warn('проверка листа:', e.message); }
+  }
+  metalBackTo(cur, av); metalTreeHtml = ''; syncPanel();
+  return { svgs, bad };
+}
+// ТЗ v3, п. 10.6: лист с наложениями не выдаётся молча — список таких листов и вопрос
+function metalAskBad(bad) {
+  if (!bad.length) return true;
+  metalCheckBox(bad);
+  return confirm((dLang === 'uk' ? 'На аркушах є накладення (список — у вікні). Видати все одно?' : 'На листах есть наложения (список — в окне). Выдать всё равно?'));
 }
 function metalMenu(b) {
   const md = metalData(), el = $('dfly');
@@ -8458,7 +8485,7 @@ function metalMenu(b) {
   }; });
   el.querySelectorAll('[data-mu]').forEach(q => { q.onclick = e => {
     e.stopPropagation(); closeFly();
-    const v = q.dataset.mu; if (v === 'unhide') ovUnhide(cur); else if (v === 'off') metalOff(); else if (v === 'pdf') metalPdf(); else if (v === 'rep') metalReport(); else if (v === 'chk') metalCheckBox(metalChecks()); else metalShow(+v);
+    const v = q.dataset.mu; if (v === 'unhide') ovUnhide(cur); else if (v === 'off') metalOff(); else if (v === 'pdf') metalPdf(); else if (v === 'rep') metalReport(); else if (v === 'chk') metalAuditAll().then(A => metalCheckBox(metalChecks().concat(A.bad))); else metalShow(+v);   // «Проверить»: замечания по модели + проверка листов по картинке
   }; });
   el.classList.add('show');
   const r = b.getBoundingClientRect();
