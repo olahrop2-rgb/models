@@ -5248,13 +5248,24 @@ function leadClick(x, y) {
   }
   const a = toScr(tpts[0]), k = pxPerPaper();
   pushUndo();
-  const n = { mk: metalCur, vk: viewKey(), p: tpts[0].clone(), pi: tpts.pi, q: [(x - a[0]) / k, (y - a[1]) / k], txt: leadText(tpts.pi), hand: true };
+  // «Позиция»: текст — только обозначение детали из модели (совпадает с таблицей); нет обозначения — выноска не ставится
+  const isPos = drawTool === 'pos', od = M.objs[tpts.pi], des = od && od.d ? String(od.d) : '';
+  if (isPos && !des) { toast(dLang === 'uk' ? 'у цієї деталі немає позначення в моделі' : 'у этой детали нет обозначения в модели'); tpts = []; preview = null; drawOverlay(); return; }
+  const n = { mk: metalCur, vk: viewKey(), p: tpts[0].clone(), pi: tpts.pi, q: [(x - a[0]) / k, (y - a[1]) / k], txt: isPos ? [des] : leadText(tpts.pi), hand: true };
+  if (isPos) n.posn = true;
   mnotes.push(n); selNote = n; selDim = selSec = null; ctxFor = null;
   tpts = []; preview = null; $('st').textContent = L('h_lead'); drawOverlay();
 }
-function noteDel(n) { const i = mnotes.indexOf(n); if (i >= 0) mnotes.splice(i, 1); if (selNote === n) selNote = null; drawOverlay(); }
+function noteDel(n) {
+  // автоматическая выноска листа металла (или автоматическая, которую перетянули) — прячется: перекладка листа её не вернёт
+  if (n.mk != null && metal && (!n.hand || n.src)) {
+    const un = metal.units.find(x => x.u === n.mk) || metalData().all.find(x => x.u === n.mk);
+    if (un && !un.free) (un.nhid || (un.nhid = [])).push(n.src ? n.src.split('|').slice(1).join('|') : n.vk + '|' + n.txt.join('\n'));
+  }
+  const i = mnotes.indexOf(n); if (i >= 0) mnotes.splice(i, 1); if (selNote === n) selNote = null; drawOverlay();
+}
 function toolHover(x, y) {
-  if (drawTool === 'lead') { leadHover(x, y); return; }
+  if (drawTool === 'lead' || drawTool === 'pos') { leadHover(x, y); return; }
   if (drawTool === 'ang') { angHover(x, y); return; }
   if (drawTool === 'sect') { secHover(x, y); return; }
   if (drawTool === 'clip') { clipHover(x, y); return; }
@@ -5315,6 +5326,10 @@ function tubeToolClick(un, x, y) {
   drawOverlay();
 }
 function toolClick(x, y) {
+  if (drawTool === 'pos') {
+    if (metalCur !== null && metal && (metalData().all.find(q => q.u === metalCur) || {}).svgSheet) { toast(dLang === 'uk' ? 'на аркуші труби позначення вже в заголовку — постав виноску' : 'на листе трубы обозначение уже в заголовке — поставь выноску'); return; }
+    leadClick(x, y); return;
+  }
   { const tun = metalCur !== null && metal ? metalData().all.find(q => q.u === metalCur) : null;
     if (tun && tun.svgSheet && ['lin', 'chain', 'base', 'lead'].includes(drawTool)) { tubeToolClick(tun, x, y); return; } }
   if (drawTool === 'lead') { leadClick(x, y); return; }
@@ -5831,7 +5846,7 @@ function stateNow() {
            notes: mnotes.filter(n => n.hand).map(n => Object.assign({}, n, { p: n.p.toArray(), q: n.q.slice(), txt: n.txt.slice() })),   // выноски рукой (тема 60)
            mu: muNow() };                                    // открытый лист металла: виды, блоки, масштаб
 }
-const MU_KEYS = ['vpos', 'vdel', 'vhide', 'extra', 'forceN', 'blk', 'isoOv', 'tpos', 'tscG', 'ipos', 'tdim', 'tnote'];
+const MU_KEYS = ['vpos', 'vdel', 'vhide', 'extra', 'forceN', 'blk', 'isoOv', 'tpos', 'tscG', 'ipos', 'tdim', 'tnote', 'nhid'];
 function muNow() {
   if (metalCur === null || !metal) return null;
   const un = metalData().all.find(x => x.u === metalCur); if (!un || un.free) return null;
@@ -6121,7 +6136,7 @@ const DCMD = {
     { const vk = viewKey(); for (let i = mnotes.length - 1; i >= 0; i--) if (mnotes[i].hand && (mnotes[i].mk ?? null) === metalCur && mnotes[i].vk === vk) mnotes.splice(i, 1); selNote = null; } const F = flags(); F.mod = F.all = false; selDim = selSec = null; drawOverlay(); } },
   sect: { act: () => setTool(drawTool === 'sect' ? null : 'sect'), on: isT('sect') },
   lead: { act: () => setTool(drawTool === 'lead' ? null : 'lead'), on: isT('lead') },
-  dia: soon, rad: soon, pos: soon, cut: soon, detail: soon,
+  dia: soon, rad: soon, pos: { act: () => setTool(drawTool === 'pos' ? null : 'pos'), on: isT('pos') }, cut: soon, detail: soon,
   svg: { act: () => saveSheet() }, png: { act: () => saveShot() }, refresh: { act: () => refreshList() },
   th_light: { act: () => setTheme('light'), on: () => dTheme === 'light' }, th_dark: { act: () => setTheme('dark'), on: () => dTheme === 'dark' },
   th_blue: { act: () => setTheme('blue'), on: () => dTheme === 'blue' },
@@ -6283,7 +6298,7 @@ function noteCtxFill(n) {
     setTimeout(() => { i.focus(); i.select(); });
     return;
   }
-  el.innerHTML = [['e_ntext', 'edit'], ['e_del', 'del']].map(([k, ic]) => `<button data-x="${k}">${DS(DIC[ic], 18)}<span>${L(k)}</span></button>`).join('');
+  el.innerHTML = (n.posn ? [['e_del', 'del']] : [['e_ntext', 'edit'], ['e_del', 'del']]).map(([k, ic]) => `<button data-x="${k}">${DS(DIC[ic], 18)}<span>${L(k)}</span></button>`).join('');
   el.querySelectorAll('[data-x]').forEach(b => { b.onclick = e => {
     e.stopPropagation();
     if (b.dataset.x === 'e_ntext') { noteEdit = true; noteCtxFill(n); placeCtx(); } else { pushUndo(); noteDel(n); }
@@ -6945,7 +6960,7 @@ function ovInit(un) {
   const e = OV.sheets[sk]; if (!e) return;
   const J = x => JSON.parse(JSON.stringify(x)), V = a => new THREE.Vector3().fromArray(a);
   if (e.vpos) un.vpos = J(e.vpos); if (e.vdel) un.vdel = e.vdel.slice(); if (e.vhide) un.vhide = e.vhide.slice(); if (e.extra) un.extra = e.extra.slice(); if (e.forceN) un.forceN = e.forceN;
-  if (e.blk) un.blk = J(e.blk); if (e.isoOv) un.isoOv = J(e.isoOv); if (e.tpos) un.tpos = J(e.tpos); if (e.tscG) un.tscG = J(e.tscG); if (e.ipos) un.ipos = J(e.ipos); if (e.tdim) un.tdim = J(e.tdim); if (e.tnote) un.tnote = J(e.tnote);
+  if (e.blk) un.blk = J(e.blk); if (e.isoOv) un.isoOv = J(e.isoOv); if (e.tpos) un.tpos = J(e.tpos); if (e.tscG) un.tscG = J(e.tscG); if (e.ipos) un.ipos = J(e.ipos); if (e.tdim) un.tdim = J(e.tdim); if (e.tnote) un.tnote = J(e.tnote); if (e.nhid) un.nhid = e.nhid.slice();
   const H = e.hand || {};
   for (const q of H.dims || []) {
     if (q.chain) chainSeq = Math.max(chainSeq, q.chain);
@@ -6970,7 +6985,7 @@ function ovCapture(un) {
     if (dm.fx) d.f = JSON.parse(JSON.stringify(dm.fx));
     if (Object.keys(d).length) dd[dm.id] = d; else delete dd[dm.id];
   }
-  for (const k of ['vpos', 'vdel', 'vhide', 'extra', 'forceN', 'blk', 'isoOv', 'tpos', 'tscG', 'ipos', 'tdim', 'tnote']) { const v = un[k]; if (v && (!Array.isArray(v) || v.length)) e[k] = JSON.parse(JSON.stringify(v)); else delete e[k]; }
+  for (const k of ['vpos', 'vdel', 'vhide', 'extra', 'forceN', 'blk', 'isoOv', 'tpos', 'tscG', 'ipos', 'tdim', 'tnote', 'nhid']) { const v = un[k]; if (v && (!Array.isArray(v) || v.length)) e[k] = JSON.parse(JSON.stringify(v)); else delete e[k]; }
   e.hand = {
     dims: dims.filter(d => d.mk === un.u && !d.auto).map(d => ({ a: A(d.a), b: A(d.b), axis: d.axis, off: A(d.off), label: d.label, text: d.text, fx: d.fx, vdir: d.vdir ? A(d.vdir) : null, chain: d.chain, fs: d.fs, ang: d.ang ? { c: A(d.ang.c), p: A(d.ang.p) } : null })),
     secs: secs.filter(q => q.mk === un.u).map(q => ({ a: A(q.a), b: A(q.b), s: q.s, vdir: A(q.vdir), fs: q.fs, letter: q.letter, sN: q.sN, rot: q.rot, pos: q.pos.slice(), pi: q.pi })),
@@ -7000,8 +7015,8 @@ function ovLost(un) {
   const vks = new Set(dims.filter(d => d.mk === un.u && d.auto === true && d.id).map(d => d.id.split('|')[0])), have = new Set(dims.filter(d => d.mk === un.u && d.id).map(d => d.id));
   return Object.keys(e.dims).filter(id => vks.has(id.split('|')[0]) && !have.has(id));   // только виды, которые уже построены
 }
-function ovHidden(un) { return dims.filter(d => d.mk === un.u && d.hid); }
-function ovUnhide(un) { pushUndo(); for (const dm of ovHidden(un)) dm.hid = false; drawOverlay(); }
+function ovHidden(un) { return dims.filter(d => d.mk === un.u && d.hid).concat(un.nhid || []); }
+function ovUnhide(un) { pushUndo(); for (const dm of dims.filter(d => d.mk === un.u && d.hid)) dm.hid = false; if (un.nhid && un.nhid.length) { un.nhid = []; metalClear(un); un.lay = null; metalShow(un.u, un.actV, true); } drawOverlay(); }
 function ovCaptureAll() { if (!metal) return; for (const un of metal.units) ovCapture(un); for (const g in metal.views) for (const un of metal.views[g].gen || []) ovCapture(un); }
 function metalClear(un) {                                   // автоматические размеры листа; поставленные рукой — остаются
   ovCapture(un);
@@ -7608,7 +7623,11 @@ function metalOff() {
   for (const p of parts) p.hidden = false; for (const k in nodes) nodes[k].hidden = false;
   applyVis(); renderTree(); setView('front');
 }
-function metalDims(un) { ovCapture(un); metalDims0(un); ovApply(un); }
+function metalDims(un) {
+  ovCapture(un); metalDims0(un);
+  if (un.nhid && un.nhid.length) for (let i = mnotes.length - 1; i >= 0; i--) { const n = mnotes[i]; if (n.mk === un.u && !n.hand && un.nhid.includes(n.vk + '|' + n.txt.join('\n'))) mnotes.splice(i, 1); }   // скрытые рукой авто-выноски
+  ovApply(un);
+}
 function metalDims0(un) {
   const vk = viewKey();                                     // размеры, выноски и отверстия — свои у каждого вида
   for (const dm of dims.filter(d => d.mk === un.u && d.auto && dimHere(d, true))) removeDim(dm);
@@ -8739,7 +8758,7 @@ function metalMenu(b) {
   const exBtns = back + (cur ? ['bottom', 'back', 'right'].filter(v => !(cur.vdel || []).includes(v) && !(cur.vhide || []).includes(v)).map(v => `<button data-mv="${v}" class="${(cur.extra || []).includes(v) ? 'on' : ''}"><span>${esc('+ ' + ML('m_view') + ' ' + ML('v_' + v))}</span></button>`).join('') : '');
   el.innerHTML = grpBtns + `<button data-mu="pdf"><span>${esc(ML('m_pdf'))}</span></button><button data-mu="rep"><span>${esc(ML('m_rep'))}</span></button><button data-mu="chk"><span>${esc(ML('m_chk'))}</span></button>` +
     md.own.map(x => `<button data-mu="${x.u}" class="${metalCur === x.u ? 'on' : ''}"><span>${esc(unitTitle(x))}</span></button>`).join('') + exBtns +
-    (cur && ovHidden(cur).length ? `<button data-mu="unhide"><span>${esc((dLang === 'uk' ? 'Показати приховані розміри' : 'Показать скрытые размеры') + ' (' + ovHidden(cur).length + ')')}</span></button>` : '') +
+    (cur && ovHidden(cur).length ? `<button data-mu="unhide"><span>${esc((dLang === 'uk' ? 'Показати приховане (розміри, виноски)' : 'Показать скрытое (размеры, выноски)') + ' (' + ovHidden(cur).length + ')')}</span></button>` : '') +
     `<button data-mu="off"><span>${esc(ML('m_off'))}</span></button>`;
   el.querySelectorAll('[data-mv]').forEach(q => { q.onclick = e => {
     e.stopPropagation(); closeFly();
