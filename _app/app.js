@@ -4938,7 +4938,7 @@ function dimPrims(dm, toP, k) {
     else if (dm.stag) { const sh = dm.stag * (tw * 0.6 + 1 * k); tp[0] += ex * sh; tp[1] += ey * sh; }   // шахматный порядок соседних рядов
   }
   const fz = (dm.fsz || 3.5) * k, fx = dm.fx || {}, nx = Math.sin(r), ny = -Math.cos(r);
-  return { L, T, F, txt, x: tp[0] + nx * k, y: tp[1] + ny * k, ang, pa, pb, tp, col: dm.col, fsz: dm.fsz, hand: dm.text != null,
+  return { L, T, F, txt, x: tp[0] + nx * k, y: tp[1] + ny * k, ang, pa, pb, tp, col: dm.col, fsz: dm.fsz, hand: dm.text != null && !(dm.auto === true && dm.text === dm.text0),
            over: fx.over || '', ox: tp[0] + nx * (k + fz * 1.12), oy: tp[1] + ny * (k + fz * 1.12),      // уточнение над числом
            under: fx.under || '', ux: tp[0] - nx * (fz * 0.82 + 0.6 * k), uy: tp[1] - ny * (fz * 0.82 + 0.6 * k) };   // уточнение под размерной линией
 }
@@ -8649,7 +8649,7 @@ function metalChecks() {
     const nd = (un.tubes || []).filter(i => M.objs[i] && M.objs[i].pf && !M.objs[i].d).length;
     if (nd) out.push(unitTitle(un) + ': ' + (dLang === 'uk' ? 'труб без позначення' : 'труб без обозначения') + ' — ' + nd);
   }
-  for (const un of md.own) { const hn = dims.filter(d => d.mk === un.u && !d.hid && d.text != null && !d.ang && String(d.text) !== dimModelNum(d)); for (const d of hn) out.push(unitTitle(un) + ': ' + (dLang === 'uk' ? 'число розміру змінено вручну' : 'число размера изменено вручную') + ' — ' + dimModelNum(d) + ' → ' + d.text); }
+  for (const un of md.own) { const hn = dims.filter(d => d.mk === un.u && !d.hid && d.text != null && !d.ang && String(d.text) !== String(d.auto === true && d.text0 != null ? d.text0 : dimModelNum(d))); for (const d of hn) out.push(unitTitle(un) + ': ' + (dLang === 'uk' ? 'число розміру змінено вручну' : 'число размера изменено вручную') + ' — ' + dimModelNum(d) + ' → ' + d.text); }
   for (const un of md.own) { const lost = ovLost(un); if (lost.length) out.push(unitTitle(un) + ': ' + (dLang === 'uk' ? 'загубилися правки розмірів — елемент змінено або видалено з моделі' : 'потерялись правки размеров — элемент изменён или удалён из модели') + ' (' + lost.length + ')'); }
   return out;
 }
