@@ -5070,7 +5070,7 @@ function wireOverlay() {
       const vw = metalViews(un), P = {}; for (const w of vw) P[w.v] = [w.px, w.py];
       const G = metalGroup(un, vw); if (G.length < 2) return;
       metalSelV = '#grp'; selDim = null; selSec = null;
-      dr = { vw: '#grp', grp: G.map(w => w.v), scale: !!e.target.dataset.vgs, un, x: e.clientX, y: e.clientY, moved: false, P, r0: metalGroupRect(G), n0: drawN };
+      dr = { vw: '#grp', grp: G.map(w => w.v), scale: !!e.target.dataset.vgs, cr: e.target.dataset.cr || 'br', un, x: e.clientX, y: e.clientY, moved: false, P, r0: metalGroupRect(G), n0: drawN };
       drawOverlay(); return;
     }
     const vwv = e.target.dataset.vw || e.target.dataset.vws;
@@ -5081,7 +5081,7 @@ function wireOverlay() {
       if (e.button !== 0) return;
       const vw = metalViews(un), P = {}; for (const w of vw) P[w.v] = [w.px, w.py];
       metalSelV = vwv; selDim = null; selSec = null;
-      dr = { vw: vwv, scale: !!e.target.dataset.vws, un, x: e.clientX, y: e.clientY, moved: false, P, r0: metalViewRect(vw.find(w => w.v === vwv)), n0: drawN };
+      dr = { vw: vwv, scale: !!e.target.dataset.vws, cr: e.target.dataset.cr || 'br', un, x: e.clientX, y: e.clientY, moved: false, P, r0: metalViewRect(vw.find(w => w.v === vwv)), n0: drawN };
       drawOverlay(); return;
     }
     const bi = e.target.dataset.b;
@@ -5093,8 +5093,8 @@ function wireOverlay() {
       if (bi === 'blk') blkT = tNow;
       const G = metalBlockGeo(un, drawN), I = un.svgSheet ? tubeIsoGeo(un) : metalIsoGeo(un);
       if (bi.startsWith('tg:')) { const o0 = (un.tpos && un.tpos[bi.slice(3)]) || [0, 0]; dr = { blk: bi, un, x: e.clientX, y: e.clientY, moved: false, p0: { x: o0[0], y: o0[1] } }; return; }   // полоса трубы
-      if (bi.startsWith('tgs:')) { const key = bi.slice(4), r = (un.tgRect || {})[key] || [0, 0, 100, 20]; dr = { blk: bi, un, x: e.clientX, y: e.clientY, moved: false, p0: { n: (un.tscG && un.tscG[key]) || un.tsc || tubeScale(un.tg), w: r[2] - r[0] } }; return; }   // уголок полосы — её масштаб
-      dr = { blk: bi, un, x: e.clientX, y: e.clientY, moved: false, p0: bi.startsWith('blk') ? { x: G.x0, y: G.y0, s: G.s, w: G.x1 - G.x0 } : { x: I.x, y: I.y, s: I.s } };
+      if (bi.startsWith('tgs:')) { const key = bi.slice(4), r = (un.tgRect || {})[key] || [0, 0, 100, 20]; dr = { blk: bi, cr: e.target.dataset.cr || 'br', un, x: e.clientX, y: e.clientY, moved: false, p0: { n: (un.tscG && un.tscG[key]) || un.tsc || tubeScale(un.tg), w: r[2] - r[0] } }; return; }   // уголок полосы — её масштаб
+      dr = { blk: bi, cr: e.target.dataset.cr || 'br', un, x: e.clientX, y: e.clientY, moved: false, p0: bi.startsWith('blk') ? { x: G.x0, y: G.y0, s: G.s, w: G.x1 - G.x0, h: G.y1 - G.y0 } : { x: I.x, y: I.y, s: I.s } };
       return;
     }
     const ni = e.target.dataset.n;
@@ -5139,7 +5139,8 @@ function wireOverlay() {
       dr.moved = true;
       const k = pxPerPaper(), dx = (e.clientX - dr.x) / k, dy = (e.clientY - dr.y) / k;
       if (dr.scale) {                                         // масштаб — ближайший из ряда, рамки показывают, как ляжет
-        const r = dr.r0, f0 = Math.max(0.1, Math.max((r[2] - r[0] + dx) / (r[2] - r[0]), (r[3] - r[1] + dy) / (r[3] - r[1])));
+        const ex = dx * (dr.cr[1] === 'l' ? -1 : 1), ey = dy * (dr.cr[0] === 't' ? -1 : 1);   // от любого угла наружу — крупнее
+        const r = dr.r0, f0 = Math.max(0.1, Math.max((r[2] - r[0] + ex) / (r[2] - r[0]), (r[3] - r[1] + ey) / (r[3] - r[1])));
         const n = SCALES.reduce((p, q) => Math.abs(Math.log(q / (dr.n0 / f0))) < Math.abs(Math.log(p / (dr.n0 / f0))) ? q : p, SCALES[0]);
         metalScaleDr = { n, f: dr.n0 / n, fc: f0, x: e.clientX, y: e.clientY };   // fc — как тянут (плавно), f — куда встанет (ступенька ряда)
       } else if (dr.grp) metalDragGroup(dr.un, dr.grp, dr.P, dx, dy); else metalDragView(dr.un, dr.vw, dr.P, dx, dy);
@@ -5150,14 +5151,15 @@ function wireOverlay() {
     if (dr.sc) { const k = pxPerPaper(); dr.sc.pos = [dr.p0[0] + (e.clientX - dr.x) / k, dr.p0[1] + (e.clientY - dr.y) / k]; drawOverlay(); return; }
     if (dr.blk) {
       const k = pxPerPaper(), dx = (e.clientX - dr.x) / k, dy = (e.clientY - dr.y) / k, p = dr.p0, un = dr.un;
+      const cr = dr.cr || 'br', L = cr[1] === 'l', T = cr[0] === 't', ex = L ? -dx : dx, ey = T ? -dy : dy;   // угол, за который тянут
       if (dr.blk.startsWith('tgs:')) {                        // масштаб полосы — ближайший из ряда (в заголовке полосы — «М 1:N»)
-        const want = p.n / Math.max(0.15, (p.w + dx) / p.w), n = TUBE_SC.reduce((a, q) => Math.abs(Math.log(q / want)) < Math.abs(Math.log(a / want)) ? q : a, TUBE_SC[0]);
+        const want = p.n / Math.max(0.15, (p.w + ex) / p.w), n = TUBE_SC.reduce((a, q) => Math.abs(Math.log(q / want)) < Math.abs(Math.log(a / want)) ? q : a, TUBE_SC[0]);
         (un.tscG || (un.tscG = {}))[dr.blk.slice(4)] = n;
       } else if (dr.blk.startsWith('tg:')) (un.tpos || (un.tpos = {}))[dr.blk.slice(3)] = [p.x + dx, p.y + dy];
       else if (dr.blk === 'blk') un.blk = { x: p.x + dx, y: p.y + dy, s: p.s };
-      else if (dr.blk === 'blks') un.blk = { x: p.x, y: p.y, s: Math.max(0.5, Math.min(3, p.s * (p.w + dx) / p.w)) };
+      else if (dr.blk === 'blks') { const s2 = Math.max(0.5, Math.min(3, p.s * (p.w + ex) / p.w)), kk = s2 / p.s; un.blk = { x: L ? p.x + p.w * (1 - kk) : p.x, y: T ? p.y + p.h * (1 - kk) : p.y, s: s2 }; }
       else if (dr.blk === 'iso') un.isoOv = { x: p.x + dx, y: p.y + dy, s: p.s };
-      else un.isoOv = { x: p.x, y: p.y, s: Math.max(30, Math.min(250, p.s + Math.max(dx, dy))) };
+      else { const s2 = Math.max(30, Math.min(250, p.s + Math.max(ex, ey))); un.isoOv = { x: L ? p.x + p.s - s2 : p.x, y: T ? p.y + p.s - s2 : p.y, s: s2 }; }
       drawOverlay(); return;
     }
     dragDimTo(dr.dm, dr.kind, e.clientX, e.clientY);
@@ -7430,6 +7432,11 @@ function metalDelView(un, v) {
 }
 // на экране: картинки неживых видов и рамки всех видов (тянуть, за правый нижний угол — масштаб всего листа)
 let metalSelV = null, metalScaleDr = null;
+// маркеры масштаба — на всех четырёх углах блока (Алексей 23.11); cr — какой угол: tl / tr / bl / br
+function grips4(attr, x0, y0, x1, y1, sz) {
+  const h = (sz || 10) / 2, q = v => String(Math.round(v * 100) / 100);
+  return [['tl', x0, y0], ['tr', x1, y0], ['bl', x0, y1], ['br', x1, y1]].map(([c, x, y]) => `<rect class="grip bg${c === 'tr' || c === 'bl' ? ' ne' : ''}" ${attr} data-cr="${c}" x="${q(x - h)}" y="${q(y - h)}" width="${sz || 10}" height="${sz || 10}"/>`).join('');
+}
 function metalViewsSvg(un, S) {
   if (un.svgSheet) return '';
   const k = S.w / SHEET_W, f = v => String(Math.round(v * 100) / 100), vw = metalViews(un);
@@ -7462,14 +7469,14 @@ function metalViewsSvg(un, S) {
     const gr = metalGroupRect(GV), on = metalSelV === '#grp', x0 = S.x0 + gr[0] * k, y0 = S.y0 + gr[1] * k;
     s += box(gr, 'vgf' + (on ? ' on' : '')) + box(gr, 'vgb', 'data-vg="1"') +
       `<g class="vgt${on ? ' on' : ''}" transform="translate(${f(x0)} ${f(y0)})"><rect data-vg="1" x="0" y="-17" width="128" height="17" rx="3"/><text data-vg="1" x="7" y="-5">${esc((dLang === 'uk' ? 'блок видів' : 'блок видов') + ' · М 1:' + fmtN(drawN))}</text></g>` +
-      `<rect class="grip bg" data-vgs="1" x="${f(S.x0 + gr[2] * k - 6)}" y="${f(S.y0 + gr[3] * k - 6)}" width="12" height="12"/>`;
+      grips4('data-vgs="1"', S.x0 + gr[0] * k, S.y0 + gr[1] * k, S.x0 + gr[2] * k, S.y0 + gr[3] * k, 12);
   }
   for (const w of vw) {
     // живой вид при выбранном инструменте ловится только краем (внутри ставятся размеры); без инструмента — всей площадью,
     // как остальные: потянул — вид поехал (Алексей 11.11)
     const r = metalViewRect(w), act = w.v === un.actV, on = metalSelV === w.v;
     s += box(r, 'vfr' + (on ? ' on' : '')) + box(r, act && drawTool ? 'vb' : 'vh', `data-vw="${w.v}"`) +
-      (GV.includes(w) ? '' : `<rect class="grip bg" data-vws="${w.v}" x="${f(S.x0 + r[2] * k - 5)}" y="${f(S.y0 + r[3] * k - 5)}" width="10" height="10"/>`);
+      (GV.includes(w) ? '' : grips4(`data-vws="${w.v}"`, S.x0 + r[0] * k, S.y0 + r[1] * k, S.x0 + r[2] * k, S.y0 + r[3] * k));
     if (vw.length > 1) s += `<g class="vx" data-vx="${w.v}" transform="translate(${f(S.x0 + r[2] * k - 2)} ${f(S.y0 + r[1] * k + 2)})"><title>${esc(L('v_x'))}</title>` +
       '<rect x="-16" y="0" width="16" height="16" rx="3"/><path d="M-12 4L-4 12M-4 4L-12 12"/></g>';   // крестик — убрать вид
   }
@@ -7971,12 +7978,12 @@ function metalBlockSvg(o, k, ui) {
   if (th) s += `<image href="${th}" x="${f(o[0] + iso.x * k)}" y="${f(o[1] + iso.y * k)}" width="${f(iso.s * k)}" height="${f(iso.s * k)}" preserveAspectRatio="xMidYMid meet"/>`;
   if (ui) {                                                 // на экране: колонку и аксонометрию можно тянуть, за правый нижний угол — растягивать
     const R = (b, x0, y0, x1, y1) => `<rect class="bh" data-b="${b}" x="${f(o[0] + x0 * k)}" y="${f(o[1] + y0 * k)}" width="${f((x1 - x0) * k)}" height="${f((y1 - y0) * k)}"/>` +
-      `<rect class="grip bg" data-b="${b}s" x="${f(o[0] + x1 * k - 5)}" y="${f(o[1] + y1 * k - 5)}" width="10" height="10"/>`;
+      grips4(`data-b="${b}s"`, o[0] + x0 * k, o[1] + y0 * k, o[0] + x1 * k, o[1] + y1 * k);
     s += R('blk', G.x0, G.y0, G.x1, G.y1);
     if (th) s += R('iso', iso.x, iso.y, iso.x + iso.s, iso.y + iso.s);
     if (un.svgSheet) { const tI = tubeIsoGeo(un); s += R('iso', tI.x, tI.y, tI.x + tI.s, tI.y + tI.s); }   // картинка рамки на листе труб — тоже блок
     // лист труб: каждая полоса — блок, тянется мышью за любое своё место
-    if (un.svgSheet && un.tgRect) for (const key in un.tgRect) { const r = un.tgRect[key]; s += `<rect class="bh" data-b="tg:${esc(key)}" x="${f(o[0] + r[0] * k)}" y="${f(o[1] + r[1] * k)}" width="${f((r[2] - r[0]) * k)}" height="${f((r[3] - r[1]) * k)}"/>` + `<rect class="grip bg" data-b="tgs:${esc(key)}" x="${f(o[0] + r[2] * k - 5)}" y="${f(o[1] + r[3] * k - 5)}" width="10" height="10"/>`; }
+    if (un.svgSheet && un.tgRect) for (const key in un.tgRect) { const r = un.tgRect[key]; s += `<rect class="bh" data-b="tg:${esc(key)}" x="${f(o[0] + r[0] * k)}" y="${f(o[1] + r[1] * k)}" width="${f((r[2] - r[0]) * k)}" height="${f((r[3] - r[1]) * k)}"/>` + grips4(`data-b="tgs:${esc(key)}"`, o[0] + r[0] * k, o[1] + r[1] * k, o[0] + r[2] * k, o[1] + r[3] * k); }
   }
   // общий вид: выноски с номерами позиций на аксонометрии — те же номера, что в списке (Алексей 27.10)
   // общий вид: номер позиции — одной цифрой без кружка, от неё тонкие линии ко всем таким деталям (Алексей 19.11: «ёжик из
