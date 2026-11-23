@@ -552,7 +552,7 @@ function build() {
         // наружная линия кромки лежит прямо на её поверхности — издали шла пунктиром; кромка на волос глубже линии
         if (pd.xl) { m.material.polygonOffset = true; m.material.polygonOffsetFactor = 1; m.material.polygonOffsetUnits = 2; }
         const egm = pd.ev ? { attributes: { position: { array: new Float32Array(pd.ev) } } } : g; delete pd.ev;
-        const ln = new THREE.LineSegments(partEdges(egm, 25, od.k === 'p', pd), EDGE); grp.add(ln); edges.push(ln);
+        const ln = new THREE.LineSegments(chamferSnap(partEdges(egm, 25, od.k === 'p', pd), od), EDGE); grp.add(ln); edges.push(ln);
         const lh = new THREE.LineSegments(ln.geometry, EDGE_HID); lh.visible = false; lh.renderOrder = -1; grp.add(lh); hidEdges.push(lh);
         if (M.mats[pd.m] && M.mats[pd.m].mk) { m.userData.mark = ln.userData.mark = lh.userData.mark = true; markObjs.push(m, ln); }
       }
@@ -6664,6 +6664,43 @@ function holeAt(un, h) {
 }
 function axName(v) { const k = ['x', 'y', 'z'].reduce((p, q) => Math.abs(v[q]) > Math.abs(v[p]) ? q : p, 'x'); return (v[k] < 0 ? '-' : '') + k; }
 // заголовок листа: полуфабрикат — имя и номер, отдельная деталь — её материал, длина, количество
+// Фаска вместо радиуса у трубы (ТЗ чертежей металла v3, п. 11): прямоугольная труба моделируется с фаской до 2 мм по четырём
+// наружным углам вдоль всей длины — это имитация радиуса, на видах её линий быть не должно, а габарит трубы — ровно по граням
+// (виртуальный острый угол). Рёбра такой трубы: обе фасочные линии каждого угла стягиваются в одну — по углу габарита сечения.
+// Только «прямоугольник с четырьмя фасками»; сложные сечения (Gola, штапики) не трогаются. Сечение (разрез) — как в модели.
+const CHAMFER_MAX = 2;
+function chamferCorners(si) {
+  if (chamferCorners.memo.has(si)) return chamferCorners.memo.get(si);
+  const els = (M.secs || [])[si] || []; let res = null;
+  if (els.length && els.every(e => e[0] === 1)) {
+    const xs = els.flatMap(e => [e[1], e[3]]), ys = els.flatMap(e => [e[2], e[4]]), x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys), T = 0.02, map = [];
+    for (const e of els) {
+      for (const [cx, cy] of [[x0, y0], [x0, y1], [x1, y0], [x1, y1]]) {
+        const P = [[e[1], e[2]], [e[3], e[4]]], near = P.every(p => Math.abs(p[0] - cx) <= CHAMFER_MAX && Math.abs(p[1] - cy) <= CHAMFER_MAX);
+        const onX = P.filter(p => Math.abs(p[0] - cx) < T).length, onY = P.filter(p => Math.abs(p[1] - cy) < T).length;
+        if (near && onX === 1 && onY === 1 && Math.hypot(P[0][0] - P[1][0], P[0][1] - P[1][1]) > T) for (const p of P) map.push([p[0], p[1], cx, cy]);
+      }
+    }
+    if (map.length === 8) res = map;                        // ровно четыре фаски — по одной на угол
+  }
+  chamferCorners.memo.set(si, res); return res;
+}
+chamferCorners.memo = new Map();
+function chamferSnap(g, od) {
+  const pf = od && od.pf, map = pf && pf.ax ? chamferCorners(pf.s) : null; if (!map) return g;
+  const a = pf.ax, O = [a[0], a[1], a[2]], X = [a[3], a[4], a[5]], Y = [a[6], a[7], a[8]], src = g.attributes.position.array, out = [], seen = new Set();
+  const snap = k => {
+    const d = [src[k] - O[0], src[k + 1] - O[1], src[k + 2] - O[2]], x = d[0] * X[0] + d[1] * X[1] + d[2] * X[2], y = d[0] * Y[0] + d[1] * Y[1] + d[2] * Y[2];
+    const m = map.find(q => Math.abs(q[0] - x) < 0.2 && Math.abs(q[1] - y) < 0.2); if (!m) return [src[k], src[k + 1], src[k + 2]];
+    const dx = m[2] - x, dy = m[3] - y; return [src[k] + dx * X[0] + dy * Y[0], src[k + 1] + dx * X[1] + dy * Y[1], src[k + 2] + dx * X[2] + dy * Y[2]];
+  };
+  for (let k = 0; k + 5 < src.length; k += 6) {
+    const p = snap(k), q = snap(k + 3); if (Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]) < 0.3) continue;   // фаска на торце стянулась в точку
+    const r = v => v.map(z => Math.round(z * 10)).join(','), key = [r(p), r(q)].sort().join('|'); if (seen.has(key)) continue; seen.add(key);
+    out.push(...p, ...q);
+  }
+  const ng = new THREE.BufferGeometry(); ng.setAttribute('position', new THREE.Float32BufferAttribute(out, 3)); return ng;
+}
 // имя листа: обозначение из модели + имя («(6-2) рамка»); в модели обозначения нет — имя и номер по порядку («рамка 1»)
 const unitTitle = un => un.general || un.loose || un.free ? un.name : unitDes(un) ? unitDes(un) + ' ' + un.name : un.name + ' ' + un.no;
 // номер позиции на общем виде = обозначение из модели без скобок; нет обозначения — номер по порядку
