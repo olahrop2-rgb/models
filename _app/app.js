@@ -5092,6 +5092,8 @@ function wireOverlay() {
       if (bi === 'blk' && tNow - blkT < 450 && blkAsk) { blkT = 0; dr = null; blkAsk(un); return; }   // два щелчка — количество
       if (bi === 'blk') blkT = tNow;
       const G = metalBlockGeo(un, drawN), I = metalIsoGeo(un);
+      if (bi.startsWith('tg:')) { const o0 = (un.tpos && un.tpos[bi.slice(3)]) || [0, 0]; dr = { blk: bi, un, x: e.clientX, y: e.clientY, moved: false, p0: { x: o0[0], y: o0[1] } }; return; }   // полоса трубы
+      if (bi.startsWith('tgs:')) { const key = bi.slice(4), r = (un.tgRect || {})[key] || [0, 0, 100, 20]; dr = { blk: bi, un, x: e.clientX, y: e.clientY, moved: false, p0: { n: (un.tscG && un.tscG[key]) || un.tsc || tubeScale(un.tg), w: r[2] - r[0] } }; return; }   // уголок полосы — её масштаб
       dr = { blk: bi, un, x: e.clientX, y: e.clientY, moved: false, p0: bi.startsWith('blk') ? { x: G.x0, y: G.y0, s: G.s, w: G.x1 - G.x0 } : { x: I.x, y: I.y, s: I.s } };
       return;
     }
@@ -5148,7 +5150,11 @@ function wireOverlay() {
     if (dr.sc) { const k = pxPerPaper(); dr.sc.pos = [dr.p0[0] + (e.clientX - dr.x) / k, dr.p0[1] + (e.clientY - dr.y) / k]; drawOverlay(); return; }
     if (dr.blk) {
       const k = pxPerPaper(), dx = (e.clientX - dr.x) / k, dy = (e.clientY - dr.y) / k, p = dr.p0, un = dr.un;
-      if (dr.blk === 'blk') un.blk = { x: p.x + dx, y: p.y + dy, s: p.s };
+      if (dr.blk.startsWith('tgs:')) {                        // масштаб полосы — ближайший из ряда (в заголовке полосы — «М 1:N»)
+        const want = p.n / Math.max(0.15, (p.w + dx) / p.w), n = TUBE_SC.reduce((a, q) => Math.abs(Math.log(q / want)) < Math.abs(Math.log(a / want)) ? q : a, TUBE_SC[0]);
+        (un.tscG || (un.tscG = {}))[dr.blk.slice(4)] = n;
+      } else if (dr.blk.startsWith('tg:')) (un.tpos || (un.tpos = {}))[dr.blk.slice(3)] = [p.x + dx, p.y + dy];
+      else if (dr.blk === 'blk') un.blk = { x: p.x + dx, y: p.y + dy, s: p.s };
       else if (dr.blk === 'blks') un.blk = { x: p.x, y: p.y, s: Math.max(0.5, Math.min(3, p.s * (p.w + dx) / p.w)) };
       else if (dr.blk === 'iso') un.isoOv = { x: p.x + dx, y: p.y + dy, s: p.s };
       else un.isoOv = { x: p.x, y: p.y, s: Math.max(30, Math.min(250, p.s + Math.max(dx, dy))) };
@@ -5773,7 +5779,7 @@ function stateNow() {
            notes: mnotes.filter(n => n.hand).map(n => Object.assign({}, n, { p: n.p.toArray(), q: n.q.slice(), txt: n.txt.slice() })),   // выноски рукой (тема 60)
            mu: muNow() };                                    // открытый лист металла: виды, блоки, масштаб
 }
-const MU_KEYS = ['vpos', 'vdel', 'vhide', 'extra', 'forceN', 'blk', 'isoOv'];
+const MU_KEYS = ['vpos', 'vdel', 'vhide', 'extra', 'forceN', 'blk', 'isoOv', 'tpos', 'tscG'];
 function muNow() {
   if (metalCur === null || !metal) return null;
   const un = metalData().all.find(x => x.u === metalCur); if (!un || un.free) return null;
@@ -6397,6 +6403,7 @@ function cleanFast(n) {   // имя крепежа без поставщика �
 let metalGroupSel = null;
 function metalData() {
   const B = metal || (metal = metalBuild());
+  tubeMergeApply();
   const g = B.groups.includes(metalGroupSel) ? metalGroupSel : B.groups[0];
   // all — всё, что можно открыть листом: листы металла (own) и «свои листы» (freeUnits, тема 60); комплект PDF / отчёт — только own
   if (B.views[g]) { B.views[g].all = B.views[g].own.concat(freeUnits); return B.views[g]; }
@@ -6786,15 +6793,53 @@ function sheetKey(un) {
   if (un.general) return un.assembly ? 'asm' : (U(un.top) ? 'g:' + U(un.top) : null);
   if (!un.tubeDet && U(un.u)) return 'u:' + U(un.u);
   const tf = un.tubeOf && typeof un.tubeOf === 'object' ? un.tubeOf.u : un.tubeOf;
-  return 'n:' + (tf !== undefined && U(tf) ? U(tf) + ':' : '') + (un.name || '');   // листы труб каркаса, группы одинаковых труб — по имени (и UID своего каркаса)
+  return 'n:' + (tf !== undefined && U(tf) ? U(tf) + ':' : '') + (un.name0 || un.name || '');   // листы труб каркаса, группы одинаковых труб — по имени (и UID своего каркаса)
 }
 // лист, убранный из комплекта правой кнопкой в дереве (удалить = скрыть): в дереве, проверке и выдаче его нет, вернуть — строка
 // «скрытые листы» внизу дерева
 function sheetOff(un) { const sk = sheetKey(un); return !!(sk && OV.sheets[sk] && OV.sheets[sk].off); }
+// листа нет в комплекте: убран рукой или его трубу перенесли на соседний лист
+const sheetGone = un => !!un.mergedInto || sheetOff(un);
+// Листы труб одной рамки сводятся на один лист (Алексей 23.11: «две полоски бы объединил»): правая кнопка в дереве →
+// «Объединить с …»; обратно — «Разделить». Хранится у рамки: имя листа → имя листа, на который он переехал.
+function tubeMergeApply() {
+  if (!metal) return;
+  const ones = metal.units.filter(x => x.one); if (!ones.length) return;
+  const mapOf = fu => { const fk = sheetKey(fu), e = fk && OV.sheets[fk]; return (e && e.tmerge) || null; };
+  const sig = JSON.stringify(ones.map(q => mapOf(q.tubeOf)));
+  if (sig === metal.tmSig) return;
+  metal.tmSig = sig;
+  for (const q of ones) { if (!q.tg0) { q.tg0 = q.tg.slice(); q.name0 = q.name; } q.tg = q.tg0.slice(); q.mergedInto = null; }
+  for (const q of ones) {
+    const mp = mapOf(q.tubeOf); if (!mp || !mp[q.name0]) continue;
+    let dst = null, nm = mp[q.name0];
+    for (let i = 0; i < 12 && nm; i++) { dst = ones.find(x => x.tubeOf === q.tubeOf && x.name0 === nm) || null; nm = dst && mp[dst.name0]; }   // по цепочке до конечного листа
+    if (dst && dst !== q) q.mergedInto = dst;
+  }
+  for (const q of ones) if (q.mergedInto) q.mergedInto.tg.push(...q.tg0);
+  for (const q of ones) {
+    const fu = q.tubeOf;
+    q.tg.sort((a, b) => String(a.N).localeCompare(String(b.N), undefined, { numeric: true }));
+    q.name = q.tg.length > 1 ? q.tg.map(g => g.des || g.N).join(' + ') + ' ' + ML('tubesT') : q.name0;
+    q.hiParts = q.tg.flatMap(g => g.list.map(k => fu.tubes[k])); q.tsc = tubeScale(q.tg);
+    q.lay = null; delete q.thumb; delete q.schemePts; delete q.thumbMap;
+  }
+  for (const g in metal.views) delete metal.views[g];        // списки листов собираются заново
+  metalTreeHtml = '';
+}
+function tubeMergeSet(src, dst) {                            // dst === null — разделить: всё, что съехалось на src, вернуть на свои листы
+  const fk = sheetKey(src.tubeOf); if (!fk) { toast(dLang === 'uk' ? 'цю сторінку вивантажено до 23.11 — перевивантаж проєкт' : 'эта страница выгружена до 23.11 — перевыгрузи проект'); return; }
+  const e = OV.sheets[fk] || (OV.sheets[fk] = {}), mp = e.tmerge || (e.tmerge = {});
+  if (dst) mp[src.name0 || src.name] = dst.name0 || dst.name;
+  else for (const q of metal.units.filter(x => x.one && x.mergedInto === src)) delete mp[q.name0];
+  if (!Object.keys(mp).length) delete e.tmerge;
+  const showU = dst ? dst.u : src.u;
+  tubeMergeApply(); metalShow(showU); syncPanel(); freeSaveSoon();
+}
 function sheetSetOff(un, off) {
   const sk = sheetKey(un); if (!sk) { toast(dLang === 'uk' ? 'цю сторінку вивантажено до 23.11 — перевивантаж проєкт' : 'эта страница выгружена до 23.11 — перевыгрузи проект'); return; }
   const e = OV.sheets[sk] || (OV.sheets[sk] = {}); if (off) { e.off = true; e.name = unitTitle(un); } else delete e.off;
-  if (off && metalCur === un.u) { const nx = metalData().own.find(x => !sheetOff(x)); if (nx) metalShow(nx.u); }
+  if (off && metalCur === un.u) { const nx = metalData().own.find(x => !sheetGone(x)); if (nx) metalShow(nx.u); }
   metalTreeHtml = ''; syncPanel(); freeSaveSoon();
 }
 // имя авторазмера: вид + ось + что меряет (концы от угла габарита листа, шаг 0,5 мм) — одно и то же при каждой перестройке
@@ -6812,7 +6857,7 @@ function ovInit(un) {
   const e = OV.sheets[sk]; if (!e) return;
   const J = x => JSON.parse(JSON.stringify(x)), V = a => new THREE.Vector3().fromArray(a);
   if (e.vpos) un.vpos = J(e.vpos); if (e.vdel) un.vdel = e.vdel.slice(); if (e.vhide) un.vhide = e.vhide.slice(); if (e.extra) un.extra = e.extra.slice(); if (e.forceN) un.forceN = e.forceN;
-  if (e.blk) un.blk = J(e.blk); if (e.isoOv) un.isoOv = J(e.isoOv);
+  if (e.blk) un.blk = J(e.blk); if (e.isoOv) un.isoOv = J(e.isoOv); if (e.tpos) un.tpos = J(e.tpos); if (e.tscG) un.tscG = J(e.tscG);
   const H = e.hand || {};
   for (const q of H.dims || []) {
     if (q.chain) chainSeq = Math.max(chainSeq, q.chain);
@@ -6836,7 +6881,7 @@ function ovCapture(un) {
     if ((dm.text ?? null) !== (dm.text0 ?? null)) d.t = dm.text ?? null;
     if (Object.keys(d).length) dd[dm.id] = d; else delete dd[dm.id];
   }
-  for (const k of ['vpos', 'vdel', 'vhide', 'extra', 'forceN', 'blk', 'isoOv']) { const v = un[k]; if (v && (!Array.isArray(v) || v.length)) e[k] = JSON.parse(JSON.stringify(v)); else delete e[k]; }
+  for (const k of ['vpos', 'vdel', 'vhide', 'extra', 'forceN', 'blk', 'isoOv', 'tpos', 'tscG']) { const v = un[k]; if (v && (!Array.isArray(v) || v.length)) e[k] = JSON.parse(JSON.stringify(v)); else delete e[k]; }
   e.hand = {
     dims: dims.filter(d => d.mk === un.u && !d.auto).map(d => ({ a: A(d.a), b: A(d.b), axis: d.axis, off: A(d.off), label: d.label, text: d.text, vdir: d.vdir ? A(d.vdir) : null, chain: d.chain, fs: d.fs, ang: d.ang ? { c: A(d.ang.c), p: A(d.ang.p) } : null })),
     secs: secs.filter(q => q.mk === un.u).map(q => ({ a: A(q.a), b: A(q.b), s: q.s, vdir: A(q.vdir), fs: q.fs, letter: q.letter, sN: q.sN, rot: q.rot, pos: q.pos.slice(), pi: q.pi })),
@@ -7126,6 +7171,7 @@ function freeSaveSoon() {
 // правки поднялись позже, чем открыли лист металла (чтение файла идёт через сервер) — лист строится заново уже с правками
 function ovReopen() {
   if (!metal) return;
+  tubeMergeApply();
   const all = metal.units.slice(); for (const g in metal.views) all.push(...(metal.views[g].gen || []));
   let again = false;
   for (const un of all) {
@@ -7926,6 +7972,8 @@ function metalBlockSvg(o, k, ui) {
       `<rect class="grip bg" data-b="${b}s" x="${f(o[0] + x1 * k - 5)}" y="${f(o[1] + y1 * k - 5)}" width="10" height="10"/>`;
     s += R('blk', G.x0, G.y0, G.x1, G.y1);
     if (th) s += R('iso', iso.x, iso.y, iso.x + iso.s, iso.y + iso.s);
+    // лист труб: каждая полоса — блок, тянется мышью за любое своё место
+    if (un.svgSheet && un.tgRect) for (const key in un.tgRect) { const r = un.tgRect[key]; s += `<rect class="bh" data-b="tg:${esc(key)}" x="${f(o[0] + r[0] * k)}" y="${f(o[1] + r[1] * k)}" width="${f((r[2] - r[0]) * k)}" height="${f((r[3] - r[1]) * k)}"/>` + `<rect class="grip bg" data-b="tgs:${esc(key)}" x="${f(o[0] + r[2] * k - 5)}" y="${f(o[1] + r[3] * k - 5)}" width="10" height="10"/>`; }
   }
   // общий вид: выноски с номерами позиций на аксонометрии — те же номера, что в списке (Алексей 27.10)
   // общий вид: номер позиции — одной цифрой без кружка, от неё тонкие линии ко всем таким деталям (Алексей 19.11: «ёжик из
@@ -8044,7 +8092,8 @@ function tubeFaceH(g, F, sc, first) {
 }
 function tubeBlockH(g, sc) { const R = tubeFaces(g); return 9 + R.faces.reduce((a, F, i) => a + tubeFaceH(g, F, sc, i === 0), 0) + 3; }
 function tubeSheetSvg(un, o, k) {
-  const f = v => String(Math.round(v * 100) / 100), sc = un.tsc || tubeScale(un.tg), X0 = 14;
+  const f = v => String(Math.round(v * 100) / 100), scSheet = un.tsc || tubeScale(un.tg), X0 = 14;
+  let sc = scSheet;                                          // масштаб текущей полосы: общий листа или свой (блок растянули за уголок)
   const T = (x, y, t, sz, bold, anchor) => `<text x="${f(o[0] + x * k)}" y="${f(o[1] + y * k)}" font-family="${DFONT}" font-size="${f((sz || 5) * k)}" fill="#000000"${bold ? ' font-weight="bold"' : ''}${anchor ? ` text-anchor="${anchor}"` : ''}>${esc(t)}</text>`;
   const line = (x1, y1, x2, y2, w, dash) => `<path d="M${f(o[0] + x1 * k)} ${f(o[1] + y1 * k)}L${f(o[0] + x2 * k)} ${f(o[1] + y2 * k)}" stroke="#000000" stroke-width="${f((w || 0.25) * k)}"${dash ? ` stroke-dasharray="${f(3 * k)} ${f(0.8 * k)} ${f(0.5 * k)} ${f(0.8 * k)}"` : ''} fill="none"/>`;
   const P = (x, y) => [o[0] + x * k, o[1] + y * k];
@@ -8059,11 +8108,17 @@ function tubeSheetSvg(un, o, k) {
     }
     return s;
   };
-  let s = T(X0, 12, ML('tubesHint') + ' 1:' + fmtN(sc), 4.2), y = 18;
+  // лист одной трубы рамки — без строки-подсказки про номера каркаса; масштаб — мелко в углу
+  let s = un.one ? '' : T(X0, 12, ML('tubesHint') + ' 1:' + fmtN(sc), 4.2), y = 18;   // лист труб рамки — без подсказки про каркас; масштаб — в заголовке каждой полосы
   const VB2 = { x: 'left', y: 'top', z: 'front' };
+  un.tgRect = {};
+  // один лист — одна-две трубы: полосы не у самого верха, а от трети листа (Алексей 23.11: «поставлены на верх чертежа»)
+  if (un.one) y = Math.max(18, (SHEET_H - un.tg.reduce((a, g) => a + tubeBlockH(g, sc), 0)) / 3);
   for (const g of un.tg) {
+    const gS0 = s.length, gY0 = y, gOf = (un.tpos && un.tpos[String(g.N)]) || [0, 0];
+    sc = (un.tscG && un.tscG[String(g.N)]) || scSheet;
     const R = tubeFaces(g), mat = M.mnames[M.objs[g.fu.tubes[g.k]].mn] || '', len = R.L / sc;
-    s += T(X0, y + 5, ML('tubeN').replace(/^./, c => c.toUpperCase()) + ' ' + g.N + ' — ' + mat + ', L=' + fmtN(r1(R.L)) + ' — ' + fqK(g.qty), 5, true);
+    s += T(X0, y + 5, ML('tubeN').replace(/^./, c => c.toUpperCase()) + ' ' + g.N + ' — ' + mat + ', L=' + fmtN(r1(R.L)) + ' — ' + fqK(g.qty) + (un.one || sc !== scSheet ? '   М 1:' + fmtN(sc) : ''), 5, true);
     y += 9;
     R.faces.forEach((F, fi) => {
       const h = R.s[F.B] / sc, ov = tubeOv(g, F, sc), yS = y + (F.sh.length ? 9 : 3) + ov[0];   // верх полосы — ниже выступа платиков и их ряда размеров
@@ -8106,6 +8161,9 @@ function tubeSheetSvg(un, o, k) {
       y = yy + 1;
     });
     y += 3;
+    // полоса трубы со всеми её размерами и подписями — блок: стоит со своим смещением (тянется мышью), рамка — для захвата
+    const part = s.slice(gS0); s = s.slice(0, gS0) + `<g transform="translate(${f(gOf[0] * k)} ${f(gOf[1] * k)})">` + part + '</g>';
+    un.tgRect[String(g.N)] = [X0 - 4 + gOf[0], gY0 - 1 + gOf[1], Math.min(SHEET_W - 100, X0 + len + 46) + gOf[0], y - 2 + gOf[1]];
   }
   return s + tubeIsoSvg(un, o, k);
 }
@@ -8332,7 +8390,7 @@ async function metalReport() {
   if (!got) return;
   const md = metalData(), cur = metalCur, av = cur !== null ? (md.all.find(x => x.u === cur) || {}).actV : 0; let n = 0;
   const A = await metalAuditAll(); if (!metalAskBad(A.bad)) return 0;
-  for (const un of md.own.filter(x => !sheetOff(x))) {
+  for (const un of md.own.filter(x => !sheetGone(x))) {
     // картинкой PNG 15 точек на мм (6000 точек в ширину): отчёт переводил SVG в картинку 2000 точек — было размыто (27.10)
     const b64 = await svgPng(A.svgs.get(un.u) || metalSheetSvg(un), 15), name = catName(got, unitTitle(un).replace(/\.+$/, ''), '.png');
     try { await srv('/draw/save', { dir, name, b64 }); if (!got.some(f => f.name === name)) got.push({ name }); n++; }
@@ -8345,7 +8403,7 @@ async function metalReport() {
 }
 function metalPdfHtml(svgs) {
   const md = metalData(), pages = [], cur = metalCur, av = cur !== null ? (md.all.find(x => x.u === cur) || {}).actV : 0;
-  for (const un of md.own.filter(x => !sheetOff(x))) pages.push((svgs && svgs.get(un.u)) || metalSheetSvg(un));
+  for (const un of md.own.filter(x => !sheetGone(x))) pages.push((svgs && svgs.get(un.u)) || metalSheetSvg(un));
   metalBackTo(cur, av);
   return '<!doctype html><html><head><meta charset="utf-8">' +
     `<link href="https://fonts.googleapis.com/css2?family=${DFONT.replace(/ /g, '+')}&display=block" rel="stylesheet">` +
@@ -8393,16 +8451,16 @@ function metalTree() {
   const md = metalData(), chk = metalTree.chk, uk = dLang === 'uk';
   const offN = md.own.filter(sheetOff);
   const row = (un, lvl, title) => {
-    if (sheetOff(un)) return '';
+    if (sheetGone(un)) return '';
     const sk = sheetKey(un), e = sk && OV.sheets[sk], t = unitTitle(un);
     const edit = e && (e.dims || e.hand || e.vpos || e.vhide || e.vdel || e.extra || e.blk || e.isoOv || e.forceN), hid = (un.vhide || []).length || dims.some(d => d.mk === un.u && d.hid);
     const warn = chk.some(c => c.startsWith(t + ' ') || c.startsWith(t + ':')), ovl = un.aud && (un.aud.over || un.aud.edge);
     return `<div class="mtr${metalCur === un.u ? ' on' : ''}" data-mt="${un.u}" style="padding-left:${8 + lvl * 14}px" title="${esc(title)}"><span>${esc(title)}</span>` +
       (hid ? `<i class="mh" title="${uk ? 'є приховане' : 'есть скрытое'}">◌</i>` : '') + (edit ? `<i class="me" title="${uk ? 'є правки' : 'есть правки'}">✎</i>` : '') + (warn ? `<i class="mw" title="${uk ? 'є зауваження' : 'есть замечания'}">!</i>` : '') + (ovl ? `<i class="mo" title="${uk ? 'на аркуші накладення' : 'на листе наложения'}">▦</i>` : '') + '</div>';
   };
-  let h = `<div class="dlh"><span>${esc(ML('metal'))}</span><em>${md.own.length - offN.length}</em></div>`;
+  let h = `<div class="dlh"><span>${esc(ML('metal'))}</span><em>${md.own.filter(x => !sheetGone(x)).length}</em></div>`;
   const tubesOf = u => md.own.filter(x => x.tubeDet && (x.tubeOf === u || (x.tubeOf && x.tubeOf.u === u)));   // tubeOf — сам каркас или его номер
-  const unitRow = (un, lvl) => { const d = unitDes(un); let s = row(un, lvl, (d ? d + ' ' : '') + un.name + ((un.qty || 1) > 1 ? ' — ' + un.qty + ' ' + ML('nuts') : '')); for (const tq of tubesOf(un.u)) if (!sheetOff(tq)) s += row(tq, lvl + 1, tq.name.replace(un.name + ' — ', '')); return s; };
+  const unitRow = (un, lvl) => { const d = unitDes(un); let s = row(un, lvl, (d ? d + ' ' : '') + un.name + ((un.qty || 1) > 1 ? ' — ' + un.qty + ' ' + ML('nuts') : '')); for (const tq of tubesOf(un.u)) if (!sheetGone(tq)) s += row(tq, lvl + 1, tq.name.replace(un.name + ' — ', '')); return s; };
   const done = new Set();
   for (const g of md.gen) {
     const top = !g.assembly && g.top >= 0 ? ((M.ndes || [])[g.top] || '') + ' ' + (M.names[g.top] || '') : g.name;
@@ -8420,8 +8478,15 @@ function metalTree() {
       e.preventDefault(); e.stopPropagation();
       const un = metalData().own.find(x => x.u === +q.dataset.mt); if (!un) return;
       let m = $('mtmenu'); if (!m) { m = document.createElement('div'); m.id = 'mtmenu'; document.body.appendChild(m); addEventListener('pointerdown', ev => { if (!m.contains(ev.target)) m.style.display = 'none'; }); }
-      m.innerHTML = `<button>${uk ? 'Видалити аркуш' : 'Удалить лист'}</button>`; m.style.cssText = `display:block;left:${Math.min(e.clientX, innerWidth - 170)}px;top:${e.clientY}px`;
-      m.firstChild.onclick = () => { m.style.display = 'none'; sheetSetOff(un, true); };
+      const sib = un.one ? metalData().own.filter(x => x.one && x.tubeOf === un.tubeOf && x !== un && !sheetGone(x)) : [];
+      m.innerHTML = `<button data-a="del">${uk ? 'Видалити аркуш' : 'Удалить лист'}</button>` +
+        sib.map((x, i) => `<button data-a="m${i}">${esc((uk ? 'Об’єднати з: ' : 'Объединить с: ') + x.name)}</button>`).join('') +
+        (un.one && un.tg.length > 1 ? `<button data-a="split">${uk ? 'Розділити на окремі аркуші' : 'Разделить на отдельные листы'}</button>` : '');
+      m.style.cssText = `display:block;left:${Math.min(e.clientX, innerWidth - 250)}px;top:${Math.min(e.clientY, innerHeight - 34 * (2 + sib.length))}px`;
+      m.querySelectorAll('button').forEach(b => { b.onclick = () => {
+        m.style.display = 'none'; const a = b.dataset.a;
+        if (a === 'del') sheetSetOff(un, true); else if (a === 'split') tubeMergeSet(un, null); else tubeMergeSet(un, sib[+a.slice(1)]);
+      }; });
     };
   });
   const back = el.querySelector('.mtoff'); if (back) back.onclick = () => { for (const un of metalData().own.filter(sheetOff)) sheetSetOff(un, false); };
@@ -8466,7 +8531,7 @@ async function metalAudit(un, ready) {
 // Заодно отдаёт сами картинки листов — выдача (отчёт / PDF) берёт их отсюда и не рисует второй раз.
 async function metalAuditAll() {
   const md = metalData(), cur = metalCur, av = cur !== null ? (md.all.find(x => x.u === cur) || {}).actV : 0, uk = dLang === 'uk', svgs = new Map(), bad = [];
-  for (const un of md.own.filter(x => !sheetOff(x))) {
+  for (const un of md.own.filter(x => !sheetGone(x))) {
     const sv = metalSheetSvg(un); svgs.set(un.u, sv);
     try {
       const r = await metalAudit(un, sv); un.aud = { over: r.over.length, edge: r.edge, fill: r.fill };
