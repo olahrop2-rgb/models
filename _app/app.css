@@ -216,7 +216,7 @@ html.draw body, html.draw.dlines body { background: transparent; color: var(--rb
 #dpanel .pcol:hover { background: var(--rb-hover); }
 #dpanel .pz { padding: 6px 12px; color: var(--rb-muted); font-size: 12px; }
 /* дерево листов металла в правой панели */
-#dTree { padding: 0 6px 4px; max-height: 55%; overflow: auto; }
+#dTree { padding: 0 6px 4px; max-height: 70%; overflow: auto; }
 #dpanel .mtg { padding: 4px 6px 2px 8px; font-size: 12px; font-weight: 600; color: var(--rb-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #dpanel .mtr { display: flex; align-items: center; gap: 5px; padding: 4px 6px; font-size: 12px; border-radius: 4px; color: var(--rb-text); cursor: pointer; }
 #dpanel .mtr:hover { background: var(--rb-hover); }
@@ -226,6 +226,9 @@ html.draw body, html.draw.dlines body { background: transparent; color: var(--rb
 #dpanel .mtr .me { color: #1f6fe0; }
 #dpanel .mtr .mw { color: #fff; background: #d23b2a; border-radius: 8px; width: 14px; height: 14px; text-align: center; line-height: 14px; font-weight: 700; }
 #dpanel .mtr .mo { color: #d23b2a; }
+#dpanel .msec { cursor: pointer; border-radius: 4px; user-select: none; }
+#dpanel .msec:hover { background: var(--rb-hover); }
+#dpanel .msec i { font-style: normal; width: 10px; color: var(--rb-muted); font-size: 10px; }
 #dpanel .mtoff { margin: 4px 6px; padding: 4px 8px; font-size: 11.5px; color: var(--rb-muted); border: 1px dashed var(--rb-line, #c9d2dc); border-radius: 4px; cursor: pointer; }
 #dpanel .mtoff:hover { color: var(--rb-text); background: var(--rb-hover); }
 #mtmenu { position: fixed; z-index: 70; display: none; background: #fff; border: 1px solid #c9d2dc; border-radius: 6px; box-shadow: 0 6px 20px rgba(0,0,0,.2); padding: 4px; }

@@ -8444,11 +8444,19 @@ const unitDes = un => [...new Set((un.same || [un.u]).map(u => (M.ndes || [])[u]
 let metalTreeHtml = '', metalTreeTm = null;
 function metalTree() {
   const el = $('dTree'); if (!el) return;
-  if (!hasMetal()) { if (el.firstChild) el.replaceChildren(); return; }
-  if (!metal) {                                             // листы ещё не считались — посчитать после отрисовки панели, один раз
+  // Структура листов — разделами (Алексей 23.11: «металл так и висит, когда я на переходе текстуры / своём листе»): Металл,
+  // Переход текстуры, Столярка, Свои листы, Сохранённые файлы. Раздел сворачивается щелчком по заголовку; открыл лист
+  // другого вида — его раздел раскрывается, остальные сворачиваются. Нет листов — в разделе «пусто».
+  const uk0 = dLang === 'uk', kind = texCur ? 'tex' : joinCur ? 'join' : freeNow() ? 'free' : metalCur !== null ? 'metal' : null;
+  const OP = metalTree.open || (metalTree.open = { metal: true, tex: false, join: false, free: false, files: false });
+  if (kind !== metalTree.kind) { metalTree.kind = kind; if (kind) for (const k of ['metal', 'tex', 'join', 'free']) OP[k] = k === kind; }
+  const SEC = (k, title, n) => `<div class="dlh msec" data-sec="${k}"><i>${OP[k] ? '▾' : '▸'}</i><span>${esc(title)}</span><em>${n || (uk0 ? 'порожньо' : 'пусто')}</em></div>`;
+  let h = '';
+  const mHas = hasMetal();
+  if (mHas && !metal) {                                     // листы ещё не считались — посчитать после отрисовки панели, один раз
     if (!metalTreeTm) metalTreeTm = setTimeout(() => { metalTreeTm = null; if (!drawOn) return; const keep = metalCur; metalData(); if (keep === null) metalRot(null); syncPanel(); }, 200);
-    return;
   }
+  if (mHas && metal) {
   if (!metalTree.chk || Date.now() - metalTree.at > 3000) { metalTree.chk = metalChecks(); metalTree.at = Date.now(); }
   // замечания — файлом рядом с правками листов (ТЗ v3, п. 0: чего нет в модели — «уточнить» на листе И запись в checks.json)
   if (LOCAL && freeLoaded) { const cj = JSON.stringify(metalTree.chk); if (cj !== metalTree.saved) { metalTree.saved = cj;
@@ -8463,20 +8471,37 @@ function metalTree() {
     return `<div class="mtr${metalCur === un.u ? ' on' : ''}" data-mt="${un.u}" style="padding-left:${8 + lvl * 14}px" title="${esc(title)}"><span>${esc(title)}</span>` +
       (hid ? `<i class="mh" title="${uk ? 'є приховане' : 'есть скрытое'}">◌</i>` : '') + (edit ? `<i class="me" title="${uk ? 'є правки' : 'есть правки'}">✎</i>` : '') + (warn ? `<i class="mw" title="${uk ? 'є зауваження' : 'есть замечания'}">!</i>` : '') + (ovl ? `<i class="mo" title="${uk ? 'на аркуші накладення' : 'на листе наложения'}">▦</i>` : '') + '</div>';
   };
-  let h = `<div class="dlh"><span>${esc(ML('metal'))}</span><em>${md.own.filter(x => !sheetGone(x)).length}</em></div>`;
+  let hm = '';
   const tubesOf = u => md.own.filter(x => x.tubeDet && (x.tubeOf === u || (x.tubeOf && x.tubeOf.u === u)));   // tubeOf — сам каркас или его номер
   const unitRow = (un, lvl) => { const d = unitDes(un); let s = row(un, lvl, (d ? d + ' ' : '') + un.name + ((un.qty || 1) > 1 ? ' — ' + un.qty + ' ' + ML('nuts') : '')); for (const tq of tubesOf(un.u)) if (!sheetGone(tq)) s += row(tq, lvl + 1, tq.name.replace(un.name + ' — ', '')); return s; };
   const done = new Set();
   for (const g of md.gen) {
     const top = !g.assembly && g.top >= 0 ? ((M.ndes || [])[g.top] || '') + ' ' + (M.names[g.top] || '') : g.name;
-    h += `<div class="mtg">${esc(top.trim())}</div>` + row(g, 1, g.assembly ? g.name : (uk ? 'загальний вигляд' : 'общий вид'));
+    hm += `<div class="mtg">${esc(top.trim())}</div>` + row(g, 1, g.assembly ? g.name : (uk ? 'загальний вигляд' : 'общий вид'));
     const byDes = (p, q) => unitDes(p).localeCompare(unitDes(q), undefined, { numeric: true });   // порядок — по обозначениям из модели
-    for (const un of (g.gunits || []).slice().sort(byDes)) { if (un.tubeDet || done.has(un.u)) continue; done.add(un.u); h += unitRow(un, 1); }
+    for (const un of (g.gunits || []).slice().sort(byDes)) { if (un.tubeDet || done.has(un.u)) continue; done.add(un.u); hm += unitRow(un, 1); }
   }
-  for (const un of md.own) { if (un.general || un.tubeDet || done.has(un.u)) continue; done.add(un.u); h += unitRow(un, 0); }
-  if (offN.length) h += `<div class="mtoff" title="${esc(offN.map(unitTitle).join('\n'))}">${uk ? 'приховані аркуші' : 'скрытые листы'} (${offN.length}) — ${uk ? 'повернути' : 'вернуть'}</div>`;
+  for (const un of md.own) { if (un.general || un.tubeDet || done.has(un.u)) continue; done.add(un.u); hm += unitRow(un, 0); }
+  if (offN.length) hm += `<div class="mtoff" title="${esc(offN.map(unitTitle).join('\n'))}">${uk ? 'приховані аркуші' : 'скрытые листы'} (${offN.length}) — ${uk ? 'повернути' : 'вернуть'}</div>`;
+  h += SEC('metal', ML('metal'), md.own.filter(x => !sheetGone(x)).length) + (OP.metal ? hm : '');
+  } else h += SEC('metal', ML('metal'), 0);
+  const R2 = (cls, attr, on, title) => `<div class="mtr${on ? ' on' : ''}" ${attr} style="padding-left:22px" title="${esc(title)}"><span>${esc(title)}</span></div>`;
+  // переход текстуры (группы шпона) и столярка (рамочные фасады) — те же листы, что в выпадающих меню ленты
+  let TX = [], JN = [];
+  try { if (M.objs.some(o => o.up && /Шпон/.test(String(o.up['Подбор текстуры'] || '')))) TX = texBuild(); } catch (e) { console.warn('переход текстуры:', e.message); }
+  try { if (Object.values(M.nsemi || {}).some(a => (a || []).includes('Столярка'))) JN = joinBuild(); } catch (e) { console.warn('столярка:', e.message); }
+  h += SEC('tex', ML('tex'), TX.length); if (OP.tex) for (const x of TX) h += R2('', `data-tx="${x.g}"`, texCur && texCur.g === x.g, ML('t_grp') + ' ' + x.g + ' — ' + x.panels.length + ' ' + ML('nuts') + ' · ' + x.mat);
+  h += SEC('join', uk0 ? 'Столярка' : 'Столярка', JN.length); if (OP.join) for (const x of JN) h += R2('', `data-jn="${x.u}"`, joinCur && joinCur.u === x.u, x.name + ' — ' + x.facs.length + ' ' + joinFacWord(x.facs.length));
+  h += SEC('free', uk0 ? 'Свої аркуші' : 'Свои листы', freeUnits.length); if (OP.free) for (const x of freeUnits) h += R2('', `data-fr="${x.u}"`, metalCur === x.u, x.name);
+  // «Листы» и «Снимки» ниже — файлы, уже сохранённые в папку заказа кнопками «Лист → SVG» и «Снимок» (для отчёта Федосова)
+  h += `<div class="dlh msec" data-sec="files" title="${uk0 ? 'Файли, вже збережені в теку замовлення: аркуші (SVG) і знімки (PNG) для звіту' : 'Файлы, уже сохранённые в папку заказа: листы (SVG) и снимки (PNG) для отчёта'}"><i>${OP.files ? '▾' : '▸'}</i><span>${uk0 ? 'Збережені файли' : 'Сохранённые файлы'}</span><em>${(drawFiles.d || []).length + (drawFiles.s || []).length || (uk0 ? 'порожньо' : 'пусто')}</em></div>`;
+  const dl = $('dList'); if (dl) dl.style.display = OP.files ? '' : 'none';
   if (h === metalTreeHtml && el.firstChild) return;
   metalTreeHtml = h; el.innerHTML = h;
+  el.querySelectorAll('[data-sec]').forEach(q => { q.onclick = () => { OP[q.dataset.sec] = !OP[q.dataset.sec]; metalTreeHtml = ''; metalTree(); }; });
+  el.querySelectorAll('[data-tx]').forEach(q => { q.onclick = () => texShow(+q.dataset.tx); });
+  el.querySelectorAll('[data-jn]').forEach(q => { q.onclick = () => joinShow(+q.dataset.jn); });
+  el.querySelectorAll('[data-fr]').forEach(q => { q.onclick = () => metalShow(+q.dataset.fr); });
   el.querySelectorAll('[data-mt]').forEach(q => {
     q.onclick = () => { const u = +q.dataset.mt; if (metalCur !== u) metalShow(u); };
     q.oncontextmenu = e => {                                 // правая кнопка по листу — «Удалить лист»
@@ -8484,9 +8509,9 @@ function metalTree() {
       const un = metalData().own.find(x => x.u === +q.dataset.mt); if (!un) return;
       let m = $('mtmenu'); if (!m) { m = document.createElement('div'); m.id = 'mtmenu'; document.body.appendChild(m); addEventListener('pointerdown', ev => { if (!m.contains(ev.target)) m.style.display = 'none'; }); }
       const sib = un.one ? metalData().own.filter(x => x.one && x.tubeOf === un.tubeOf && x !== un && !sheetGone(x)) : [];
-      m.innerHTML = `<button data-a="del">${uk ? 'Видалити аркуш' : 'Удалить лист'}</button>` +
-        sib.map((x, i) => `<button data-a="m${i}">${esc((uk ? 'Об’єднати з: ' : 'Объединить с: ') + x.name)}</button>`).join('') +
-        (un.one && un.tg.length > 1 ? `<button data-a="split">${uk ? 'Розділити на окремі аркуші' : 'Разделить на отдельные листы'}</button>` : '');
+      m.innerHTML = `<button data-a="del">${uk0 ? 'Видалити аркуш' : 'Удалить лист'}</button>` +
+        sib.map((x, i) => `<button data-a="m${i}">${esc((uk0 ? 'Об’єднати з: ' : 'Объединить с: ') + x.name)}</button>`).join('') +
+        (un.one && un.tg.length > 1 ? `<button data-a="split">${uk0 ? 'Розділити на окремі аркуші' : 'Разделить на отдельные листы'}</button>` : '');
       m.style.cssText = `display:block;left:${Math.min(e.clientX, innerWidth - 250)}px;top:${Math.min(e.clientY, innerHeight - 34 * (2 + sib.length))}px`;
       m.querySelectorAll('button').forEach(b => { b.onclick = () => {
         m.style.display = 'none'; const a = b.dataset.a;
