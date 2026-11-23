@@ -8685,7 +8685,8 @@ function metalTree() {
     const top = !g.assembly && g.top >= 0 ? ((M.ndes || [])[g.top] || '') + ' ' + (M.names[g.top] || '') : g.name;
     hm += `<div class="mtg">${esc(top.trim())}</div>` + row(g, 1, g.assembly ? g.name : (uk ? 'загальний вигляд' : 'общий вид'));
     const byDes = (p, q) => unitDes(p).localeCompare(unitDes(q), undefined, { numeric: true });   // порядок — по обозначениям из модели
-    for (const un of md.units.filter(x => (g.gunits || []).includes(x))) {   // порядок — как в комплекте: по обозначениям, либо переставленный рукой if (un.tubeDet || done.has(un.u)) continue; done.add(un.u); hm += unitRow(un, 1); }
+    // порядок — как в комплекте: по обозначениям, либо переставленный рукой
+    for (const un of md.units.filter(x => (g.gunits || []).includes(x))) { if (un.tubeDet || done.has(un.u)) continue; done.add(un.u); hm += unitRow(un, 1); }
   }
   for (const un of md.own) { if (un.general || un.tubeDet || done.has(un.u)) continue; done.add(un.u); hm += unitRow(un, 0); }
   if (offN.length) hm += `<div class="mtoff" title="${esc(offN.map(unitTitle).join('\n'))}">${uk ? 'приховані аркуші' : 'скрытые листы'} (${offN.length}) — ${uk ? 'повернути' : 'вернуть'}</div>`;
