@@ -216,7 +216,7 @@ html.draw body, html.draw.dlines body { background: transparent; color: var(--rb
 #dpanel .pcol:hover { background: var(--rb-hover); }
 #dpanel .pz { padding: 6px 12px; color: var(--rb-muted); font-size: 12px; }
 /* дерево листов металла в правой панели */
-#dTree { padding: 0 6px 4px; max-height: 70%; overflow: auto; }
+#dTree { flex: 1; padding: 0 6px 6px; overflow: auto; }
 #dpanel .mtg { padding: 4px 6px 2px 8px; font-size: 12px; font-weight: 600; color: var(--rb-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #dpanel .mtr { display: flex; align-items: center; gap: 5px; padding: 4px 6px; font-size: 12px; border-radius: 4px; color: var(--rb-text); cursor: pointer; }
 #dpanel .mtr:hover { background: var(--rb-hover); }
@@ -236,7 +236,6 @@ html.draw body, html.draw.dlines body { background: transparent; color: var(--rb
 #mtmenu button:hover { background: #eef3fb; }
 #dpanel .mtr .mh { color: var(--rb-muted); }
 #dpanel .mtr.on .me, #dpanel .mtr.on .mh { color: #fff; }
-#dList { flex: 1; overflow: auto; padding: 0 6px 6px; }
 #dpanel .dlh { display: flex; align-items: center; gap: 7px; padding: 6px 6px 3px; font-weight: 600; font-size: 12px; }
 #dpanel .dlh em { margin-left: auto; font-style: normal; font-weight: 400; color: var(--rb-muted); }
 #dpanel .dlf { display: flex; align-items: center; gap: 7px; padding: 3px 6px 3px 16px; font-size: 12px; border-radius: 4px; color: var(--rb-text); }

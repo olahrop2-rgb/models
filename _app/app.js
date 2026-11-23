@@ -6150,7 +6150,7 @@ function closeFly() { flyFor = null; const el = $('dfly'); if (el) el.classList.
 function renderSide() {
   const d = $('dpanel');
   d.innerHTML = `<div class="ph"><span>${L('p_sheets')}</span><button class="pcol" data-tip="pcol">${DS(DIC[d.classList.contains('col') ? 'chevL' : 'chevR'], 14)}</button></div>
-    <div class="pz"></div><div id="dTree"></div><div id="dList"></div>
+    <div class="pz"></div><div id="dTree"></div>
     <div class="ph2">${L('p_prev')}</div><div class="pthumb"><canvas id="dthumb" width="400" height="283"></canvas></div>`;
   d.querySelector('.pz').textContent = LOCAL ? LOCAL.zone : L('p_noZone');
   d.querySelector('.pcol').onclick = () => { d.classList.toggle('col'); renderSide(); refreshList(); layout(); fitView(); };
@@ -8445,10 +8445,10 @@ let metalTreeHtml = '', metalTreeTm = null;
 function metalTree() {
   const el = $('dTree'); if (!el) return;
   // Структура листов — разделами (Алексей 23.11: «металл так и висит, когда я на переходе текстуры / своём листе»): Металл,
-  // Переход текстуры, Столярка, Свои листы, Сохранённые файлы. Раздел сворачивается щелчком по заголовку; открыл лист
+  // Переход текстуры, Столярка, Свои листы. Раздел сворачивается щелчком по заголовку; открыл лист
   // другого вида — его раздел раскрывается, остальные сворачиваются. Нет листов — в разделе «пусто».
   const uk0 = dLang === 'uk', kind = texCur ? 'tex' : joinCur ? 'join' : freeNow() ? 'free' : metalCur !== null ? 'metal' : null;
-  const OP = metalTree.open || (metalTree.open = { metal: true, tex: false, join: false, free: false, files: false });
+  const OP = metalTree.open || (metalTree.open = { metal: true, tex: false, join: false, free: false });
   if (kind !== metalTree.kind) { metalTree.kind = kind; if (kind) for (const k of ['metal', 'tex', 'join', 'free']) OP[k] = k === kind; }
   const SEC = (k, title, n) => `<div class="dlh msec" data-sec="${k}"><i>${OP[k] ? '▾' : '▸'}</i><span>${esc(title)}</span><em>${n || (uk0 ? 'порожньо' : 'пусто')}</em></div>`;
   let h = '';
@@ -8493,9 +8493,6 @@ function metalTree() {
   h += SEC('tex', ML('tex'), TX.length); if (OP.tex) for (const x of TX) h += R2('', `data-tx="${x.g}"`, texCur && texCur.g === x.g, ML('t_grp') + ' ' + x.g + ' — ' + x.panels.length + ' ' + ML('nuts') + ' · ' + x.mat);
   h += SEC('join', uk0 ? 'Столярка' : 'Столярка', JN.length); if (OP.join) for (const x of JN) h += R2('', `data-jn="${x.u}"`, joinCur && joinCur.u === x.u, x.name + ' — ' + x.facs.length + ' ' + joinFacWord(x.facs.length));
   h += SEC('free', uk0 ? 'Свої аркуші' : 'Свои листы', freeUnits.length); if (OP.free) for (const x of freeUnits) h += R2('', `data-fr="${x.u}"`, metalCur === x.u, x.name);
-  // «Листы» и «Снимки» ниже — файлы, уже сохранённые в папку заказа кнопками «Лист → SVG» и «Снимок» (для отчёта Федосова)
-  h += `<div class="dlh msec" data-sec="files" title="${uk0 ? 'Файли, вже збережені в теку замовлення: аркуші (SVG) і знімки (PNG) для звіту' : 'Файлы, уже сохранённые в папку заказа: листы (SVG) и снимки (PNG) для отчёта'}"><i>${OP.files ? '▾' : '▸'}</i><span>${uk0 ? 'Збережені файли' : 'Сохранённые файлы'}</span><em>${(drawFiles.d || []).length + (drawFiles.s || []).length || (uk0 ? 'порожньо' : 'пусто')}</em></div>`;
-  const dl = $('dList'); if (dl) dl.style.display = OP.files ? '' : 'none';
   if (h === metalTreeHtml && el.firstChild) return;
   metalTreeHtml = h; el.innerHTML = h;
   el.querySelectorAll('[data-sec]').forEach(q => { q.onclick = () => { OP[q.dataset.sec] = !OP[q.dataset.sec]; metalTreeHtml = ''; metalTree(); }; });
@@ -9329,21 +9326,12 @@ async function srv(path, body) {
   return j;
 }
 const filesOf = j => !j.files ? [] : Array.isArray(j.files) ? j.files : [j.files];
+// что уже лежит в папках отчёта (имена нужны, чтобы дать следующему файлу свой номер). В правой панели этот список не
+// показывается (Алексей 23.11: «в правой панели — только то, с чем я работаю в вебе»).
 async function refreshList() {
-  const el = $('dList'); if (!el || !LOCAL) return;
+  if (!LOCAL) return;
   try { drawFiles.d = filesOf(await srv('/draw/list', { dir: DIR_DRAW })); drawFiles.s = filesOf(await srv('/draw/list', { dir: DIR_SHOT })); }
-  catch (e) { el.textContent = L('p_noSrv'); return false; }
-  el.replaceChildren();
-  // раздел: значок, название, сколько файлов; под ним файлы строками со значком
-  const sec = (t, arr, ic) => {
-    const h = document.createElement('div'); h.className = 'dlh'; h.innerHTML = DS(DIC[ic], 15) + '<span></span><em></em>';
-    h.children[1].textContent = t; h.lastChild.textContent = arr.length || L('p_empty'); el.appendChild(h);
-    for (const f of arr) {
-      const r = document.createElement('div'); r.className = 'dlf'; r.innerHTML = DS(DIC[ic], 13) + '<span></span>';
-      r.lastChild.textContent = f.name.replace(/\.\w+$/, ''); r.title = f.name + ' — ' + f.time; el.appendChild(r);
-    }
-  };
-  sec(L('p_draw'), drawFiles.d, 'svg'); sec(L('p_shot'), drawFiles.s, 'png');
+  catch (e) { return false; }
   return true;
 }
 // папка категории (Метал / Столярка / Переход текстуры) — одна на заказ, в ней листы ВСЕХ зон (16.11: кнопка «в отчёт» на
