@@ -6405,7 +6405,7 @@ function metalData() {
   // порядок листов — по обозначениям из модели ((6-1), (6-2) …): так идут и листы в комплекте, и файлы в отчёте, и дерево
   const hasDes = units.some(x => unitDes(x));
   if (hasDes) units.sort((p, q) => (unitDes(p) || '~').localeCompare(unitDes(q) || '~', undefined, { numeric: true }));
-  const ordU = !hasDes ? sheetsU : units.flatMap(x => [x].concat(sheetsU.filter(tq => tq.tubeDet && tq.tubeOf === x.u))).concat(sheetsU.filter(tq => tq.tubeDet && !units.some(x => x.u === tq.tubeOf)));
+  const ordU = !hasDes ? sheetsU : units.flatMap(x => [x].concat(sheetsU.filter(tq => tq.tubeDet && (tq.tubeOf === x.u || tq.tubeOf === x)))).concat(sheetsU.filter(tq => tq.tubeDet && !units.some(x => x.u === tq.tubeOf || x === tq.tubeOf)));
   units.forEach((x, k) => { x.no = k + 1; });                 // номера листов — свои в каждом комплекте
   const gi = B.groups.indexOf(g);
   const gen = B.composite.map((t, ti) => {                   // общий вид: изделие целиком, выделены полуфабрикаты комплекта
@@ -8381,7 +8381,7 @@ function metalTree() {
       (hid ? `<i class="mh" title="${uk ? 'є приховане' : 'есть скрытое'}">◌</i>` : '') + (edit ? `<i class="me" title="${uk ? 'є правки' : 'есть правки'}">✎</i>` : '') + (warn ? `<i class="mw" title="${uk ? 'є зауваження' : 'есть замечания'}">!</i>` : '') + (ovl ? `<i class="mo" title="${uk ? 'на аркуші накладення' : 'на листе наложения'}">▦</i>` : '') + '</div>';
   };
   let h = `<div class="dlh"><span>${esc(ML('metal'))}</span><em>${md.own.length}</em></div>`;
-  const tubesOf = u => md.own.filter(x => x.tubeDet && x.tubeOf === u);
+  const tubesOf = u => md.own.filter(x => x.tubeDet && (x.tubeOf === u || (x.tubeOf && x.tubeOf.u === u)));   // tubeOf — сам каркас или его номер
   const unitRow = (un, lvl) => { const d = unitDes(un); let s = row(un, lvl, (d ? d + ' ' : '') + un.name + ((un.qty || 1) > 1 ? ' — ' + un.qty + ' ' + ML('nuts') : '')); for (const tq of tubesOf(un.u)) s += row(tq, lvl + 1, tq.name.replace(un.name + ' — ', '')); return s; };
   const done = new Set();
   for (const g of md.gen) {
