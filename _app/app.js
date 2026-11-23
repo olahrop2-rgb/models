@@ -5269,9 +5269,9 @@ function leadClick(x, y) {
   if (SYM_TOOLS.includes(drawTool)) {                       // составной знак ГОСТ: значение спрашивается сразу, правится плашкой «Текст»
     const uk = dLang === 'uk', ask = { rough: [uk ? 'Шорсткість (ГОСТ 2.309), напр. Ra 3,2' : 'Шероховатость (ГОСТ 2.309), напр. Ra 3,2', 'Ra 3,2'],
       tolf: [uk ? 'Допуск форми (ГОСТ 2.308): знак, значення, база — через пробіл' : 'Допуск формы (ГОСТ 2.308): знак, значение, база — через пробел', '∥ 0,1 А'],
-      datum: [uk ? 'База: літера' : 'База: буква', 'А'], weld: [uk ? 'Зварний шов (ГОСТ 2.312): тип і катет' : 'Сварной шов (ГОСТ 2.312): тип и катет', 'ГОСТ 14771-76-Т1-△3'] }[drawTool];
+      datum: [uk ? 'База: літера' : 'База: буква', 'А'], chamf: [uk ? 'Фаска: катет × кут (кілька однакових — «2 фаски 2×45°»)' : 'Фаска: катет × угол (несколько одинаковых — «2 фаски 2×45°»)', '2×45°'], weld: [uk ? 'Зварний шов (ГОСТ 2.312): тип і катет' : 'Сварной шов (ГОСТ 2.312): тип и катет', 'ГОСТ 14771-76-Т1-△3'] }[drawTool];
     const v = prompt(ask[0], ask[1]); if (v === null || !v.trim()) { tpts = []; preview = null; undoS.pop(); drawOverlay(); return; }
-    n.sym = drawTool; n.txt = [v.trim()];
+    if (drawTool !== 'chamf') n.sym = drawTool; n.txt = [v.trim()];
   }
   mnotes.push(n); selNote = n; selDim = selSec = null; ctxFor = null;
   tpts = []; preview = null; $('st').textContent = L('h_lead'); drawOverlay();
@@ -5345,7 +5345,7 @@ function tubeToolClick(un, x, y) {
   tubeT = drawTool === 'chain' ? best : drawTool === 'base' ? tubeT : null;   // цепочка — от последней точки, от базы — от первой
   drawOverlay();
 }
-const SYM_TOOLS = ['rough', 'tolf', 'datum', 'weld'];
+const SYM_TOOLS = ['rough', 'tolf', 'datum', 'weld', 'chamf'];   // chamf — фаска: обычная выноска с текстом «2×45°»
 function toolClick(x, y) {
   if (SYM_TOOLS.includes(drawTool)) { leadClick(x, y); return; }
   if (drawTool === 'pos') {
@@ -5966,7 +5966,7 @@ const DIC = {
   clr: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/>',
   dia: '<circle cx="12" cy="12" r="7.5"/><path d="M6.7 17.3L17.3 6.7"/><path d="M14 6.7h3.3V10"/>',
   rad: '<circle cx="12" cy="12" r="7.5"/><path d="M12 12l5.3-5.3"/><circle cx="12" cy="12" r=".9" fill="currentColor"/>',
-  lead: '<path d="M4 20l7-7h9"/><circle cx="4" cy="20" r="1.4" fill="currentColor"/><path d="M12 9.5h8"/>', rough: '<path d="M4 12l4 8 7-15h6"/>', tolf: '<rect x="3" y="8" width="18" height="8"/><path d="M9 8v8M15 8v8"/>', datum: '<path d="M6 20h8l-4-6z" fill="currentColor"/><path d="M10 14V9"/><rect x="6" y="3" width="8" height="6"/>', weld: '<path d="M4 20l8-10h9"/><path d="M4 20l1.5-4.5M4 20l4.5-1.2"/><path d="M14 10l2-4 2 4"/>',
+  lead: '<path d="M4 20l7-7h9"/><circle cx="4" cy="20" r="1.4" fill="currentColor"/><path d="M12 9.5h8"/>', rough: '<path d="M4 12l4 8 7-15h6"/>', chamf: '<path d="M3 20V9l6-6h12"/><path d="M8 8l6 6h7"/>', tolf: '<rect x="3" y="8" width="18" height="8"/><path d="M9 8v8M15 8v8"/>', datum: '<path d="M6 20h8l-4-6z" fill="currentColor"/><path d="M10 14V9"/><rect x="6" y="3" width="8" height="6"/>', weld: '<path d="M4 20l8-10h9"/><path d="M4 20l1.5-4.5M4 20l4.5-1.2"/><path d="M14 10l2-4 2 4"/>',
   pos: '<circle cx="16" cy="8" r="5"/><path d="M3.5 20.5l8.8-8.8"/><circle cx="3.5" cy="20.5" r="1.3" fill="currentColor"/>',
   cut: '<path d="M4 3.5h5M4 3.5v4.5M20 20.5h-5M20 20.5V16"/><path d="M4 20L20 4" stroke-dasharray="3.2 2"/>',
   sect: '<path d="M4 8l8-4 8 4v8l-8 4-8-4z"/><path d="M4 12l8-4 8 4-8 4z" fill="currentColor" fill-opacity=".3"/>',
@@ -5996,7 +5996,7 @@ const DTXT = {
     exit: 'Модель', tab_view: 'Вид', tab_dims: 'Размеры', tab_marks: 'Обозначения', tab_sheet: 'Лист', tab_set: 'Настройки',
     g_views: 'Виды', g_look: 'Отображение', g_fac: 'Фасады', g_scale: 'Масштаб', g_show: 'Показ',
     g_put: 'Проставить', g_auto: 'По модели', g_ends: 'Концы', g_edit: 'Правка',
-    g_mdia: 'Отверстия', g_mlead: 'Выноски', g_mcut: 'Разрезы', g_msym: 'Знаки ГОСТ', rough: 'Шерохо-ватость', tolf: 'Допуск формы', datum: 'База', weld: 'Сварной шов', g_frame: 'Кадр', g_save: 'Сохранить', g_folder: 'Папки отчёта',
+    g_mdia: 'Отверстия', g_mlead: 'Выноски', g_mcut: 'Разрезы', g_msym: 'Знаки ГОСТ', chamf: 'Фаска', h_chamf: 'Фаска: щёлкни по фаске, потом — где поставить полку', rough: 'Шерохо-ватость', tolf: 'Допуск формы', datum: 'База', weld: 'Сварной шов', g_frame: 'Кадр', g_save: 'Сохранить', g_folder: 'Папки отчёта',
     g_theme: 'Оформление', g_lang: 'Язык',
     front: 'Спереди', back: 'Сзади', left: 'Слева', right: 'Справа', top: 'Сверху', iso: 'Изометрия',
     lines: 'Линии', color: 'Цвет', hid: 'Невидимые', t_hid: 'Линии за деталями — тонкие светлые, на экране и в листе SVG', nofac: 'Без фасадов',
@@ -6056,7 +6056,7 @@ const DTXT = {
     exit: 'Модель', tab_view: 'Вигляд', tab_dims: 'Розміри', tab_marks: 'Позначення', tab_sheet: 'Аркуш', tab_set: 'Налаштування',
     g_views: 'Види', g_look: 'Відображення', g_fac: 'Фасади', g_scale: 'Масштаб', g_show: 'Показ',
     g_put: 'Проставити', g_auto: 'За моделлю', g_ends: 'Кінці', g_edit: 'Правка',
-    g_mdia: 'Отвори', g_mlead: 'Виноски', g_mcut: 'Розрізи', g_msym: 'Знаки ГОСТ', rough: 'Шорсткість', tolf: 'Допуск форми', datum: 'База', weld: 'Зварний шов', g_frame: 'Кадр', g_save: 'Зберегти', g_folder: 'Теки звіту',
+    g_mdia: 'Отвори', g_mlead: 'Виноски', g_mcut: 'Розрізи', g_msym: 'Знаки ГОСТ', chamf: 'Фаска', h_chamf: 'Фаска: клікни по фасці, потім — де поставити полицю', rough: 'Шорсткість', tolf: 'Допуск форми', datum: 'База', weld: 'Зварний шов', g_frame: 'Кадр', g_save: 'Зберегти', g_folder: 'Теки звіту',
     g_theme: 'Оформлення', g_lang: 'Мова',
     front: 'Спереду', back: 'Ззаду', left: 'Зліва', right: 'Справа', top: 'Згори', iso: 'Ізометрія',
     lines: 'Лінії', color: 'Колір', hid: 'Невидимі', t_hid: 'Лінії за деталями — тонкі світлі, на екрані й в аркуші SVG', nofac: 'Без фасадів',
@@ -6158,7 +6158,7 @@ const DCMD = {
   clr: { act: () => { pushUndo(); for (const dm of dims.filter(dimHere)) removeDim(dm); for (const q of secs.filter(secHere)) secs.splice(secs.indexOf(q), 1);
     { const vk = viewKey(); for (let i = mnotes.length - 1; i >= 0; i--) if (mnotes[i].hand && (mnotes[i].mk ?? null) === metalCur && mnotes[i].vk === vk) mnotes.splice(i, 1); selNote = null; } const F = flags(); F.mod = F.all = false; selDim = selSec = null; drawOverlay(); } },
   sect: { act: () => setTool(drawTool === 'sect' ? null : 'sect'), on: isT('sect') },
-  lead: { act: () => setTool(drawTool === 'lead' ? null : 'lead'), on: isT('lead') }, rough: { act: pickT('rough'), on: isT('rough') }, tolf: { act: pickT('tolf'), on: isT('tolf') }, datum: { act: pickT('datum'), on: isT('datum') }, weld: { act: pickT('weld'), on: isT('weld') },
+  lead: { act: () => setTool(drawTool === 'lead' ? null : 'lead'), on: isT('lead') }, chamf: { act: pickT('chamf'), on: isT('chamf') }, rough: { act: pickT('rough'), on: isT('rough') }, tolf: { act: pickT('tolf'), on: isT('tolf') }, datum: { act: pickT('datum'), on: isT('datum') }, weld: { act: pickT('weld'), on: isT('weld') },
   dia: soon, rad: soon, pos: { act: () => setTool(drawTool === 'pos' ? null : 'pos'), on: isT('pos') }, cut: soon, detail: { act: pickT('detail'), on: isT('detail') },
   svg: { act: () => saveSheet() }, png: { act: () => saveShot() }, refresh: { act: () => refreshList() },
   th_light: { act: () => setTheme('light'), on: () => dTheme === 'light' }, th_dark: { act: () => setTheme('dark'), on: () => dTheme === 'dark' },
@@ -6182,7 +6182,7 @@ const RIB = {
          ['scale', 'scale'], ['show', 'big', ['showall', 'tree']]],
   dims: [['put', 'big', ['sel', 'lin', 'chain', 'base', 'gab', 'ang']], ['auto', 'big', ['mod', 'fac', 'easy', 'all']], ['ends', 'sm', ['tick', 'arrow']],
          ['edit', 'sm', ['undo', 'redo', 'clr']]],
-  marks: [['mdia', 'big', ['dia', 'rad']], ['mlead', 'big', ['lead', 'pos']], ['msym', 'big', ['rough', 'tolf', 'datum', 'weld']], ['mcut', 'big', ['cut', 'sect', 'detail']]],
+  marks: [['mdia', 'big', ['dia', 'rad']], ['mlead', 'big', ['lead', 'pos', 'chamf']], ['msym', 'big', ['rough', 'tolf', 'datum', 'weld']], ['mcut', 'big', ['cut', 'sect', 'detail']]],
   sheet: [['frame', 'frame'], ['save', 'big', ['svg', 'png']], ['folder', 'big', ['refresh']]],
   set: [['theme', 'big', ['th_light', 'th_dark', 'th_blue']], ['lang', 'big', ['ru', 'uk']]],
 };
